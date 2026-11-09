@@ -109,3 +109,9 @@ max_sniper_rate = 0.30           # sniper share              -> reject
 max_funding_cluster_pct = 15.0   # % supply held by wallets funded by the same wallet -> reject
 serial_min_launches = 10         # dev with >= 10 launches and...
 serial_max_graduation = 0.05     # ...<= 5% graduated -> permanent kill (and added to rug ledger)
+
+[dashboard]
+# Web dashboard (read-only) — opens in your browser at http://127.0.0.1:8080
+enabled = true
+port = 8080          # if busy, the next free port up to 8089 is used
+open_browser = true

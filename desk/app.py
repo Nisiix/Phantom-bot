@@ -47,7 +47,9 @@ async def build(cfg: Config) -> tuple[Desk, object]:
     if cfg.is_live:
         ok, msgs = live_gate_status(Store(cfg.data_dir / "paper.db"), cfg.live_gate)
         if not ok:
-            raise LiveRefused("Live trading refused — paper record not proven yet: " + "; ".join(msgs))
+            raise LiveRefused("Live trading refused — paper record not proven yet: " + "; ".join(msgs)
+                              + '.\nFix: set  mode = "paper"  in config.toml and start again. The desk unlocks '
+                                "live once paper trading meets the [live_gate] rules (check: python run.py gate).")
         if cfg.secrets.live_confirm != LIVE_PHRASE:
             raise LiveRefused(f"Live trading refused — set LIVE_CONFIRM={LIVE_PHRASE} in .env to confirm.")
         if not cfg.secrets.wallet_private_key:
@@ -99,6 +101,9 @@ async def run_desk(cfg: Config, use_tui: bool = True) -> None:
             pass
 
     tasks = [asyncio.create_task(a.run(), name=a.name) for a in agents]
+    if cfg.dashboard.enabled:
+        from .web import Dashboard
+        tasks.append(asyncio.create_task(Dashboard(desk, risk, logger).run(), name="dashboard"))
     ui = Terminal(desk, risk, logger)
     tasks.append(asyncio.create_task(ui.run() if use_tui and sys.stdout.isatty() else headless(desk), name="ui"))
     await desk.stop.wait()

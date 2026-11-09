@@ -110,6 +110,14 @@ class GmgnCfg:
 
 
 @dataclass
+class DashboardCfg:
+    enabled: bool = True
+    host: str = "127.0.0.1"          # localhost only; Docker sets DASHBOARD_HOST=0.0.0.0 inside the container
+    port: int = 8080
+    open_browser: bool = True
+
+
+@dataclass
 class RecapCfg:
     interval_hours: float = 4
 
@@ -146,6 +154,7 @@ class Config:
     recap: RecapCfg = field(default_factory=RecapCfg)
     quant: QuantCfg = field(default_factory=QuantCfg)
     gmgn: GmgnCfg = field(default_factory=GmgnCfg)
+    dashboard: DashboardCfg = field(default_factory=DashboardCfg)
     live_gate: LiveGateCfg = field(default_factory=LiveGateCfg)
     secrets: Secrets = field(default_factory=Secrets)
     warnings: list[str] = field(default_factory=list)
@@ -240,7 +249,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "dashboard", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()
@@ -254,6 +263,8 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     s.telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     s.discord_webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "")
     s.gmgn_api_key = os.environ.get("GMGN_API_KEY", "")
+    if os.environ.get("DASHBOARD_HOST"):
+        cfg.dashboard.host = os.environ["DASHBOARD_HOST"]
 
     enforce_hard_limits(cfg)
     cfg.data_dir.mkdir(parents=True, exist_ok=True)

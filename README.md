@@ -85,6 +85,7 @@ crashes or reboots. Then:
 
 | What | How |
 |---|---|
+| Open the web dashboard | on your PC: `ssh -L 8080:127.0.0.1:8080 root@<server>` then browse http://127.0.0.1:8080 |
 | Watch the live terminal | `docker attach phantom-desk` — leave with **Ctrl-P Ctrl-Q** (Ctrl-C stops the desk) |
 | Get the 4h recap on your phone | put `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` (or `DISCORD_WEBHOOK_URL`) in `/opt/phantom-desk/.env`, then `docker compose up -d` |
 | Read recaps on the server | `ls /opt/phantom-desk/data/reports` |
@@ -99,7 +100,10 @@ crashes or reboots. Then:
    `.env`; then the dashboard opens. Every later run starts straight away.
    * `start.bat recap` · `start.bat gate` · `start.bat wallet` · `start.bat --headless` from a terminal.
    * Ctrl-C stops the desk; open positions are saved and resume on the next start.
-4. The desk only runs while the PC is on and awake (disable sleep, or use the VPS setup for 24/7).
+4. **Web dashboard:** your browser opens **http://127.0.0.1:8080** by itself (balance, equity curve, the six
+   agents live, positions, P&L per trade, every decision with its reason, QUANT calibration, recap on demand).
+   It's read-only and reachable only from your own PC. The terminal dashboard keeps working alongside it.
+5. The desk only runs while the PC is on and awake (disable sleep, or use the VPS setup for 24/7).
 
 Linux/macOS: `./start.sh` (same commands: `./start.sh recap`, `gate`, `wallet`, `--headless`).
 
