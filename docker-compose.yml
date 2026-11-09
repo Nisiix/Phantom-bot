@@ -4,6 +4,10 @@ services:
     container_name: phantom-desk
     restart: unless-stopped          # runs constantly, restarts after crashes and reboots
     env_file: .env
+    environment:
+      DASHBOARD_HOST: 0.0.0.0        # inside the container; published to the server's localhost only
+    ports:
+      - "127.0.0.1:8080:8080"        # web dashboard: open it through an SSH tunnel (see README)
     volumes:
       - ./data:/app/data             # database, logs, 4h recaps survive restarts/updates
       - ./config.toml:/app/config.toml:ro
