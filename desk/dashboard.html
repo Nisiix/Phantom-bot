@@ -7,6 +7,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
 <style>
 /* ── tokens: dark is the default "night desk"; light is a paper variant ── */
 :root {
@@ -258,15 +264,99 @@ pre.recap { white-space: pre-wrap; font: 12.5px/1.6 var(--mono); background: var
   padding: 16px; max-height: 540px; overflow: auto; margin: 12px 0 0; }
 footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 26px; }
 
-/* 3D promo card */
-.promo { display: flex; align-items: center; gap: 18px; overflow: hidden; position: relative;
-  background: radial-gradient(500px 200px at 85% 50%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%), var(--surface); }
-.promo .orb { width: 74px; height: 74px; flex: none; border-radius: 50%; position: relative;
-  background: radial-gradient(circle at 32% 30%, #fff8, transparent 30%), conic-gradient(from 0deg, var(--accent), var(--accent-2), var(--accent));
-  animation: spin 8s linear infinite; box-shadow: 0 0 40px -6px color-mix(in srgb, var(--accent) 80%, transparent); }
-@keyframes spin { to { transform: rotate(360deg); } }
-.promo p { margin: 2px 0 0; color: var(--ink-2); font-size: 12.5px; max-width: 70ch; }
-@media (max-width: 640px) { .promo { flex-wrap: wrap; } }
+/* ── 3D view of the agents (always dark: it's a night scene) ── */
+.v3 { position: relative; height: clamp(520px, 72vh, 760px); border-radius: var(--radius); overflow: hidden; color: #eef0f7;
+  background: radial-gradient(900px 500px at 50% 0%, #15122b, #05060a 70%); box-shadow: var(--glow); isolation: isolate; }
+.v3 canvas { display: block; }
+.v3-stage, .v3-labels { position: absolute; inset: 0; }
+.v3-labels { pointer-events: none; overflow: hidden; z-index: 1; }
+.v3-glass { background: rgba(16, 18, 28, 0.8); border: 1px solid rgba(255,255,255,0.09); border-radius: 14px; backdrop-filter: blur(12px) saturate(1.3); }
+.v3-top { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; gap: 8px; align-items: flex-start; z-index: 3; pointer-events: none; flex-wrap: wrap; }
+.v3-top > * { pointer-events: auto; }
+.v3-agents { display: flex; gap: 4px; padding: 4px; flex-wrap: wrap; }
+.v3-ag { display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 10px; border: 1px solid transparent;
+  background: transparent; color: #eef0f7; cursor: pointer; font-size: 12px; font-weight: 600; }
+.v3-ag:hover, .v3-ag.on { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.1); }
+.v3-ag i { width: 8px; height: 8px; border-radius: 50%; background: var(--ac); box-shadow: 0 0 8px var(--ac); }
+.v3-ag b { font-family: var(--mono); font-weight: 500; color: #b4b8c9; font-size: 11px; }
+.v3-ctrl { display: flex; gap: 4px; padding: 4px; margin-left: auto; }
+.v3-btn { font-size: 12px; font-weight: 600; padding: 6px 10px; border-radius: 10px; cursor: pointer; color: #eef0f7;
+  background: transparent; border: 1px solid transparent; white-space: nowrap; }
+.v3-btn:hover { background: rgba(255,255,255,0.07); }
+.v3-btn[aria-pressed="true"] { background: rgba(164,139,255,0.25); border-color: rgba(164,139,255,0.45); }
+.v3-bottom { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; gap: 8px; align-items: flex-end; z-index: 3; pointer-events: none; flex-wrap: wrap; }
+.v3-bottom > * { pointer-events: auto; }
+.v3-ticker { flex: 1; min-width: 240px; padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+.v3-ticker .r { display: flex; gap: 8px; font-size: 11.5px; white-space: nowrap; overflow: hidden; cursor: pointer; animation: v3slide .35s ease-out; }
+.v3-ticker .r .a { color: var(--ac); font-weight: 600; flex: none; }
+.v3-ticker .r .t { color: #7c8197; font-family: var(--mono); flex: none; }
+.v3-ticker .r .m { overflow: hidden; text-overflow: ellipsis; color: #b4b8c9; }
+@keyframes v3slide { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+.v3-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 8px 12px; max-width: 360px; }
+.v3-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: #b4b8c9; }
+.v3-legend i { width: 8px; height: 8px; border-radius: 3px; background: var(--kc); }
+.v3-hint { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); z-index: 2; font-size: 11.5px; color: #8b90a7; pointer-events: none;
+  white-space: nowrap; transition: opacity 1s; }
+.v3-drawer { position: absolute; right: 12px; top: 64px; bottom: 74px; width: 370px; z-index: 4; display: flex; flex-direction: column;
+  transform: translateX(calc(100% + 24px)); transition: transform .28s cubic-bezier(.2,.8,.2,1); }
+.v3-drawer.open { transform: none; }
+.v3-dh { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.v3-dh .gl { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-size: 15px; flex: none;
+  color: var(--ac); background: color-mix(in srgb, var(--ac) 18%, transparent); border: 1px solid color-mix(in srgb, var(--ac) 35%, transparent); }
+.v3-dh h4 { margin: 0; font-size: 14px; }
+.v3-dh p { margin: 0; font-size: 11px; color: #7c8197; }
+.v3-dh .x { margin-left: auto; background: transparent; border: 0; color: #7c8197; font-size: 17px; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
+.v3-dh .x:hover { color: #eef0f7; background: rgba(255,255,255,0.07); }
+.v3-db { overflow: auto; padding: 10px 12px 14px; flex: 1; scrollbar-width: thin; font-size: 12.5px; }
+.v3-kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+.v3-kv div { background: rgba(255,255,255,0.05); border-radius: 9px; padding: 6px 8px; font-size: 10.5px; color: #7c8197; }
+.v3-kv b { display: block; font-family: var(--mono); font-size: 14px; color: #eef0f7; font-weight: 600; }
+.v3-sec { font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: #7c8197; font-weight: 600; margin: 12px 0 6px; }
+.v3-quote { line-height: 1.5; padding: 10px 12px; border-radius: 11px; background: rgba(255,255,255,0.05); border-left: 3px solid var(--kc, #a48bff); overflow-wrap: anywhere; }
+.v3-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 2px 0 8px; }
+.v3-chip { font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.14); background: transparent; color: #b4b8c9; cursor: pointer; }
+.v3-chip[aria-pressed="true"] { background: #eef0f7; color: #05060a; border-color: #eef0f7; }
+.v3-op { display: block; width: 100%; text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.02); margin-bottom: 5px; cursor: pointer; color: #eef0f7; }
+.v3-op:hover { background: rgba(255,255,255,0.06); }
+.v3-op .oh { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: #7c8197; }
+.v3-op .k { font-weight: 700; letter-spacing: .06em; text-transform: uppercase; font-size: 9.5px; color: var(--kc); }
+.v3-op .t { margin-left: auto; font-family: var(--mono); }
+.v3-op .om { margin-top: 2px; overflow-wrap: anywhere; }
+.v3-op .om b, .v3-sym { color: #a48bff; margin-right: 5px; }
+.v3-why { margin: 0; padding-left: 18px; color: #b4b8c9; }
+.v3-why li { margin: 2px 0; }
+.v3-bar { display: grid; grid-template-columns: 100px minmax(0, 1fr) 38px; gap: 8px; align-items: center; font-size: 11px; color: #b4b8c9; margin: 4px 0; }
+.v3-bar .tr { height: 6px; background: rgba(255,255,255,0.08); border-radius: 9px; overflow: hidden; }
+.v3-bar .tr i { display: block; height: 100%; border-radius: 9px; background: linear-gradient(90deg, #a48bff, #6ee7f9); }
+.v3-bar .v { font-family: var(--mono); text-align: right; color: #eef0f7; }
+.v3-journey { position: relative; padding-left: 18px; }
+.v3-journey::before { content: ""; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px; background: rgba(255,255,255,0.12); }
+.v3-step { position: relative; margin-bottom: 8px; cursor: pointer; }
+.v3-step::before { content: ""; position: absolute; left: -17px; top: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--ac); box-shadow: 0 0 10px var(--ac); }
+.v3-step .h { font-size: 10.5px; color: #7c8197; }
+.v3-step .h b { color: #eef0f7; margin-right: 6px; }
+.v3-link { color: #a48bff; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; font-size: 12px; }
+.v3-lbl { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.v3-lbl .n { font-weight: 700; font-size: 12.5px; padding: 3px 10px; border-radius: 999px; color: #fff; white-space: nowrap;
+  background: color-mix(in srgb, var(--ac) 30%, rgba(5,6,10,0.75)); border: 1px solid color-mix(in srgb, var(--ac) 60%, transparent); }
+.v3-lbl .c { font-family: var(--mono); font-size: 10px; color: #b4b8c9; background: rgba(5,6,10,0.6); padding: 1px 7px; border-radius: 6px; white-space: nowrap; }
+.v3-bubble { max-width: 230px; font-size: 11px; line-height: 1.4; padding: 6px 9px; border-radius: 11px; color: #eef0f7;
+  background: rgba(14, 16, 26, 0.9); border: 1px solid color-mix(in srgb, var(--kc) 55%, transparent); box-shadow: 0 0 20px -6px var(--kc);
+  transition: opacity .5s; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.v3-bubble b { color: var(--kc); margin-right: 4px; }
+.v3-bubble.hide { opacity: 0; }
+.v3-notice { position: absolute; inset: 0; display: none; place-items: center; z-index: 2; padding: 90px 20px; text-align: center; color: #b4b8c9; }
+.v3-notice.show { display: grid; }
+.v3-loading { position: absolute; inset: 0; display: grid; place-items: center; z-index: 1; color: #7c8197; font-size: 12.5px; pointer-events: none; transition: opacity .6s; }
+.v3-loading.done { opacity: 0; }
+.v3:fullscreen { height: 100vh; border-radius: 0; }
+@media (max-width: 760px) {
+  .v3 { height: 640px; }
+  .v3-drawer { left: 12px; right: 12px; width: auto; top: 38%; bottom: 12px; }
+  .v3-legend, .v3-hint { display: none; }
+  .v3-ctrl { margin-left: 0; }
+}
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -277,12 +367,11 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
     <div class="brand"><div class="logo" aria-hidden="true">◈</div>Phantom Desk</div>
     <span class="pill" id="mode">—</span>
     <div class="tabs" id="tabs">
-      <a href="#panoramica" class="on">Panoramica</a><a href="#agenti">Agenti</a><a href="#operazioni">Operazioni</a>
+      <a href="#panoramica" class="on">Panoramica</a><a href="#vista3d">Vista 3D</a><a href="#agenti">Agenti</a><a href="#operazioni">Operazioni</a>
       <a href="#attivita">Attività</a><a href="#regole">Regole</a>
     </div>
     <span class="spacer"></span>
     <span class="pill" id="conn"><span class="dot"></span><span>connessione…</span></span>
-    <a class="btn primary" href="/3d" title="Apri la vista 3D del lavoro degli agenti">◆ Vista 3D</a>
     <button class="btn icon" id="theme" type="button" title="Tema chiaro/scuro" aria-label="Cambia tema">◐ Tema</button>
   </div>
 </nav>
@@ -310,18 +399,38 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
     </div>
   </section>
 
+  <section class="sec" id="vista3d">
+    <div class="sec-h"><h2>Gli agenti in 3D</h2><p>Ogni blocco della spirale è un'operazione: cliccalo per leggere il commento dell'agente · le sfere sono token in viaggio tra gli agenti</p></div>
+    <div class="v3" id="v3">
+      <div class="v3-stage" id="v3stage" aria-label="Scena 3D degli agenti"></div>
+      <div class="v3-labels" id="v3labels"></div>
+      <div class="v3-loading" id="v3loading">Preparo la scena 3D…</div>
+      <div class="v3-notice" id="v3notice"><div class="v3-glass" style="padding:18px;max-width:440px">
+        <strong>La scena 3D non è disponibile</strong>
+        <p id="v3noticeText" style="margin:6px 0">Il browser non supporta WebGL oppure la libreria 3D non si è caricata (serve internet).</p>
+        <p style="margin:0;font-size:12px">Clicca un agente qui sopra per leggere comunque le sue operazioni e i commenti.</p></div></div>
+      <div class="v3-hint" id="v3hint">Trascina per ruotare · rotella per lo zoom · clicca un agente o un blocco</div>
+      <div class="v3-top">
+        <div class="v3-agents v3-glass" id="v3agents" role="toolbar" aria-label="Agenti"></div>
+        <div class="v3-ctrl v3-glass">
+          <button class="v3-btn" id="v3replay" type="button" title="Riproduci le ultime operazioni">▶ Replay</button>
+          <button class="v3-btn" id="v3rotate" type="button" aria-pressed="true" title="Rotazione automatica">⟳ Ruota</button>
+          <button class="v3-btn" id="v3reset" type="button" title="Inquadratura iniziale">⌖ Centra</button>
+          <button class="v3-btn" id="v3full" type="button" title="Schermo intero">⛶</button>
+        </div>
+      </div>
+      <aside class="v3-drawer v3-glass" id="v3drawer" aria-live="polite"><div class="v3-dh" id="v3dh"></div><div class="v3-db" id="v3db"></div></aside>
+      <div class="v3-bottom">
+        <div class="v3-ticker v3-glass" id="v3ticker" aria-live="polite"></div>
+        <div class="v3-legend v3-glass" id="v3legend"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="sec" id="agenti">
     <div class="sec-h"><h2>Gli agenti al lavoro</h2><p>Il percorso di ogni token, da sinistra a destra · clicca un agente per vederne le azioni</p></div>
     <div class="pipe" id="pipe"></div>
     <div class="card logger" id="logger" role="button" tabindex="0"></div>
-    <div class="card promo" style="margin-top:14px">
-      <div class="orb" aria-hidden="true"></div>
-      <div style="flex:1;min-width:220px">
-        <h3>Vista 3D degli agenti</h3>
-        <p>Una scena tridimensionale con i sei agenti, i token che viaggiano tra loro e ogni operazione impilata come un blocco. Clicca un blocco per leggere il commento dell'agente, il punteggio e le motivazioni.</p>
-      </div>
-      <a class="btn primary" href="/3d">Apri la vista 3D →</a>
-    </div>
   </section>
 
   <section class="sec" id="operazioni">
@@ -747,6 +856,386 @@ $("recapBtn").onclick = async () => { const p = $("recap"); p.hidden = false; p.
   try { const r = await fetch("/api/recap", { cache: "no-store" }); p.textContent = await r.text(); } catch (e) { p.textContent = "Bot non raggiungibile."; } };
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => S && render(S), 150); });
 renderChips(); tick(); setInterval(tick, 2000);
+</script>
+<script type="module">
+// ── 3D view of the agents' work, embedded in the overview ──
+// Reuses el/showTip/hideTip/AG/KIND from the main script; three.js is loaded lazily when the section is on screen.
+const $ = (id) => document.getElementById(id);
+const hms = (ts) => new Date(ts * 1000).toLocaleTimeString("it-IT", { hour12: false });
+const int = (x) => Number(x || 0).toLocaleString("it-IT");
+function ago(ts) { const s = Math.max(0, Date.now() / 1000 - ts); if (!ts) return "—";
+  if (s < 60) return Math.floor(s) + "s fa"; if (s < 3600) return Math.floor(s / 60) + " min fa"; return Math.floor(s / 3600) + " h fa"; }
+const POS = { Scout: [-20, 0, 6], Filter: [-10.5, 0, -1.5], Analyst: [0, 0, -4], Executor: [10.5, 0, -1.5], Risk: [20, 0, 6], Logger: [0, 7, -19] };
+const PIPE = ["Scout", "Filter", "Analyst", "Executor", "Risk"];
+const KDESC = { trade: "Acquisto o vendita eseguiti", exit: "Segnale di uscita", risk: "Gestione del rischio", kill: "Token escluso per sempre",
+  reject: "Token scartato con il motivo", pass: "Promosso allo stadio successivo", score: "Punteggio sopra soglia", error: "Errore gestito",
+  warn: "Avviso", recap: "Recap periodico", info: "Messaggio informativo" };
+const kc = (k) => (KIND[k] || [k, "#8b90a7"])[1] || "#8b90a7";
+const kl = (k) => (KIND[k] || [k])[0];
+const agc = (n) => (AG[n] || { c: "#9ca3af" }).c;
+const CNT = { discovered: "scoperti", watching: "in osservazione", sent: "inviati", dropped: "scartati", evaluated: "valutati",
+  passed: "promossi", rejected: "respinti", blacklisted: "esclusi", scored: "valutati", approved: "approvati", buys: "acquisti",
+  sells: "vendite", wins: "vinti", losses: "persi", declined: "rifiutati", ev_block: "bloccati EV", open: "posizioni",
+  logged: "eventi", shadowing: "in follow-up", shadow_done: "follow-up chiusi", recaps: "recap" };
+const BREAK = { liquidity: "Liquidità", volume: "Volume", momentum: "Momentum", flow: "Flusso acquisti", buys: "Acquisti", holders: "Holder",
+  safety: "Sicurezza", website: "Sito web", social: "Social", age: "Età", smart: "Smart money" };
+const ST3 = { working: "attivo", idle: "in attesa", error: "errore", starting: "avvio", halted: "fermo" };
+
+let A = null, events = [], keys = new Set(), lastTs = 0, sel = null, agentKind = "tutti", visible = false, scene3d = null, booted = false;
+const keyOf = (e) => e.ts + "|" + e.agent + "|" + e.message;
+
+(function () { const lg = $("v3legend");
+  for (const k of ["trade", "score", "pass", "reject", "exit", "risk", "warn", "error"]) {
+    const s = el("span"); s.style.setProperty("--kc", kc(k)); s.title = KDESC[k]; s.append(el("i"), document.createTextNode(kl(k))); lg.append(s); } })();
+
+function tipFor(ev, e) { showTip(ev, (t) => { t.style.setProperty("--kc", kc(e.kind));
+  t.append(el("strong", null, e.agent + " · " + kl(e.kind)), el("div", "k", (e.symbol ? e.symbol + " — " : "") + e.message),
+    el("div", "r", hms(e.ts) + " · clic per i dettagli")); }); }
+
+function renderAgents() {
+  const box = $("v3agents"); box.replaceChildren();
+  for (const a of A.agents) {
+    const n = events.filter((e) => e.agent === a.name).length;
+    const b = el("button", "v3-ag" + (sel && sel.type === "agent" && sel.name === a.name ? " on" : "")); b.type = "button";
+    b.style.setProperty("--ac", agc(a.name)); b.title = ((AG[a.name] || {}).role || "") + " · " + (ST3[a.status] || a.status);
+    b.append(el("i"), document.createTextNode(a.name), el("b", null, int(n)));
+    b.onclick = () => { openAgent(a.name); if (scene3d) scene3d.focus(a.name); };
+    b.onmouseenter = () => scene3d && scene3d.hover(a.name, true); b.onmouseleave = () => scene3d && scene3d.hover(a.name, false);
+    box.append(b);
+  }
+}
+
+function drawerHead(color, glyph, title, sub) {
+  const dh = $("v3dh"); dh.replaceChildren(); dh.style.setProperty("--ac", color);
+  const t = el("div"); t.append(el("h4", null, title), el("p", null, sub));
+  const x = el("button", "x", "✕"); x.type = "button"; x.setAttribute("aria-label", "Chiudi"); x.onclick = closeDrawer;
+  dh.append(el("div", "gl", glyph), t, x); $("v3drawer").classList.add("open");
+}
+function closeDrawer() { $("v3drawer").classList.remove("open"); sel = null; if (scene3d) scene3d.select(null); if (A) renderAgents(); }
+function opRow(e) {
+  const b = el("button", "v3-op"); b.type = "button"; b.style.setProperty("--kc", kc(e.kind));
+  const h = el("div", "oh"); h.append(el("span", "k", kl(e.kind)), el("span", "t", hms(e.ts)));
+  const m = el("div", "om"); if (e.symbol) m.append(el("b", null, e.symbol)); m.append(document.createTextNode(e.message));
+  b.append(h, m); b.onclick = () => openEvent(e); return b;
+}
+function kvBox(items) { const kv = el("div", "v3-kv");
+  for (const [v, l] of items) { const d = el("div"); d.append(el("b", null, v), document.createTextNode(l)); kv.append(d); } return kv; }
+function openAgent(name) {
+  sel = { type: "agent", name }; const a = A.agents.find((x) => x.name === name) || { counters: {} }, meta = AG[name] || {};
+  drawerHead(agc(name), meta.g || "•", name, meta.role || "");
+  const db = $("v3db"); db.replaceChildren(); const mine = events.filter((e) => e.agent === name);
+  const items = [[int(mine.length), "operazioni"], [ST3[a.status] || a.status || "—", "stato"], [a.last_ts ? ago(a.last_ts).replace(" fa", "") : "—", "ultima azione"]];
+  for (const [k, v] of Object.entries(a.counters || {}).slice(0, 6)) items.push([int(v), CNT[k] || k.replace(/_/g, " ")]);
+  if (a.errors) items.push([int(a.errors), "errori"]);
+  db.append(kvBox(items));
+  if (a.last) { db.append(el("div", "v3-sec", "Ultimo commento")); const q = el("div", "v3-quote", a.last); q.style.setProperty("--kc", agc(name)); db.append(q); }
+  db.append(el("div", "v3-sec", "Operazioni e commenti"));
+  const kinds = ["tutti", ...new Set(mine.map((e) => e.kind))], chips = el("div", "v3-chips");
+  if (!kinds.includes(agentKind)) agentKind = "tutti";
+  for (const k of kinds) { const c = el("button", "v3-chip", k === "tutti" ? "tutti" : kl(k) + " · " + mine.filter((e) => e.kind === k).length);
+    c.type = "button"; c.setAttribute("aria-pressed", String(agentKind === k)); c.onclick = () => { agentKind = k; openAgent(name); }; chips.append(c); }
+  db.append(chips);
+  const list = mine.filter((e) => agentKind === "tutti" || e.kind === agentKind).slice().reverse().slice(0, 200);
+  if (!list.length) db.append(el("p", null, "Nessuna operazione registrata ancora."));
+  for (const e of list) db.append(opRow(e));
+  if (scene3d) scene3d.select({ agent: name }); renderAgents();
+}
+function openEvent(e) {
+  sel = { type: "event", key: keyOf(e) }; const meta = AG[e.agent] || {};
+  drawerHead(agc(e.agent), meta.g || "•", e.agent + " · " + kl(e.kind), new Date(e.ts * 1000).toLocaleString("it-IT") + " · " + ago(e.ts));
+  const db = $("v3db"); db.replaceChildren();
+  if (e.symbol) { const p = el("p"); p.style.margin = "0 0 6px"; p.append(document.createTextNode("Token "), el("b", "v3-sym", e.symbol));
+    if (e.mint) p.append(document.createTextNode(" · " + e.mint.slice(0, 6) + "…" + e.mint.slice(-4))); db.append(p); }
+  db.append(el("div", "v3-sec", "Commento dell'agente"));
+  const q = el("div", "v3-quote", e.message); q.style.setProperty("--kc", kc(e.kind)); db.append(q);
+  const d = e.data || {}, nums = [];
+  if (typeof d.score === "number") nums.push([d.score.toFixed(2), "punteggio"]);
+  if (typeof d.pnl_pct === "number") nums.push([(d.pnl_pct >= 0 ? "+" : "") + d.pnl_pct.toFixed(1) + "%", "P&L"]);
+  if (typeof d.ev_pct === "number") nums.push([(d.ev_pct >= 0 ? "+" : "") + d.ev_pct.toFixed(1) + "%", "valore atteso"]);
+  if (nums.length) { const kv = kvBox(nums); kv.style.marginTop = "10px"; db.append(kv); }
+  if (Array.isArray(d.why) && d.why.length) { db.append(el("div", "v3-sec", "Motivazioni")); const ul = el("ul", "v3-why");
+    for (const w of d.why) ul.append(el("li", null, String(w))); db.append(ul); }
+  if (d.reason) { db.append(el("div", "v3-sec", "Motivo")); db.append(el("div", "v3-quote", String(d.reason))); }
+  if (d.breakdown && typeof d.breakdown === "object") {
+    const entries = Object.entries(d.breakdown).filter(([, v]) => typeof v === "number");
+    if (entries.length) { db.append(el("div", "v3-sec", "Scomposizione del punteggio"));
+      for (const [k, v] of entries) { const r = el("div", "v3-bar"), tr = el("div", "tr"), i = el("i");
+        i.style.width = Math.max(2, Math.min(100, v * 100)) + "%"; tr.append(i);
+        r.append(el("span", null, BREAK[k] || k.replace(/_/g, " ")), tr, el("span", "v", v.toFixed(2))); db.append(r); } } }
+  if (e.mint) {
+    const path = events.filter((x) => x.mint === e.mint);
+    db.append(el("div", "v3-sec", "Percorso del token · " + path.length + " passaggi"));
+    const j = el("div", "v3-journey");
+    for (const x of path) { const s = el("div", "v3-step"); s.style.setProperty("--ac", agc(x.agent));
+      const h = el("div", "h"); h.append(el("b", null, x.agent), document.createTextNode(kl(x.kind) + " · " + hms(x.ts)));
+      const m = el("div", null, x.message); if (keyOf(x) === keyOf(e)) m.style.color = "#a48bff";
+      s.append(h, m); s.onclick = () => openEvent(x); j.append(s); }
+    db.append(j);
+    if (scene3d) { const b = el("button", "v3-link", "Rivedi il percorso in 3D"); b.type = "button"; b.onclick = () => scene3d.journey(path); db.append(b); }
+  }
+  const back = el("button", "v3-link", "← Tutte le operazioni di " + e.agent); back.type = "button"; back.style.cssText = "display:block;margin-top:12px";
+  back.onclick = () => openAgent(e.agent); db.append(back);
+  if (scene3d) scene3d.select({ key: keyOf(e), mint: e.mint }); renderAgents();
+}
+function pushTicker(e) {
+  const t = $("v3ticker"), r = el("div", "r"); r.style.setProperty("--ac", agc(e.agent));
+  r.append(el("span", "t", hms(e.ts)), el("span", "a", e.agent), el("span", "m", (e.symbol ? e.symbol + " · " : "") + e.message));
+  r.onclick = () => openEvent(e); t.prepend(r); while (t.children.length > 3) t.lastChild.remove();
+}
+
+async function poll() {
+  if (!visible && A) return;
+  try {
+    const r = await fetch("/api/activity", { cache: "no-store" }); if (!r.ok) throw new Error(r.status);
+    A = await r.json();
+    const first = !events.length, fresh = [];
+    for (const e of A.events) { const k = keyOf(e); if (keys.has(k)) continue; keys.add(k); events.push(e); if (!first && e.ts >= lastTs - 0.001) fresh.push(e); }
+    events.sort((a, b) => a.ts - b.ts); if (events.length > 1500) { events = events.slice(-1500); keys = new Set(events.map(keyOf)); }
+    if (events.length) lastTs = Math.max(lastTs, events[events.length - 1].ts);
+    renderAgents();
+    if (first) for (const e of events.slice(-3)) pushTicker(e);
+    for (const e of fresh) pushTicker(e);
+    if (scene3d) { scene3d.update(A, events); if (first) scene3d.replay(events.slice(-24), 260); else fresh.forEach((e, i) => setTimeout(() => scene3d.animate(e), i * 180)); }
+    if (sel && sel.type === "agent" && fresh.some((e) => e.agent === sel.name)) { const sc = $("v3db").scrollTop; openAgent(sel.name); $("v3db").scrollTop = sc; }
+  } catch (err) { /* the main dashboard already shows the connection state */ }
+}
+
+async function boot3D() {
+  const box = $("v3"), stage = $("v3stage");
+  let THREE, OrbitControls, CSS2DRenderer, CSS2DObject, EffectComposer, RenderPass, UnrealBloomPass, OutputPass;
+  try {
+    THREE = await import("three");
+    ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
+    ({ CSS2DRenderer, CSS2DObject } = await import("three/addons/renderers/CSS2DRenderer.js"));
+    ({ EffectComposer } = await import("three/addons/postprocessing/EffectComposer.js"));
+    ({ RenderPass } = await import("three/addons/postprocessing/RenderPass.js"));
+    ({ UnrealBloomPass } = await import("three/addons/postprocessing/UnrealBloomPass.js"));
+    ({ OutputPass } = await import("three/addons/postprocessing/OutputPass.js"));
+  } catch (e) { return fail("La libreria 3D (three.js) non si è caricata: serve la connessione a internet."); }
+  const test = document.createElement("canvas");
+  if (!(test.getContext("webgl2") || test.getContext("webgl"))) return fail("Il browser non supporta WebGL.");
+
+  let W = box.clientWidth, H = box.clientHeight;
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(W, H);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+  stage.append(renderer.domElement);
+  const labels = new CSS2DRenderer({ element: $("v3labels") }); labels.setSize(W, H);
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x05060a, 0.0125);
+  renderer.setClearColor(0x05060a, 1);
+  const camera = new THREE.PerspectiveCamera(48, W / H, 0.1, 600);
+  const HOME = { pos: new THREE.Vector3(0, 19, 44), target: new THREE.Vector3(0, 4.5, -2) };
+  camera.position.copy(HOME.pos);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.copy(HOME.target); controls.enableDamping = true; controls.dampingFactor = 0.06;
+  controls.minDistance = 10; controls.maxDistance = 110; controls.maxPolarAngle = Math.PI * 0.49;
+  controls.autoRotate = true; controls.autoRotateSpeed = 0.35;
+  controls.enableZoom = false;  // wheel scrolls the page; zoom is enabled after the first click inside the scene
+  renderer.domElement.addEventListener("pointerdown", () => { controls.enableZoom = true; $("v3hint").style.opacity = 0; });
+  box.addEventListener("pointerleave", () => { controls.enableZoom = false; });
+
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.7, 0.5, 0.72); composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+  scene.add(new THREE.HemisphereLight(0x8aa0ff, 0x0b0b14, 0.55));
+  const key = new THREE.DirectionalLight(0xffffff, 0.8); key.position.set(10, 30, 20); scene.add(key);
+  const grid = new THREE.GridHelper(220, 88, 0x2a2e44, 0x14172a); grid.material.transparent = true; grid.material.opacity = 0.55; scene.add(grid);
+  const glowTex = (() => { const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d");
+    const r = g.createRadialGradient(64, 64, 0, 64, 64, 64); r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(0.25, "rgba(255,255,255,0.45)"); r.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = r; g.fillRect(0, 0, 128, 128); return new THREE.CanvasTexture(c); })();
+  { const n = 1400, p = new Float32Array(n * 3); for (let i = 0; i < n; i++) { const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, r = 160 + Math.random() * 120;
+      const s = Math.sqrt(1 - u * u); p[i * 3] = r * s * Math.cos(th); p[i * 3 + 1] = Math.abs(r * u) * 0.8 + 10; p[i * 3 + 2] = r * s * Math.sin(th); }
+    const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(p, 3));
+    scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 0.9, color: 0x9aa3c7, transparent: true, opacity: 0.7, fog: false }))); }
+
+  const GEO = { Scout: new THREE.IcosahedronGeometry(1.25, 0), Filter: new THREE.OctahedronGeometry(1.35, 0),
+    Analyst: new THREE.DodecahedronGeometry(1.25, 0), Executor: new THREE.TorusKnotGeometry(0.8, 0.26, 96, 12),
+    Risk: new THREE.CylinderGeometry(1.1, 1.1, 1.6, 6), Logger: new THREE.BoxGeometry(1.8, 1.8, 1.8) };
+  const nodes = {}, pickables = [], CORE_Y = 2.6;
+  function makeNode(name) {
+    const color = new THREE.Color(agc(name)), g = new THREE.Group(); g.position.set(...(POS[name] || [0, 0, 18]));
+    const plat = new THREE.Mesh(new THREE.CylinderGeometry(3.1, 3.4, 0.35, 48), new THREE.MeshStandardMaterial({ color: 0x151826, metalness: 0.6, roughness: 0.35 }));
+    plat.position.y = 0.17; g.add(plat);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(3.25, 0.06, 8, 96), new THREE.MeshBasicMaterial({ color, toneMapped: false }));
+    ring.rotation.x = Math.PI / 2; ring.position.y = 0.36; g.add(ring);
+    const halo = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.MeshBasicMaterial({ map: glowTex, color, transparent: true, opacity: 0.22, depthWrite: false }));
+    halo.rotation.x = -Math.PI / 2; halo.position.y = 0.02; g.add(halo);
+    const core = new THREE.Mesh(GEO[name] || new THREE.SphereGeometry(1.2, 24, 16),
+      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9, metalness: 0.3, roughness: 0.25, flatShading: true }));
+    core.position.y = CORE_Y; core.userData = { agent: name }; g.add(core); pickables.push(core);
+    const wire = new THREE.Mesh(core.geometry, new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.12 }));
+    wire.scale.setScalar(1.35); core.add(wire);
+    const light = new THREE.PointLight(color, 8, 16, 1.6); light.position.y = CORE_Y; g.add(light);
+    const lab = el("div", "v3-lbl"); lab.style.setProperty("--ac", agc(name));
+    const lc = el("div", "c", "—"); lab.append(el("div", "n", ((AG[name] || {}).g || "•") + "  " + name), lc);
+    const lobj = new CSS2DObject(lab); lobj.position.set(0, 0.2, 3.9); g.add(lobj);
+    const bub = el("div", "v3-bubble hide"); const bobj = new CSS2DObject(bub); bobj.position.set(0, CORE_Y + 3.0, 0); g.add(bobj);
+    scene.add(g);
+    nodes[name] = { g, core, ring, halo, light, lc, bub, bubT: 0, pulse: 0, hover: false, status: "starting" };
+  }
+  Object.keys(POS).forEach(makeNode);
+  const P = (name, y = CORE_Y) => { const n = nodes[name]; return n ? n.g.position.clone().add(new THREE.Vector3(0, y, 0)) : new THREE.Vector3(0, 12, 20); };
+  function arc(a, b, lift) { const m = a.clone().lerp(b, 0.5); m.y += lift; return new THREE.QuadraticBezierCurve3(a, m, b); }
+  const links = [];
+  function addLink(from, to, lift, opacity, color) {
+    const curve = arc(P(from), P(to), lift);
+    scene.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 48, 0.07, 6, false), new THREE.MeshBasicMaterial({ color: color || 0x8b7cf0, transparent: true, opacity, depthWrite: false })));
+    const dots = []; for (let i = 0; i < 4; i++) { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: new THREE.Color(agc(to)), transparent: true, opacity: 0.8, depthWrite: false }));
+      s.scale.setScalar(0.9); s.userData.t = i / 4; scene.add(s); dots.push(s); }
+    links.push({ curve, dots, speed: 0.08 });
+  }
+  for (let i = 0; i < PIPE.length - 1; i++) addLink(PIPE[i], PIPE[i + 1], 3.5, 0.35);
+  addLink("Risk", "Executor", -1.6, 0.18, 0xfb923c);
+  for (const n of PIPE) { const c = arc(P(n), P("Logger"), 6); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
+    new THREE.LineDashedMaterial({ color: 0xf472b6, transparent: true, opacity: 0.18, dashSize: 0.6, gapSize: 0.5 })).computeLineDistances()); }
+
+  // operations: one block per event on a helix around its agent
+  const MAX_PER = 64;
+  const slabs = new THREE.InstancedMesh(new THREE.BoxGeometry(0.95, 0.15, 0.42),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.2, roughness: 0.35, emissive: 0x222233, emissiveIntensity: 0.6 }), MAX_PER * 8);
+  slabs.count = 0; slabs.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(slabs);
+  let slabEvents = [], EV = [], selKey = null, selMint = null;
+  const marker = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.26, 0.6), new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, toneMapped: false, transparent: true }));
+  marker.visible = false; scene.add(marker);
+  const mintGlow = new THREE.InstancedMesh(new THREE.BoxGeometry(1.1, 0.2, 0.55), new THREE.MeshBasicMaterial({ color: 0xa48bff, transparent: true, opacity: 0.55, toneMapped: false }), 64);
+  mintGlow.count = 0; scene.add(mintGlow);
+  const order = Object.keys(POS);
+  const helix = (name, i) => { const a = i * 0.46 + order.indexOf(name) * 0.9, r = 3.0, base = nodes[name].g.position;
+    return { p: new THREE.Vector3(base.x + Math.cos(a) * r, base.y + 0.75 + i * 0.19, base.z + Math.sin(a) * r), a }; };
+  const tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0), tmpC = new THREE.Color();
+  function layoutSlabs() {
+    slabEvents = []; let n = 0;
+    for (const name of order) {
+      EV.filter((e) => e.agent === name).slice(-MAX_PER).forEach((e, i) => { const { p, a } = helix(name, i);
+        tmpQ.setFromAxisAngle(up, -a); tmpM.compose(p, tmpQ, one); slabs.setMatrixAt(n, tmpM);
+        tmpC.set(kc(e.kind)); if (e.kind === "reject" || e.kind === "info") tmpC.multiplyScalar(0.55); slabs.setColorAt(n, tmpC);
+        slabEvents.push({ e, p, a }); n++; });
+    }
+    slabs.count = n; slabs.instanceMatrix.needsUpdate = true; if (slabs.instanceColor) slabs.instanceColor.needsUpdate = true;
+    slabs.computeBoundingSphere(); applySelection();
+  }
+  function applySelection() {
+    marker.visible = false; let m = 0;
+    for (const s of slabEvents) {
+      if (selKey && keyOf(s.e) === selKey) { marker.position.copy(s.p); marker.rotation.set(0, -s.a, 0); marker.visible = true; }
+      if (selMint && s.e.mint === selMint && m < 64) { tmpQ.setFromAxisAngle(up, -s.a); tmpM.compose(s.p, tmpQ, one); mintGlow.setMatrixAt(m++, tmpM); }
+    }
+    mintGlow.count = m; mintGlow.instanceMatrix.needsUpdate = true;
+  }
+
+  const flights = [], bursts = [];
+  function fly(from, to, color, opts = {}) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: new THREE.Color(color), transparent: true, depthWrite: false, toneMapped: false }));
+    s.add(new THREE.Mesh(new THREE.SphereGeometry(opts.small ? 0.12 : 0.24, 12, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(1.6), toneMapped: false })));
+    s.scale.setScalar(opts.small ? 0.9 : 1.9); scene.add(s);
+    flights.push({ s, curve: arc(from, to, opts.lift ?? Math.max(3, from.distanceTo(to) * 0.22)), t: 0, dur: opts.dur || 1.5, drop: !!opts.drop, onEnd: opts.onEnd });
+  }
+  function burst(pos, color) { const r = new THREE.Mesh(new THREE.RingGeometry(0.2, 0.32, 40), new THREE.MeshBasicMaterial({ color: new THREE.Color(color), transparent: true, side: THREE.DoubleSide, toneMapped: false, depthWrite: false }));
+    r.position.copy(pos); r.lookAt(camera.position); scene.add(r); bursts.push({ r, t: 0 }); }
+  function say(e) { const n = nodes[e.agent]; if (!n) return; n.bub.replaceChildren(); n.bub.style.setProperty("--kc", kc(e.kind));
+    n.bub.append(el("b", null, kl(e.kind)), document.createTextNode((e.symbol ? e.symbol + " · " : "") + e.message));
+    n.bub.classList.remove("hide"); n.bubT = 4.5; n.pulse = 1; }
+  function animate(e) {
+    if (!nodes[e.agent] || !visible) return; say(e);
+    const prior = e.mint ? [...EV].reverse().find((x) => x.mint === e.mint && x.ts < e.ts && x.agent !== e.agent) : null;
+    const dropped = e.kind === "reject" || e.kind === "kill";
+    let from = prior && nodes[prior.agent] ? P(prior.agent) : null;
+    if (!from && e.agent === "Scout" && e.mint) from = P("Scout").add(new THREE.Vector3(-6, 12, 6));
+    const land = () => { burst(P(e.agent), kc(e.kind));
+      if (dropped) fly(P(e.agent), P(e.agent, -1).add(new THREE.Vector3((Math.random() - .5) * 3, 0, 3.2)), "#94a3b8", { lift: 1.2, dur: 1.1, drop: true });
+      if (e.agent !== "Logger" && !dropped) fly(P(e.agent), P("Logger"), "#f472b6", { small: true, dur: 2.2, lift: 6 }); };
+    if (from) fly(from, P(e.agent), e.agent === "Executor" && e.kind === "trade" ? "#34d399" : kc(e.kind), { onEnd: land }); else land();
+  }
+  function journey(path) { let prev = null; path.forEach((x, i) => setTimeout(() => {
+      say(x); if (prev && prev.agent !== x.agent) fly(P(prev.agent), P(x.agent), kc(x.kind), { onEnd: () => burst(P(x.agent), kc(x.kind)) }); else burst(P(x.agent), kc(x.kind)); prev = x; }, i * 900)); }
+  let replayT = []; function replay(list, gap) { replayT.forEach(clearTimeout); replayT = list.map((e, i) => setTimeout(() => animate(e), i * gap)); }
+  function update(a, evs) {
+    EV = evs;
+    for (const ag of a.agents) { const n = nodes[ag.name]; if (!n) continue; n.status = ag.status;
+      n.lc.textContent = int(evs.filter((e) => e.agent === ag.name).length) + " operazioni · " + (ag.last_ts ? ago(ag.last_ts) : "—"); }
+    layoutSlabs();
+  }
+
+  // picking (coordinates relative to the canvas, which is not full-screen here)
+  const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(); let hovered = null, downAt = null;
+  function pick(ev) { const r = renderer.domElement.getBoundingClientRect();
+    mouse.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1); ray.setFromCamera(mouse, camera);
+    const h1 = ray.intersectObject(slabs, false)[0], h2 = ray.intersectObjects(pickables, false)[0];
+    if (h1 && (!h2 || h1.distance < h2.distance)) return { slab: slabEvents[h1.instanceId] };
+    if (h2) return { agent: h2.object.userData.agent }; return null; }
+  const cv = renderer.domElement;
+  cv.addEventListener("pointermove", (ev) => { const h = pick(ev); cv.style.cursor = h ? "pointer" : "grab";
+    if (hovered && (!h || h.agent !== hovered)) { nodes[hovered].hover = false; hovered = null; }
+    if (h && h.agent) { hovered = h.agent; nodes[h.agent].hover = true; hideTip(); }
+    else if (h && h.slab) tipFor(ev, h.slab.e); else hideTip(); });
+  cv.addEventListener("pointerdown", (ev) => { downAt = [ev.clientX, ev.clientY]; });
+  cv.addEventListener("pointerup", (ev) => { if (!downAt || Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]) > 5) return;
+    const h = pick(ev); if (!h) return; hideTip(); if (h.slab) openEvent(h.slab.e); else { openAgent(h.agent); focus(h.agent); } });
+  cv.addEventListener("pointerleave", hideTip);
+
+  let camTween = null;
+  const tweenTo = (pos, target) => { camTween = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos, t1: target, t: 0 }; };
+  function focus(name) { const c = P(name, 3.5), dir = c.clone().sub(new THREE.Vector3(0, 3.5, 20)).setY(0).normalize();
+    tweenTo(c.clone().add(new THREE.Vector3(dir.x * 9, 10, 24)), c.clone().add(new THREE.Vector3(0, 1.5, 0))); setRotate(false); }
+  function setRotate(on) { controls.autoRotate = on; $("v3rotate").setAttribute("aria-pressed", String(on)); }
+  $("v3rotate").onclick = () => setRotate(!controls.autoRotate);
+  $("v3reset").onclick = () => tweenTo(HOME.pos.clone(), HOME.target.clone());
+  $("v3replay").onclick = () => replay(EV.slice(-40), 380);
+  $("v3full").onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else box.requestFullscreen && box.requestFullscreen(); };
+  controls.addEventListener("start", () => { camTween = null; });
+
+  function resize() { W = box.clientWidth; H = box.clientHeight; if (!W || !H) return;
+    camera.aspect = W / H; camera.updateProjectionMatrix();
+    renderer.setSize(W, H); composer.setSize(W, H); labels.setSize(W, H); }
+  new ResizeObserver(resize).observe(box); resize();
+  if (W < 700) { HOME.pos.set(0, 30, 70); camera.position.copy(HOME.pos); }
+
+  const clock = new THREE.Clock();
+  function frame() {
+    requestAnimationFrame(frame);
+    const dt = Math.min(0.05, clock.getDelta()); if (!visible) return;
+    const t = clock.elapsedTime;
+    for (const n of Object.values(nodes)) {
+      const busy = n.status === "working", err = n.status === "error" || n.status === "halted";
+      n.core.rotation.y += dt * (busy ? 0.9 : 0.25); n.core.rotation.x += dt * 0.15;
+      n.core.position.y = CORE_Y + Math.sin(t * 1.3 + n.g.position.x) * 0.18;
+      n.pulse = Math.max(0, n.pulse - dt * 1.4);
+      n.core.scale.setScalar(1 + n.pulse * 0.35 + (n.hover ? 0.12 : 0));
+      n.core.material.emissiveIntensity = (err ? 0.5 + Math.abs(Math.sin(t * 4)) * 0.8 : busy ? 0.9 : 0.55) + n.pulse * 1.1;
+      n.light.intensity = 5 + n.pulse * 14 + (busy ? 3 : 0);
+      n.halo.material.opacity = 0.16 + n.pulse * 0.3 + (n.hover ? 0.12 : 0);
+      n.ring.rotation.z += dt * 0.2;
+      if (n.bubT > 0) { n.bubT -= dt; if (n.bubT <= 0) n.bub.classList.add("hide"); }
+    }
+    for (const l of links) for (const d of l.dots) { d.userData.t = (d.userData.t + dt * l.speed) % 1; d.position.copy(l.curve.getPoint(d.userData.t));
+      d.material.opacity = Math.sin(d.userData.t * Math.PI) * 0.7; }
+    for (let i = flights.length - 1; i >= 0; i--) { const f = flights[i]; f.t += dt / f.dur; const k = f.t < 1 ? 1 - Math.pow(1 - f.t, 2.2) : 1;
+      f.s.position.copy(f.curve.getPoint(Math.min(1, k))); if (f.drop) f.s.material.opacity = 1 - f.t;
+      if (f.t >= 1) { scene.remove(f.s); f.s.material.dispose(); f.s.children[0].geometry.dispose(); f.s.children[0].material.dispose(); flights.splice(i, 1); if (f.onEnd) f.onEnd(); } }
+    for (let i = bursts.length - 1; i >= 0; i--) { const b = bursts[i]; b.t += dt; b.r.scale.setScalar(1 + b.t * 9); b.r.material.opacity = Math.max(0, 1 - b.t / 0.9);
+      b.r.lookAt(camera.position); if (b.t > 0.9) { scene.remove(b.r); b.r.geometry.dispose(); b.r.material.dispose(); bursts.splice(i, 1); } }
+    if (marker.visible) marker.material.opacity = 0.6 + Math.sin(t * 6) * 0.4;
+    if (camTween) { camTween.t = Math.min(1, camTween.t + dt / 1.1); const e = 1 - Math.pow(1 - camTween.t, 3);
+      camera.position.lerpVectors(camTween.p0, camTween.p1, e); controls.target.lerpVectors(camTween.t0, camTween.t1, e); if (camTween.t >= 1) camTween = null; }
+    controls.update(); composer.render(); labels.render(scene, camera);
+  }
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) setRotate(false);
+  frame(); $("v3loading").classList.add("done");
+  setTimeout(() => { $("v3hint").style.opacity = 0; }, 9000);
+  scene3d = { update, animate, replay, journey, focus,
+    hover: (name, on) => { if (nodes[name]) nodes[name].hover = on; },
+    select: (s) => { selKey = (s && s.key) || null; selMint = (s && s.mint) || null; applySelection(); } };
+  if (A) { update(A, events); replay(events.slice(-24), 260); }
+}
+function fail(msg) { $("v3loading").classList.add("done"); $("v3noticeText").textContent = msg; $("v3notice").classList.add("show"); }
+
+// start (and keep rendering/polling) only while the section is on screen
+new IntersectionObserver((ents) => { for (const e of ents) { visible = e.isIntersecting;
+  if (visible && !booted) { booted = true; boot3D(); poll(); } } }, { rootMargin: "200px 0px" }).observe($("v3"));
+addEventListener("keydown", (e) => { if (e.key === "Escape" && $("v3drawer").classList.contains("open")) closeDrawer(); });
+setInterval(poll, 2500);
 </script>
 </body>
 </html>

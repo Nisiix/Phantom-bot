@@ -17,7 +17,6 @@ from .recap import build_recap, live_gate_status
 from .store import Store
 
 PAGE = Path(__file__).with_name("dashboard.html")
-PAGE_3D = Path(__file__).with_name("agents3d.html")
 # Event payload fields worth showing in the 3D view's detail panel (the rest stays server-side).
 DETAIL_KEYS = ("score", "breakdown", "why", "pnl_pct", "ev_pct", "reason", "checks", "failed")
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
@@ -126,7 +125,7 @@ class Dashboard:
         return self._cache[1]
 
     def activity(self, limit: int = 600) -> dict:
-        """Recent agent events with their rationale, for the standalone 3D view."""
+        """Recent agent events with their rationale, for the dashboard's 3D view."""
         d = self.desk
         live = list(d.hub.feed)
         rows = [{"ts": e.ts, "agent": e.agent, "kind": e.kind, "symbol": e.symbol, "mint": e.mint,
@@ -175,8 +174,6 @@ class Dashboard:
             if path == "/":
                 body = PAGE.read_bytes()
                 return await self._send(writer, 200, body, "text/html; charset=utf-8")
-            if path in ("/3d", "/3d/"):
-                return await self._send(writer, 200, PAGE_3D.read_bytes(), "text/html; charset=utf-8")
             if path == "/api/activity":
                 body = json.dumps(self.activity(), default=str, allow_nan=False).encode()
                 return await self._send(writer, 200, body, "application/json")
