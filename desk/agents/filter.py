@@ -27,6 +27,7 @@ import time
 
 from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
+from ..research import market_features, rug_features
 from .base import Agent
 
 OVERLAP_RISK_WORDS = ("lp", "liquidity", "holder", "mint authority", "freeze authority", "rug",
@@ -87,6 +88,13 @@ def insider_pct(report: dict) -> float:
     return min(100.0, held / supply * 100)
 
 
+def deep_priority(cand: Candidate, snap: MarketSnapshot | None) -> float:
+    """Lower = sooner. Graduations / smart-money signals first, then the most traded tokens."""
+    urgent = cand.source.endswith(":migration") or cand.source.startswith("gmgn:")
+    vol = snap.volume_h1 if snap else 0.0
+    return (0.0 if urgent else 1.0) - min(vol, 5e6) / 1e7
+
+
 class Filter(Agent):
     name = "Filter"
 
@@ -96,56 +104,108 @@ class Filter(Agent):
         self.f = self.cfg.filter
         self._last_reason: dict[str, str] = {}
         self._last_pass_log: dict[str, float] = {}
+        self._deep: asyncio.PriorityQueue = asyncio.PriorityQueue()
+        self._deep_pending: set[str] = set()
+        self._seq = 0
 
     async def run(self) -> None:
         self.status("idle")
-        self.emit("info", "Filter online: mint/LP/top10/volume/dev-rug kills armed")
-        await self.supervised("filter", self.loop)
+        n = max(1, int(self.f.deep_workers))
+        self.emit("info", f"Filter online: mint/LP/top10/volume/dev-rug kills armed ({n} deep-check workers)")
+        await asyncio.gather(self.supervised("filter-screen", self.loop),
+                             *(self.supervised(f"filter-deep-{i}", self.deep_loop) for i in range(n)))
 
     async def loop(self) -> None:
+        """Stage 1 — cheap market screen, batched (30 mints per DexScreener call).
+
+        Survivors go to a priority queue for the slow on-chain/RugCheck/GMGN checks, so a backlog
+        of deep checks never stalls the screen (and the screen never stalls deep checks)."""
         q = self.desk.candidates
         while not self.desk.stop.is_set():
             try:
                 first = await asyncio.wait_for(q.get(), timeout=2)
             except asyncio.TimeoutError:
-                self.status("idle")
+                if not self._deep_pending:
+                    self.status("idle")
                 continue
             batch = [first]
             while len(batch) < 30 and not q.empty():
                 batch.append(q.get_nowait())
-            batch = list({c.mint: c for c in batch if c.mint not in self.desk.blacklist}.values())
+            batch = list({c.mint: c for c in batch
+                          if c.mint not in self.desk.blacklist and c.mint not in self._deep_pending}.values())
             if not batch:
                 continue
             self.status("working")
             snaps = await self.desk.dex.snapshots([c.mint for c in batch])
             for cand in batch:
+                snap = snaps.get(cand.mint)
+                report = self.screen(cand, snap)
+                if report is not None:
+                    await self.route(cand, report)
+                    continue
+                self._deep_pending.add(cand.mint)
+                self._seq += 1
+                self._deep.put_nowait((deep_priority(cand, snap), self._seq, time.time(), cand, snap))
+            self.state.counters["deep_queue"] = self._deep.qsize()
+
+    async def deep_loop(self) -> None:
+        """Stage 2 — deep checks, several in flight (RPC / GMGN latency overlaps; RugCheck keeps its own limit)."""
+        while not self.desk.stop.is_set():
+            try:
+                _, _, queued, cand, snap = await asyncio.wait_for(self._deep.get(), timeout=2)
+            except asyncio.TimeoutError:
+                continue
+            try:
+                if cand.mint in self.desk.blacklist:
+                    continue
+                if time.time() - queued > self.f.deep_max_wait_seconds:
+                    self.state.bump("deep_stale")   # market data too old: the Scout will resubmit it
+                    continue
+                self.status("working")
                 try:
-                    report = await self.evaluate(cand, snaps.get(cand.mint))
+                    report = await self.deep(cand, snap)
                 except Exception as e:  # noqa: BLE001
                     self.emit("error", f"evaluation failed: {e}", cand.mint, cand.symbol)
                     continue
                 await self.route(cand, report)
+            finally:
+                self._deep_pending.discard(cand.mint)
+                self.state.counters["deep_queue"] = self._deep.qsize()
 
     # ── core evaluation ──
     async def evaluate(self, cand: Candidate, snap: MarketSnapshot | None) -> FilterReport:
+        """Full evaluation in one call (screen + deep checks)."""
+        return self.screen(cand, snap) or await self.deep(cand, snap)
+
+    def screen(self, cand: Candidate, snap: MarketSnapshot | None) -> FilterReport | None:
+        """Cheap market checks. Returns a failing report, or None if the token deserves deep checks."""
         self.state.bump("evaluated")
-        f = self.f
         sym = snap.symbol if snap else cand.symbol
         if snap is None:
             return FilterReport(cand.mint, sym, False, [Check("market", False, "none", "listed",
                                                                "no DEX pair indexed yet")])
         self.desk.market_seen[cand.mint] = (time.time(), snap.volume_h1, snap.liquidity_usd)
-        checks = [
+        checks = self._market_checks(snap)
+        if not all(c.passed for c in checks):
+            # Cheap market checks failed: stop here, don't burn RugCheck quota.
+            return FilterReport(cand.mint, sym, False, checks, market=snap)
+        return None
+
+    def _market_checks(self, snap: MarketSnapshot) -> list[Check]:
+        f = self.f
+        return [
             Check("volume_1h", snap.volume_h1 >= f.min_volume_h1_usd, round(snap.volume_h1),
                   f.min_volume_h1_usd, f"${snap.volume_h1:,.0f}/h < ${f.min_volume_h1_usd:,.0f}"
                   if snap.volume_h1 < f.min_volume_h1_usd else f"${snap.volume_h1:,.0f}/h"),
             Check("liquidity", snap.liquidity_usd >= f.min_liquidity_usd, round(snap.liquidity_usd),
                   f.min_liquidity_usd, f"${snap.liquidity_usd:,.0f}"),
         ]
-        if not all(c.passed for c in checks):
-            # Cheap market checks failed: stop here, don't burn RugCheck quota.
-            return FilterReport(cand.mint, sym, False, checks, market=snap)
 
+    async def deep(self, cand: Candidate, snap: MarketSnapshot) -> FilterReport:
+        """On-chain / RugCheck / GMGN checks for a token that passed the market screen."""
+        f = self.f
+        sym = snap.symbol
+        checks = self._market_checks(snap)
         rc = await self.desk.rug.report(cand.mint)
         if not rc:
             checks.append(Check("rugcheck", False, "unavailable", "report", "RugCheck report unavailable"))
@@ -192,9 +252,9 @@ class Filter(Agent):
             nm = (r.get("name") or "").lower()
             if "rug" in nm:
                 rug_reasons.append(r.get("name"))
-        ledger = self.desk.store.ruggers()
-        if creator and creator in ledger:
-            rug_reasons.append(f"dev in rug ledger ({ledger[creator]['reason'][:60]})")
+        known = self.desk.store.rugger(creator)
+        if known:
+            rug_reasons.append(f"dev in rug ledger ({known['reason'][:60]})")
         prior = [t for t in (rc.get("creatorTokens") or []) if t.get("mint") != cand.mint]
         dead = [t for t in prior if float(t.get("marketCap") or 0) < 10_000]
         if len(prior) >= f.serial_dev_min_launches and len(dead) / len(prior) >= f.serial_dev_dead_ratio:
@@ -246,7 +306,7 @@ class Filter(Agent):
                             source=cand.source)
 
     async def gmgn_checks(self, mint: str, sym: str, creator: str | None, checks: list[Check]) -> dict | None:
-        g, gm, ledger = self.cfg.gmgn, self.desk.gmgn, self.desk.store.ruggers()
+        g, gm = self.cfg.gmgn, self.desk.gmgn
         try:
             info, sec = await asyncio.gather(gm.token_info(mint), gm.token_security(mint))
         except GmgnError as e:
@@ -271,7 +331,7 @@ class Filter(Agent):
         funder = s.get("dev_funder")
         if funder:
             self.desk.funders[mint] = funder
-            hit = funder in ledger
+            hit = self.desk.store.rugger(funder) is not None
             checks.append(Check("dev_funder_rug_link", not hit, funder[:8], "clean",
                                 f"dev funded by known rugger {funder[:6]}" if hit else "dev funder clean",
                                 permanent=hit))
@@ -306,7 +366,9 @@ class Filter(Agent):
         if self.desk.shadow is not None and report.market is not None:
             outcome = "pass" if report.passed else ("kill" if report.permanent_fail else "reject")
             self.desk.shadow.start(report.mint, report.symbol, "filter", outcome, report.reason_text(),
-                                   report.market.price_usd, report.market.liquidity_usd, source=cand.source)
+                                   report.market.price_usd, report.market.liquidity_usd, source=cand.source,
+                                   features={**market_features(report.market, cand.source),
+                                             **rug_features(report.rug)})
         report.source = report.source or cand.source
         if report.passed:
             self.state.bump("passed")

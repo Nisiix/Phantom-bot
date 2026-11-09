@@ -10,12 +10,13 @@ It will only buy a token when ALL of these hold:
   * QUANT: expected value after the measured round-trip cost is positive, using calibrated
     probabilities of +12% first / -6% first / neither within 60 min (blocks only, never forces).
 Size = max_position_pct (<= 8%, hard ceiling) of the CURRENT balance. Never more.
-Exits ordered by Risk are always processed before new entries.
+Exits run on their own loop and never wait for an entry (no shared swap lock).
 """
 from __future__ import annotations
 
 import asyncio
 import math
+import time
 
 from ..clients.jupiter import SOL_MINT
 from ..config import HARD_MAX_POSITION_PCT, HARD_MIN_SCORE
@@ -46,18 +47,42 @@ class Executor(Agent):
         self.broker = broker
         self.risk = risk
         self.e = self.cfg.executor
+        # No swap lock: fills are measured per transaction (Jupiter's result / tx metadata), so an exit
+        # never waits for an entry's swap to land.
 
     async def run(self) -> None:
         self.status("idle")
         self.emit("info", f"Executor online [{self.broker.mode.upper()}]: max {self.e.max_position_pct}% "
                           f"of balance per trade, max {self.e.max_open_positions} positions")
-        await self.supervised("executor", self.loop)
+        await asyncio.gather(self.supervised("executor-exits", self.exit_loop),
+                             self.supervised("executor-entries", self.loop))
+
+    async def exit_loop(self) -> None:
+        """Exits run on their own loop: a stop is never queued behind an entry's quotes and checks.
+        Each exit gets its own task, so three stops hit at once are sold in parallel, not one by one."""
+        running: set[asyncio.Task] = set()
+        try:
+            while not self.desk.stop.is_set():
+                try:
+                    order = await asyncio.wait_for(self.desk.exits.get(), timeout=1)
+                except asyncio.TimeoutError:
+                    continue
+                task = asyncio.create_task(self._safe_exit(order))
+                running.add(task)
+                task.add_done_callback(running.discard)
+        finally:
+            if running:
+                await asyncio.gather(*running, return_exceptions=True)
+
+    async def _safe_exit(self, order: ExitOrder) -> None:
+        try:
+            await self.handle_exit(order)
+        except Exception as e:  # noqa: BLE001 - one broken exit must not kill the exit loop
+            self.emit("error", f"exit crashed ({e.__class__.__name__}: {e}); Risk will re-issue it", order.mint)
+            self.risk.exit_failed(order.mint)
 
     async def loop(self) -> None:
         while not self.desk.stop.is_set():
-            # Exits first, always.
-            while not self.desk.exits.empty():
-                await self.handle_exit(self.desk.exits.get_nowait())
             try:
                 v = await asyncio.wait_for(self.desk.verdicts.get(), timeout=0.5)
             except asyncio.TimeoutError:
@@ -112,26 +137,44 @@ class Executor(Agent):
 
     async def _enter(self, v: Verdict) -> None:
         pf = self.desk.portfolio
-        cash = await self.broker.cash()
-        if not pf.positions and self.broker.mode == "live":
-            pf.set_cash(cash)
-        size = position_size(cash, self.e.max_position_pct)
+        t_start = time.monotonic()
+
+        async def sized_quote():
+            cash = await self.broker.cash()
+            if not pf.positions and self.broker.mode == "live":
+                pf.set_cash(cash)
+            size = position_size(cash, self.e.max_position_pct)
+            if size < self.e.min_trade_sol:
+                return cash, size, None
+            # Live (jupiter_v2): this is the executable order itself (quote + transaction), so what passes
+            # the checks below is exactly what gets sent. Paper: a plain Jupiter quote.
+            return cash, size, await self.broker.quote_buy(self.desk.jup, v.mint, int(size * 1e9),
+                                                           self.e.slippage_bps)
+
+        async def token_decimals():
+            d = v.clearance.report.rug.get("decimals")
+            if d is None:
+                info = await self.desk.rpc.mint_info(v.mint)
+                d = (info or {}).get("decimals") or 6
+            return int(d)
+
+        # Balance -> size -> buy quote, token decimals and fresh market data are independent: fetch together.
+        got = await asyncio.gather(sized_quote(), token_decimals(), self.desk.dex.snapshot(v.mint),
+                                   return_exceptions=True)
+        for g in got:
+            if isinstance(g, BaseException):
+                return self.reject(v, f"pre-trade data failed: {g.__class__.__name__}: {g}")
+        (cash, size, buy_q), decimals, snap = got
         if size < self.e.min_trade_sol:
             return self.reject(v, f"size {size:.4f} SOL below minimum {self.e.min_trade_sol} (balance {cash:.3f})")
-
-        decimals = v.clearance.report.rug.get("decimals")
-        if decimals is None:
-            info = await self.desk.rpc.mint_info(v.mint)
-            decimals = int((info or {}).get("decimals") or 6)
-        decimals = int(decimals)
-
-        snap = await self.desk.dex.snapshot(v.mint)
         if snap is None:
             return self.reject(v, "market data vanished before execution")
-        lamports = int(size * 1e9)
-        buy_q = await self.desk.jup.quote(SOL_MINT, v.mint, lamports, self.e.slippage_bps)
         if not buy_q:
             return self.reject(v, "no Jupiter buy route")
+        est_bps = buy_q.get("slippageBps")
+        if est_bps is not None and int(est_bps) > self.e.slippage_bps:
+            return self.reject(v, f"Jupiter's slippage estimate {int(est_bps)} bps > cap {self.e.slippage_bps} bps "
+                                  "(too volatile/thin to enter safely)")
         out_tokens = int(buy_q["outAmount"]) / 10 ** decimals
         if snap.price_native > 0:
             fair = size / snap.price_native
@@ -156,15 +199,26 @@ class Executor(Agent):
             self.state.bump("ev_block")
             return self.reject(v, qv.reason)
 
+        # Exits run concurrently: a loss may have landed while we were quoting. Ask Risk again right
+        # before the swap (cooldown / streak pause / daily halt / max positions). No await in between.
+        ok, why = self.risk.approve_entry(v.mint, own_order=True)
+        if not ok:
+            return self.reject(v, f"Risk (re-check before swap): {why}")
+        t_send = time.monotonic()
         fill = await self.broker.buy(v.mint, size, decimals, buy_q)
+        t_done = time.monotonic()
         if not fill.ok or fill.tokens <= 0:
             return self.reject(v, f"buy failed: {fill.error or 'no tokens received'} {fill.tx}")
+        speed = {"checks_ms": round((t_send - t_start) * 1000), "swap_ms": round((t_done - t_send) * 1000),
+                 "signal_to_fill_ms": round((now() - v.issued_at) * 1000), "route": fill.route}
+        self.desk.exec_stats.append({"side": "buy", **speed})
 
         rep = v.clearance.report
         reason = (f"score {v.score:.2f} | {'; '.join(v.rationale[:5])} | filters: "
                   + ", ".join(f"{c.name}={c.value}" for c in rep.checks)
                   + f" | size {size:.4f} SOL = {self.e.max_position_pct}% of {cash:.3f} | impact {impact:.2f}% "
-                    f"| round-trip {rt_loss:.2f}% | {qv.short()}")
+                    f"| round-trip {rt_loss:.2f}% | {qv.short()} | exec {fill.route}: checks "
+                    f"{speed['checks_ms']} ms + swap {speed['swap_ms']} ms")
         pos = Position(
             mint=v.mint, symbol=v.symbol, tokens=fill.tokens, decimals=decimals, cost_sol=fill.sol,
             entry_price_sol=fill.sol / fill.tokens, entry_ts=now(), entry_liquidity_usd=snap.liquidity_usd,
@@ -179,15 +233,22 @@ class Executor(Agent):
             pf.open(pos)
         except AveragingDownError as e:
             return self.reject(v, str(e))
-        if self.broker.mode == "live":
-            pf.set_cash(await self.broker.cash())
+        await self._reconcile_cash(v.mint)
         self.state.bump("buys")
         if self.desk.shadow is not None:
             self.desk.shadow.mark_traded(v.mint)
         self.desk.store.add_decision(now(), "executor", "buy", v.mint, v.symbol, reason,
-                                     {"breakdown": v.breakdown, "website": v.website.get("url"), "tx": fill.tx})
+                                     {"breakdown": v.breakdown, "website": v.website.get("url"), "tx": fill.tx,
+                                      "exec": speed})
         self.emit("trade", f"BUY {fill.sol:.4f} SOL -> {fill.tokens:,.0f} {v.symbol} (score {v.score:.2f}, "
-                           f"impact {impact:.1f}%, rt {rt_loss:.1f}%, EV {qv.ev_pct:+.1f}%)", v.mint, v.symbol, reason=reason, tx=fill.tx)
+                           f"impact {impact:.1f}%, rt {rt_loss:.1f}%, EV {qv.ev_pct:+.1f}%, "
+                           f"{speed['checks_ms'] + speed['swap_ms']} ms)", v.mint, v.symbol, reason=reason, tx=fill.tx)
+
+    async def _reconcile_cash(self, mint: str) -> None:
+        """Live: sync cash with the wallet, but only when no other swap is in flight (its SOL would be
+        counted twice: once in the wallet balance and again when its own fill is booked)."""
+        if self.broker.mode == "live" and not (self.desk.in_flight - {mint}):
+            self.desk.portfolio.set_cash(await self.broker.cash())
 
     # ── exits ──
     async def handle_exit(self, order: ExitOrder) -> None:
@@ -199,39 +260,60 @@ class Executor(Agent):
         self.status("working")
         self.desk.in_flight.add(order.mint)
         try:
-            tokens = pos.tokens
-            if self.broker.mode == "live":
-                held = await self.broker.token_holdings(order.mint)
-                if held > 0:
-                    tokens = held  # sell what is actually in the wallet
-            raw = int(tokens * 10 ** pos.decimals)
-            quote = None
-            # Capital preservation: widen slippage step by step to make sure we get OUT.
-            for bps in (self.e.slippage_bps, 800, 1500, 3000):
-                quote = await self.desk.jup.quote(order.mint, SOL_MINT, raw, bps, lane="risk")
-                if quote:
-                    break
-            if not quote:
-                if order.reason in ("LIQUIDITY_PULL", "DATA_LOSS") and self.broker.mode == "paper":
-                    trade = pf.close(order.mint, 0.0, f"{order.reason}: no route, marked total loss")
-                    self._finish(trade, order, pos)
-                    return
-                self.emit("error", f"EXIT BLOCKED ({order.reason}): no sell route, retrying", order.mint, pos.symbol)
-                self.risk.exit_failed(order.mint)
-                return
-            fill = await self.broker.sell(order.mint, tokens, pos.decimals, quote)
-            if not fill.ok:
-                self.emit("error", f"SELL FAILED ({order.reason}): {fill.error}, retrying", order.mint, pos.symbol)
-                self.risk.exit_failed(order.mint)
-                return
-            trade = pf.close(order.mint, fill.sol, f"{order.reason}: {order.detail}", fill.tx)
-            if self.broker.mode == "live":
-                pf.set_cash(await self.broker.cash())
-            self._finish(trade, order, pos)
+            await self._exit(order, pos)
         finally:
             self.desk.in_flight.discard(order.mint)
 
-    def _finish(self, trade: dict, order: ExitOrder, pos: Position) -> None:
+    async def _exit(self, order: ExitOrder, pos: Position) -> None:
+        """Get OUT, fast. First try: Jupiter's own slippage estimate (best price). If that fails, retry
+        immediately (not on Risk's next tick) at each wider slippage of the ladder, re-reading the wallet."""
+        pf = self.desk.portfolio
+        t0 = time.monotonic()
+        tokens = pos.tokens          # measured at entry: no wallet read before the first attempt
+        attempts = [None] + list(self.e.exit_slippage_ladder_bps)
+        quote, last_quote, err = None, None, ""
+        for i, bps in enumerate(attempts):
+            if i and self.broker.mode == "live":
+                held = await self.broker.token_holdings(order.mint)
+                if held is not None and held <= 0:
+                    # A previous attempt landed after all (e.g. the response was lost): book it.
+                    proceeds = int((last_quote or {}).get("otherAmountThreshold")
+                                   or (last_quote or {}).get("outAmount") or 0) / 1e9
+                    trade = pf.close(order.mint, proceeds, f"{order.reason}: {order.detail} "
+                                                           f"(sold on an earlier attempt, proceeds estimated)")
+                    await self._reconcile_cash(order.mint)
+                    return self._finish(trade, order, pos, {"route": "unknown", "attempts": i})
+                if held:
+                    tokens = held
+            raw = int(tokens * 10 ** pos.decimals)
+            try:
+                quote = await self.broker.quote_sell(self.desk.jup, order.mint, raw, bps)
+            except Exception as e:  # noqa: BLE001
+                quote, err = None, f"quote error: {e}"
+            if not quote:
+                err = err or "no sell route"
+                continue
+            last_quote = quote
+            fill = await self.broker.sell(order.mint, tokens, pos.decimals, quote)
+            if fill.ok:
+                speed = {"exit_ms": round((time.monotonic() - t0) * 1000),
+                         "trigger_to_fill_ms": round((now() - order.ts) * 1000), "attempts": i + 1,
+                         "route": fill.route}
+                self.desk.exec_stats.append({"side": "sell", **speed})
+                trade = pf.close(order.mint, fill.sol, f"{order.reason}: {order.detail}", fill.tx, {"exec": speed})
+                await self._reconcile_cash(order.mint)
+                return self._finish(trade, order, pos, speed)
+            err = fill.error or "sell failed"
+            if i + 1 < len(attempts):
+                self.emit("warn", f"sell attempt {i + 1} failed ({err}) -> retrying now at "
+                                  f"{attempts[i + 1]} bps", order.mint, pos.symbol)
+        if last_quote is None and order.reason in ("LIQUIDITY_PULL", "DATA_LOSS") and self.broker.mode == "paper":
+            trade = pf.close(order.mint, 0.0, f"{order.reason}: no route, marked total loss")
+            return self._finish(trade, order, pos)
+        self.emit("error", f"EXIT BLOCKED ({order.reason}): {err}; Risk will re-issue it", order.mint, pos.symbol)
+        self.risk.exit_failed(order.mint)
+
+    def _finish(self, trade: dict, order: ExitOrder, pos: Position, speed: dict | None = None) -> None:
         self.risk.exit_done(order.mint)
         self.risk.record_result(trade)
         # QUANT learning sample: which barrier did this trade touch first within the horizon?
@@ -244,6 +326,7 @@ class Executor(Agent):
         self.state.bump("wins" if trade["pnl_sol"] > 0 else "losses")
         self.desk.store.add_decision(now(), "executor", "sell", trade["mint"], trade["symbol"],
                                      trade["exit_reason"], {"pnl_sol": trade["pnl_sol"], "pnl_pct": trade["pnl_pct"]})
+        took = f", {speed['trigger_to_fill_ms']} ms" if speed and "trigger_to_fill_ms" in speed else ""
         self.emit("trade", f"SELL {trade['symbol']} {trade['pnl_pct']:+.2f}% ({trade['pnl_sol']:+.4f} SOL) "
-                           f"— {order.reason}", trade["mint"], trade["symbol"], pnl_sol=trade["pnl_sol"],
+                           f"— {order.reason}{took}", trade["mint"], trade["symbol"], pnl_sol=trade["pnl_sol"],
                   pnl_pct=trade["pnl_pct"], reason=trade["exit_reason"])

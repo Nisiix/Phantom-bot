@@ -75,12 +75,13 @@ class Risk(Agent):
         })
 
     # ── entry permission ──
-    def approve_entry(self, mint: str) -> tuple[bool, str]:
+    def approve_entry(self, mint: str, own_order: bool = False) -> tuple[bool, str]:
+        """own_order=True: the Executor re-checking its own in-flight buy right before the swap."""
         t = time.time()
         pf = self.desk.portfolio
         if mint in pf.positions:
             return False, "no averaging down: position already open"
-        if mint in self.desk.in_flight:
+        if mint in self.desk.in_flight and not own_order:
             return False, "order already in flight"
         h = self.history.get(mint)
         if h and h.get("pnl_sol", 0) < 0:
@@ -94,7 +95,8 @@ class Risk(Agent):
         cd = self.r.cooldown_after_loss_minutes * 60
         if t - self.last_loss_ts < cd:
             return False, f"post-loss cooldown ({(cd - (t - self.last_loss_ts)) / 60:.0f} min left)"
-        if len(pf.positions) + len(self.desk.in_flight) >= self.cfg.executor.max_open_positions:
+        pending = len({m for m in self.desk.in_flight if m not in pf.positions}) - (1 if own_order else 0)
+        if len(pf.positions) + max(0, pending) >= self.cfg.executor.max_open_positions:
             return False, f"max open positions ({self.cfg.executor.max_open_positions})"
         return True, "approved"
 
@@ -171,24 +173,33 @@ class Risk(Agent):
         if lag > 4 and t0 - self._last_lag_warn > 60:
             self._last_lag_warn = t0
             self.emit("warn", f"price feed slow ({lag:.1f}s) — stops may fill late; consider a private RPC/API plan")
-        for mint, pos in list(pf.positions.items()):
+        items = list(pf.positions.items())
+        for mint, pos in items:
             snap = snaps.get(mint)
-            liq = None
             if snap:
-                liq = snap.liquidity_usd
-                pos.last_liquidity_usd = liq
+                pos.last_liquidity_usd = snap.liquidity_usd
                 px = snap.price_native or (snap.price_usd / pf.sol_usd if pf.sol_usd else 0)
                 if px > 0:
                     pos.mark_value_sol = pos.tokens * px * (1 - pos.exit_cost_pct / 100)
                     pos.last_price_ts = t
-            # Executable truth: a real Jupiter sell quote every ~12s (or when near a stop).
+        # Executable truth: a real Jupiter sell quote every ~12s (or ~6s when near a stop),
+        # fetched for all due positions at once instead of one after the other.
+        due = []
+        for mint, pos in items:
             near = pos.pnl_pct <= self.r.hard_stop_pct + 2 or pos.trailing_active
-            if t - self._last_quote.get(mint, 0) >= (6 if near else 12):
+            if mint not in self.exiting and t - self._last_quote.get(mint, 0) >= (6 if near else 12):
                 self._last_quote[mint] = t
-                v = await self.quote_value(pos)
+                due.append(pos)
+        if due:
+            for pos, v in zip(due, await asyncio.gather(*(self.quote_value(p) for p in due))):
                 if v is not None:
                     pos.mark_value_sol = v
                     pos.last_price_ts = t
+        for mint, pos in items:
+            if pf.positions.get(mint) is not pos:
+                continue                     # closed by the Executor while we were quoting
+            snap = snaps.get(mint)
+            liq = snap.liquidity_usd if snap else None
             if pos.mark_value_sol > pos.peak_value_sol:
                 pos.peak_value_sol = pos.mark_value_sol
             # QUANT labels: remember when each barrier was first touched.

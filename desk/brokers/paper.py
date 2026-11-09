@@ -24,8 +24,8 @@ class PaperBroker(Broker):
         spent = int(quote["inAmount"]) / 1e9 + NETWORK_FEE_SOL + PRIORITY_FEE_SOL
         if tokens <= 0:
             return Fill(False, error="quote returned zero tokens")
-        return Fill(True, sol=spent, tokens=tokens, tx="paper")
+        return Fill(True, sol=spent, tokens=tokens, tx="paper", route="paper")
 
     async def sell(self, mint: str, tokens: float, decimals: int, quote: dict) -> Fill:
         received = int(quote["outAmount"]) / 1e9 * (1 - LATENCY_HAIRCUT) - NETWORK_FEE_SOL - PRIORITY_FEE_SOL
-        return Fill(True, sol=max(0.0, received), tokens=tokens, tx="paper")
+        return Fill(True, sol=max(0.0, received), tokens=tokens, tx="paper", route="paper")

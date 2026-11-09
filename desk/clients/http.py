@@ -65,6 +65,7 @@ HOST_LIMITS = {
     "api.rugcheck.xyz": 12,
     "lite-api.jup.ag": 25,               # entry quotes
     "lite-api.jup.ag#risk": 30,          # exit-value quotes for open positions
+    "lite-api.jup.ag#exec": 60,          # live orders/executes: rare, but never wait behind quotes
     "api.geckoterminal.com": 8,
     "api.mainnet-beta.solana.com": 90,
 }
@@ -100,6 +101,7 @@ class Http:
         retries: int = 3,
         expect_json: bool = True,
         lane: str = "",
+        timeout: Optional[float] = None,
     ) -> Any:
         host = urlparse(url).hostname or ""
         lim = self.limiter(host, lane)
@@ -107,7 +109,8 @@ class Http:
         for attempt in range(retries + 1):
             await lim.wait()
             try:
-                r = await self.client.request(method, url, json=json, params=params)
+                kw = {"timeout": timeout} if timeout else {}
+                r = await self.client.request(method, url, json=json, params=params, **kw)
                 if r.status_code == 429:
                     self._stat(host, "429")
                     wait = float(r.headers.get("retry-after", 0) or 0) or (2 ** attempt) * 2

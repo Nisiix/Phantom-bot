@@ -44,6 +44,45 @@ below 0.6 and shows whether a higher score really means better odds. The 4h reca
 (Brier score vs. the naive base rate), outcomes by decision and by discovery source, and
 "missed winners" (skipped tokens that hit +60% first) with the rule that rejected them.
 
+## Research — which signals actually worked (`python run.py research`)
+Every shadow row also stores what the desk saw at decision time (market data, holders, the Analyst's
+component scores). `python run.py research` (or `start.bat research`) splits the followed tokens into
+low / mid / high thirds for each signal and shows how often each third hit +12% before −6% and the
+average result of the desk's exit policy on the real price path, with a 95% interval; splits whose
+intervals overlap are marked as noise. It also breaks results down by discovery source, time of day
+and score threshold. `--days 7` limits it to recent data, `--stage filter` includes everything the
+Filter saw. It describes past memecoins, not future ones: use it to choose what to paper-test next.
+
+## Engine
+* Filter runs in two stages: a batched market screen, then a priority queue of deep checks
+  (graduations and smart-money signals first, then by volume) with `deep_workers` in parallel.
+  Deep checks whose market data waited longer than `deep_max_wait_seconds` are dropped (the Scout resubmits).
+* The Analyst scores `workers` tokens in parallel, and skips clearances already half-expired.
+* Exits have their own loop and each exit runs as its own task: a stop is never queued behind an entry,
+  and several stops hit at once are sold in parallel. Risk is asked again right before every buy.
+
+## Execution — how positions are opened and closed
+Live trading uses **Jupiter Swap V2** (`/swap/v2/order` + `/swap/v2/execute`, the successor of Ultra):
+* **One call = quote + transaction.** The order that passes the impact / round-trip / EV checks is
+  exactly the one that gets signed and sent; no rebuild in between.
+* **Entries** run in "ultra" mode: Jupiter's real-time slippage estimate (RTSE), RFQ market makers
+  competing with on-chain routes, MEV-protected landing, gasless when possible. If Jupiter's slippage
+  estimate is above `slippage_bps` (3%) the entry is skipped: too volatile to enter safely.
+* **Entry checks run in parallel:** balance→size→order, token decimals and fresh market data are fetched
+  at the same time, then the sell-back (honeypot) quote.
+* **Exits:** first try at Jupiter's own slippage estimate (best price). If the sell fails it is retried
+  **immediately** at `exit_slippage_ladder_bps` (800 → 1500 → 3000 bps), re-reading the wallet, instead of
+  waiting for Risk's next tick. If an earlier attempt actually landed, it is booked, not sold twice.
+* **Fills are exact and per transaction** (Jupiter's reported amounts, or the transaction metadata),
+  never wallet balance deltas: there is no swap lock, so an exit never waits for an entry to land.
+* Every fill records its timing (`checks_ms`, `swap_ms`, `trigger_to_fill_ms`, route) in the trade
+  log and decision record.
+* `execution = "rpc"` keeps the classic path (`/swap/v1/swap` sent through `SOLANA_RPC_URL`) with
+  `skipPreflight`, `maxRetries = 0` and our own rebroadcast every 2 s until it lands or the blockhash
+  expires. Use it only with a fast private/staked RPC (Helius, Triton, QuickNode…); on the public RPC
+  Jupiter V2 lands faster.
+Speed only reduces slippage and late stops; it does not make a trade profitable.
+
 ## GMGN wallet intelligence (optional, `GMGN_API_KEY`)
 Read-only use of GMGN's OpenAPI (paid key, Plus plan or better; never its custodial swap routes):
 * **Filter:** honeypot flag, GMGN rug label, insider / bundler / sniper shares, wash trading,

@@ -18,6 +18,7 @@ Uses:
 from __future__ import annotations
 
 import asyncio
+import json
 import statistics
 import time
 from dataclasses import dataclass, field
@@ -42,6 +43,7 @@ class Shadow:
     start: float
     p: dict = field(default_factory=dict)
     source: str = ""
+    features: dict | None = None   # what the desk saw at decision time (for desk/research.py)
     traded: bool = False
     last: float = 0.0
     max_ret: float = 0.0
@@ -112,7 +114,8 @@ class ShadowTracker:
         return self.cfg.quant.default_cost_pct
 
     def start(self, mint: str, symbol: str, stage: str, decision: str, reason: str,
-              price_usd: float, liq_usd: float, score: float | None = None, source: str = "") -> None:
+              price_usd: float, liq_usd: float, score: float | None = None, source: str = "",
+              features: dict | None = None) -> None:
         if not self.cfg.quant.shadow_tracking or price_usd <= 0:
             return
         key = f"{mint}:{stage}"
@@ -129,7 +132,7 @@ class ShadowTracker:
             pr, _, _ = self.desk.quant.probabilities(score)
             p = pr
         self.active[key] = Shadow(key, mint, symbol, stage, decision, reason[:200], score, price_usd, liq_usd,
-                                  self.cost_estimate(), time.time(), p, source)
+                                  self.cost_estimate(), time.time(), p, source, features)
 
     def mark_traded(self, mint: str) -> None:
         s = self.active.get(f"{mint}:analyst")
@@ -171,6 +174,7 @@ class ShadowTracker:
             "model_label": s.model_label, "model_hit_s": (s.model_hit_ts - s.start) if s.model_hit_ts else None,
             "ret_end_pct": s.last, "max_pct": s.max_ret, "min_pct": s.min_ret, "sim_net_pct": s.sim_ret,
             "p_up": s.p.get("up"), "p_down": s.p.get("down"), "p_neither": s.p.get("neither"),
+            "features": json.dumps(s.features, default=str) if s.features else None,
         }
         self.desk.store.add_shadow(row)
         # Analyst-scored, not actually traded -> a learning sample for QUANT (the real trade

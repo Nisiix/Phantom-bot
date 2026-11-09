@@ -14,6 +14,7 @@ import asyncio
 import math
 
 from ..models import FilterPass, MarketSnapshot, Verdict, now
+from ..research import market_features, rug_features
 from ..website import WebsiteInspector, pick_website
 from .base import Agent
 
@@ -148,6 +149,7 @@ class Analyst(Agent):
         self.web = WebsiteInspector(use_claude, a.claude_model)
         self.claude_on = use_claude
         self._last_scored: dict[str, float] = {}
+        self._busy: set[str] = set()
         self._last_logged: dict[str, tuple[float, float]] = {}
 
     async def run(self) -> None:
@@ -155,22 +157,40 @@ class Analyst(Agent):
         self.emit("info", f"Analyst online: threshold {self.cfg.analyst.min_score}, website checks "
                           f"{'ON' if self.cfg.analyst.website_check else 'off'}, Claude review "
                           f"{'ON' if self.claude_on else 'off (no ANTHROPIC_API_KEY)'}")
-        await self.supervised("analyst", self.loop)
+        n = max(1, int(self.cfg.analyst.workers))
+        await asyncio.gather(*(self.supervised(f"analyst-{i}", self.loop) for i in range(n)))
 
     async def loop(self) -> None:
+        """One scoring worker. Several run side by side, so one slow website (up to 90 s) no longer
+        holds every other Filter survivor until its clearance expires."""
+        ttl = self.cfg.executor.clearance_ttl_seconds
         while not self.desk.stop.is_set():
             try:
                 fp = await asyncio.wait_for(self.desk.passes.get(), timeout=2)
             except asyncio.TimeoutError:
-                self.status("idle")
+                if not self._busy:
+                    self.status("idle")
+                continue
+            mint = fp.report.mint
+            t = now()
+            # A clearance that's already near expiry can't be traded: don't spend a website check on it
+            # (the Scout re-submits the token and the Filter issues a fresh one).
+            if t - fp.issued_at > ttl * 0.5:
+                self.state.bump("stale_pass")
                 continue
             # Re-score the same token at most every 90s (the Scout keeps re-submitting survivors).
-            last = self._last_scored.get(fp.report.mint, 0)
-            if now() - last < 90:
+            if mint in self._busy or t - self._last_scored.get(mint, 0) < 90:
                 continue
-            self._last_scored[fp.report.mint] = now()
+            self._last_scored[mint] = t
+            if len(self._last_scored) > 20000:
+                cutoff = t - 3600
+                self._last_scored = {k: v for k, v in self._last_scored.items() if v > cutoff}
+            self._busy.add(mint)
             self.status("working")
-            await self.analyze(fp)
+            try:
+                await self.analyze(fp)
+            finally:
+                self._busy.discard(mint)
 
     async def analyze(self, fp: FilterPass) -> None:
         rep = fp.report
@@ -215,7 +235,9 @@ class Analyst(Agent):
         if self.desk.shadow is not None:
             self.desk.shadow.start(rep.mint, m.symbol, "analyst", "approve" if trade else "reject_score",
                                    "; ".join(why[:3]), m.price_usd, m.liquidity_usd, score=score,
-                                   source=rep.source)
+                                   source=rep.source,
+                                   features={**market_features(m, rep.source), **rug_features(rep.rug),
+                                             **{f"c_{k}": v for k, v in breakdown.items()}, "score": score})
         prev = self._last_logged.get(rep.mint)
         quiet = (not trade and prev is not None and abs(prev[0] - score) < 0.03 and issued - prev[1] < 600)
         if quiet:

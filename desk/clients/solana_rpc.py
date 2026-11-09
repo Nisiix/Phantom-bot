@@ -56,23 +56,83 @@ class SolanaRPC:
             decimals = int(ta.get("decimals") or 0)
         return total, decimals
 
-    async def send_raw(self, tx_b64: str) -> str:
+    async def send_raw(self, tx_b64: str, skip_preflight: bool = True) -> str:
+        # Jupiter already simulated the swap when building it: skipping preflight saves a round trip
+        # inside the RPC node. maxRetries=0 because we rebroadcast ourselves (see send_and_confirm).
         return await self.call(
             "sendTransaction",
-            [tx_b64, {"encoding": "base64", "skipPreflight": False, "maxRetries": 3,
+            [tx_b64, {"encoding": "base64", "skipPreflight": skip_preflight, "maxRetries": 0,
                       "preflightCommitment": "confirmed"}],
         )
+
+    async def block_height(self) -> int:
+        return int(await self.call("getBlockHeight", [{"commitment": "confirmed"}]) or 0)
+
+    async def status(self, sig: str) -> dict | None:
+        res = await self.call("getSignatureStatuses", [[sig], {"searchTransactionHistory": False}])
+        return ((res or {}).get("value") or [None])[0]
+
+    async def send_and_confirm(self, tx_b64: str, last_valid_block_height: int = 0, timeout: float = 75.0,
+                               poll: float = 0.4, rebroadcast: float = 2.0) -> tuple[bool, str, str]:
+        """Send, then poll fast and rebroadcast the SAME signed tx every couple of seconds until it lands
+        or its blockhash expires (the standard landing loop for congested slots). Returns (ok, sig, detail)."""
+        loop = asyncio.get_running_loop()
+        sig = await self.send_raw(tx_b64)
+        end = loop.time() + timeout
+        next_send = loop.time() + rebroadcast
+        while loop.time() < end:
+            await asyncio.sleep(poll)
+            st = await self.status(sig)
+            if st:
+                if st.get("err"):
+                    return False, sig, f"on-chain error: {st['err']}"
+                if st.get("confirmationStatus") in ("confirmed", "finalized"):
+                    return True, sig, st["confirmationStatus"]
+            if loop.time() >= next_send:
+                next_send = loop.time() + rebroadcast
+                if last_valid_block_height and await self.block_height() > last_valid_block_height:
+                    return False, sig, "blockhash expired before landing"
+                try:
+                    await self.send_raw(tx_b64)
+                except RuntimeError:
+                    pass          # "already processed" and similar: the status poll decides
+        return False, sig, "confirmation timeout"
 
     async def confirm(self, sig: str, timeout: float = 75.0) -> tuple[bool, str]:
         loop = asyncio.get_running_loop()
         end = loop.time() + timeout
         while loop.time() < end:
-            res = await self.call("getSignatureStatuses", [[sig], {"searchTransactionHistory": False}])
-            st = ((res or {}).get("value") or [None])[0]
+            st = await self.status(sig)
             if st:
                 if st.get("err"):
                     return False, f"on-chain error: {st['err']}"
                 if st.get("confirmationStatus") in ("confirmed", "finalized"):
                     return True, st["confirmationStatus"]
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(0.4)
         return False, "confirmation timeout"
+
+    async def tx_fill(self, sig: str, owner: str, mint: str, tries: int = 10) -> tuple[float, float] | None:
+        """(SOL delta incl. fees, token delta) for owner in a landed transaction, read from its metadata.
+        Exact per transaction, so two swaps can settle at the same time without mixing up their fills."""
+        for _ in range(tries):
+            tx = await self.call("getTransaction", [sig, {"encoding": "jsonParsed", "commitment": "confirmed",
+                                                          "maxSupportedTransactionVersion": 0}])
+            if tx and tx.get("meta"):
+                return parse_fill(tx, owner, mint)
+            await asyncio.sleep(0.5)
+        return None
+
+
+def parse_fill(tx: dict, owner: str, mint: str) -> tuple[float, float]:
+    meta = tx["meta"]
+    keys = [k["pubkey"] if isinstance(k, dict) else k for k in tx["transaction"]["message"]["accountKeys"]]
+    sol = 0.0
+    if owner in keys:
+        i = keys.index(owner)
+        sol = (meta["postBalances"][i] - meta["preBalances"][i]) / 1e9
+
+    def tok(rows) -> float:
+        return sum(float(r["uiTokenAmount"].get("uiAmountString") or r["uiTokenAmount"].get("uiAmount") or 0)
+                   for r in rows or [] if r.get("owner") == owner and r.get("mint") == mint)
+
+    return sol, tok(meta.get("postTokenBalances")) - tok(meta.get("preTokenBalances"))

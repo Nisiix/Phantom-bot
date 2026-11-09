@@ -57,7 +57,8 @@ async def build(cfg: Config) -> tuple[Desk, object]:
         from .brokers.live import LiveBroker
         try:
             broker = LiveBroker(rpc, jup, cfg.secrets.wallet_private_key,
-                                cfg.executor.priority_fee_max_lamports, cfg.executor.fee_reserve_sol)
+                                cfg.executor.priority_fee_max_lamports, cfg.executor.fee_reserve_sol,
+                                cfg.executor.execution)
         except Exception:  # noqa: BLE001 - never surface parser details of a secret
             raise LiveRefused("Live trading refused — WALLET_PRIVATE_KEY is not a valid Solana private key "
                               "(check it with: python run.py wallet).") from None
