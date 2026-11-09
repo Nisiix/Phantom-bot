@@ -184,7 +184,8 @@ def test_executor_size_is_8pct_of_current_balance(tmp_path):
     class FakeJup:
         async def quote(self, i, o, amount, bps):
             if i.startswith("So111"):
-                seen["lamports"] = amount
+                if amount != 10_000_000:          # 0.01 SOL = the Executor's reference quote
+                    seen["lamports"] = amount
                 return {"inAmount": str(amount), "outAmount": str(int(amount / 1e9 / 0.00001 * 1e6))}
             return {"outAmount": str(int(seen["lamports"] * 0.98))}
 
@@ -345,3 +346,30 @@ def test_scout_rug_flag_needs_confirmation(tmp_path):
     desk.market_seen["M"] = (time.time(), 90_000, 1_000)
     asyncio.run(sc._check_rug("M", w))
     assert "M" in desk.blacklist and desk.store.rugger("DEV") is not None
+
+
+def test_entry_impact_uses_live_reference_quote(tmp_path):
+    """DexScreener lags: impact is measured against a tiny Jupiter quote, not the DexScreener price."""
+    desk = make_desk(tmp_path)
+    rejected = []
+
+    class FakeJup:
+        async def quote(self, i, o, amount, bps, lane=""):
+            if i.startswith("So111"):
+                # live price is 10% above DexScreener's (0.00001 SOL), 1% impact for the real size
+                per_sol = 1 / 0.000011 * 1e6 * (0.99 if amount > 10_000_000 else 1.0)
+                return {"inAmount": str(amount), "outAmount": str(int(amount / 1e9 * per_sol))}
+            return {"outAmount": str(int(amount * 0.000011 / 1e6 * 1e9 * 0.98))}
+
+    class FakeDex:
+        async def snapshot(self, mint, fresh=True):
+            return snap(mint=mint)
+
+    desk.jup, desk.dex = FakeJup(), FakeDex()
+    ex = Executor(desk, PaperBroker(desk.portfolio), Risk(desk))
+    ex.reject = lambda v, why: rejected.append(why)
+    v = signed_verdict(desk)
+    v.clearance.report.rug["decimals"] = 6
+    asyncio.run(ex.handle_verdict(v))
+    assert not any("impact" in r for r in rejected), rejected
+    assert "M" in desk.portfolio.positions

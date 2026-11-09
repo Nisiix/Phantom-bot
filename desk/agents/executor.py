@@ -28,6 +28,9 @@ from .analyst import ANALYSIS_MAX_SECONDS
 from .base import Agent
 
 
+REF_QUOTE_LAMPORTS = 10_000_000      # 0.01 SOL reference quote for the price-impact check
+
+
 class SizingError(RuntimeError):
     pass
 
@@ -164,13 +167,22 @@ class Executor(Agent):
                 d = (info or {}).get("decimals") or 6
             return int(d)
 
+        async def reference_quote():
+            # A tiny quote taken at the same moment = the pool's marginal price right now. Price impact is
+            # measured against it, not against DexScreener's price, which lags on a moving memecoin (seen
+            # live: real impact 3.1%, measured 11% against the DexScreener price).
+            try:
+                return await self.desk.jup.quote(SOL_MINT, v.mint, REF_QUOTE_LAMPORTS, self.e.slippage_bps)
+            except Exception:  # noqa: BLE001 - optional: fall back to the DexScreener price
+                return None
+
         # Balance -> size -> buy quote, token decimals and fresh market data are independent: fetch together.
         got = await asyncio.gather(sized_quote(), token_decimals(), self.desk.dex.snapshot(v.mint),
-                                   return_exceptions=True)
+                                   reference_quote(), return_exceptions=True)
         for g in got:
             if isinstance(g, BaseException):
                 return self.reject(v, f"pre-trade data failed: {g.__class__.__name__}: {g}")
-        (cash, size, buy_q), decimals, snap = got
+        (cash, size, buy_q), decimals, snap, ref_q = got
         if size < self.e.min_trade_sol:
             return self.reject(v, f"size {size:.4f} SOL below minimum {self.e.min_trade_sol} (balance {cash:.3f})")
         if snap is None:
@@ -182,7 +194,11 @@ class Executor(Agent):
             return self.reject(v, f"Jupiter's slippage estimate {int(est_bps)} bps > cap {self.e.slippage_bps} bps "
                                   "(too volatile/thin to enter safely)")
         out_tokens = int(buy_q["outAmount"]) / 10 ** decimals
-        if snap.price_native > 0:
+        ref_out = int((ref_q or {}).get("outAmount") or 0)
+        if ref_out > 0 and size * 1e9 > 2 * REF_QUOTE_LAMPORTS:
+            fair = ref_out / 10 ** decimals * (size * 1e9 / REF_QUOTE_LAMPORTS)
+            impact = max(0.0, (1 - out_tokens / fair) * 100)
+        elif snap.price_native > 0:
             fair = size / snap.price_native
             impact = max(0.0, (1 - out_tokens / fair) * 100)
         else:
