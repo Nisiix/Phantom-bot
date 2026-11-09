@@ -1,0 +1,14 @@
+services:
+  desk:
+    build: .
+    container_name: phantom-desk
+    restart: unless-stopped          # runs constantly, restarts after crashes and reboots
+    env_file: .env
+    volumes:
+      - ./data:/app/data             # database, logs, 4h recaps survive restarts/updates
+      - ./config.toml:/app/config.toml:ro
+    tty: true                        # live terminal: `docker attach phantom-desk`
+    stdin_open: true                 # detach again with Ctrl-P then Ctrl-Q
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }

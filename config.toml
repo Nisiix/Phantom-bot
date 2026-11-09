@@ -1,0 +1,111 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  PHANTOM DESK — configuration
+#
+#  You never need to touch code. Everything tunable lives here.
+#  The user's core rules are ALSO hard-coded as ceilings in desk/config.py:
+#  you can make them stricter here, never looser. (e.g. setting
+#  max_position_pct = 20 is silently clamped back to 8.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# "paper" = simulated fills against real live quotes (no money at risk)
+# "live"  = real on-chain swaps. Requires the paper track record gate below,
+#           a wallet key in .env and LIVE_CONFIRM=I_ACCEPT_THE_RISK in .env.
+mode = "paper"
+
+# Paper wallet starting balance (SOL). Ignored in live mode (the real wallet
+# balance is used).
+paper_starting_balance_sol = 10.0
+
+# Where the database, logs and recaps live.
+data_dir = "data"
+
+[scout]
+pumpportal = true            # real-time pump.fun launches + migrations (websocket)
+geckoterminal = true         # new pools on Raydium / PumpSwap / pump.fun (polled)
+dexscreener = true           # newly listed / boosted Solana token profiles (polled)
+watch_minutes = 180          # how long a discovered token stays on the watchlist
+recheck_seconds = 45         # how often watchlist tokens are re-sent to Filter
+max_watchlist = 4000
+
+[filter]
+# ── the five mandatory kills (user rules) ──
+require_mint_revoked = true
+min_lp_locked_pct = 95.0      # LP burned or locked (bonding-curve tokens count as locked)
+max_top10_pct = 20.0          # top-10 holders, excluding pools/bonding curve
+min_volume_h1_usd = 50000.0   # last-hour volume across all pairs
+reject_rug_linked_dev = true  # dev / dev funder connected to previous rugs
+# ── extra capital-preservation kills ──
+require_freeze_revoked = true      # freeze authority = can freeze your tokens (honeypot)
+reject_dangerous_token2022 = true  # permanent delegate, transfer fees, non-transferable
+reject_rugcheck_danger = true      # any "danger"-level RugCheck risk
+min_liquidity_usd = 20000.0
+serial_dev_min_launches = 3        # dev with >= N prior launches...
+serial_dev_dead_ratio = 0.8        # ...of which >= 80% died (< $10k mcap) = rug-linked
+
+[analyst]
+min_score = 0.6              # user rule: under 0.6 = no trade (can only be raised)
+website_check = true
+# Claude reads the website and judges if it looks legit & "tasty".
+# Used only when ANTHROPIC_API_KEY is set in .env.
+claude_website_review = true
+claude_model = "claude-opus-5-5"
+
+[executor]
+max_position_pct = 8.0       # user rule: max 8% of current balance per trade (hard ceiling)
+min_trade_sol = 0.05
+max_open_positions = 4
+slippage_bps = 300           # 3% max slippage on the swap
+max_entry_price_impact_pct = 2.5
+max_round_trip_loss_pct = 6.0   # buy+sell quote test: reject honeypots / heavy taxes
+clearance_ttl_seconds = 120     # a Filter/Analyst clearance expires after this
+fee_reserve_sol = 0.05          # live: always keep this much SOL for fees
+priority_fee_max_lamports = 200000
+
+[risk]
+hard_stop_pct = -6.0          # user rule: hard stop at -6% (can only be tightened)
+trail_activate_pct = 12.0     # user rule: trailing starts only after +12%
+trail_distance_pct = 6.0      # trailing stop distance below the peak
+cooldown_after_loss_minutes = 20     # no revenge trading: pause new entries after a loss
+max_consecutive_losses = 3           # ...and a longer pause after a losing streak
+streak_pause_minutes = 90
+daily_loss_limit_pct = 10.0          # halt new entries for the day after -10% equity
+liquidity_drop_exit_pct = 35.0       # emergency exit if pool liquidity drops this much
+max_hold_minutes = 0                 # 0 = no time stop
+price_poll_seconds = 2.0
+
+[recap]
+interval_hours = 4
+
+[live_gate]
+# Live trading is refused until paper trading has proven itself.
+min_paper_trades = 30
+require_positive_paper_pnl = true
+max_paper_drawdown_pct = 20.0
+
+[quant]
+# QUANT: trade only if expected value AFTER the measured round-trip cost is positive.
+# Probabilities of "+12% first / -6% first / neither in 60 min" are learned from real trades
+# and from following every evaluated token for 60 minutes (shadow tracking).
+enabled = true
+horizon_minutes = 60
+min_samples_to_enforce = 30     # warm-up: log EV but don't block until this many outcomes exist
+min_ev_pct = 0.0                # required edge in % (can only be >= 0)
+prior_strength = 10.0
+shadow_tracking = true          # follow every evaluated token (bought or skipped) for 60 min
+shadow_weight = 0.5             # a skipped-token outcome counts half a real trade
+shadow_min_liquidity_usd = 5000 # don't follow untradeable dust
+default_cost_pct = 2.5          # assumed round-trip cost until real quotes have been measured
+
+[gmgn]
+# Optional wallet intelligence from GMGN (paid OpenAPI, Plus plan or better).
+# Active only when GMGN_API_KEY is set in .env. Read-only: GMGN never trades for this desk.
+enabled = true
+plan = "plus"                    # free | plus | pro  -> request budget
+signal_feed = true               # Scout listens to smart-money & KOL buy signals
+max_rug_ratio = 0.30             # GMGN rug label            -> permanent kill
+max_insider_rate = 0.25          # suspected insider share   -> reject
+max_bundler_rate = 0.30          # bundled-buy share         -> reject
+max_sniper_rate = 0.30           # sniper share              -> reject
+max_funding_cluster_pct = 15.0   # % supply held by wallets funded by the same wallet -> reject
+serial_min_launches = 10         # dev with >= 10 launches and...
+serial_max_graduation = 0.05     # ...<= 5% graduated -> permanent kill (and added to rug ledger)
