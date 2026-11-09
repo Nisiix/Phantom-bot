@@ -58,7 +58,10 @@ class Portfolio:
         self.persist(pos)
 
     def persist(self, pos: Position) -> None:
-        self.store.save_position(pos.mint, pos.to_dict())
+        # A position closed while another agent was awaiting must not be written back (ghost position
+        # resurrected on the next restart).
+        if self.positions.get(pos.mint) is pos:
+            self.store.save_position(pos.mint, pos.to_dict())
 
     def close(self, mint: str, proceeds_sol: float, reason: str, tx_out: str = "", extra: dict | None = None) -> dict:
         pos = self.positions.pop(mint)

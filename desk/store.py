@@ -42,10 +42,11 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
-        try:
-            self.db.execute("ALTER TABLE shadow ADD COLUMN source TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        for col in ("source", "features"):
+            try:
+                self.db.execute(f"ALTER TABLE shadow ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     # ── generic ──
     def q(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
@@ -121,6 +122,17 @@ class Store:
 
     def ruggers(self) -> dict[str, dict]:
         return {r["wallet"]: r for r in self.q("SELECT * FROM rug_ledger")}
+
+    def rugger(self, wallet: str | None) -> dict | None:
+        """Single indexed lookup (the ledger only grows: never load all of it per token)."""
+        if not wallet:
+            return None
+        rows = self.q("SELECT * FROM rug_ledger WHERE wallet=?", (wallet,))
+        return rows[0] if rows else None
+
+    def shadow_research_rows(self, stage: str = "analyst", since: float = 0) -> list[dict]:
+        return self.q("SELECT * FROM shadow WHERE stage=? AND end_ts>=? AND features IS NOT NULL ORDER BY end_ts",
+                      (stage, since))
 
     # ── reads ──
     def trades_between(self, t0: float, t1: float) -> list[dict]:

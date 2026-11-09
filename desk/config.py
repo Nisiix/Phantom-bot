@@ -45,6 +45,8 @@ class FilterCfg:
     min_liquidity_usd: float = 20_000.0
     serial_dev_min_launches: int = 3
     serial_dev_dead_ratio: float = 0.8
+    deep_workers: int = 3               # parallel deep checks (RugCheck keeps its own rate limit)
+    deep_max_wait_seconds: float = 60   # drop queued deep checks whose market data got stale
 
 
 @dataclass
@@ -53,6 +55,7 @@ class AnalystCfg:
     website_check: bool = True
     claude_website_review: bool = True
     claude_model: str = "claude-opus-5-5"
+    workers: int = 3                    # tokens scored in parallel (a slow website no longer blocks the rest)
 
 
 @dataclass

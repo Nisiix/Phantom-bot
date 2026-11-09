@@ -44,6 +44,23 @@ below 0.6 and shows whether a higher score really means better odds. The 4h reca
 (Brier score vs. the naive base rate), outcomes by decision and by discovery source, and
 "missed winners" (skipped tokens that hit +60% first) with the rule that rejected them.
 
+## Research — which signals actually worked (`python run.py research`)
+Every shadow row also stores what the desk saw at decision time (market data, holders, the Analyst's
+component scores). `python run.py research` (or `start.bat research`) splits the followed tokens into
+low / mid / high thirds for each signal and shows how often each third hit +12% before −6% and the
+average result of the desk's exit policy on the real price path, with a 95% interval; splits whose
+intervals overlap are marked as noise. It also breaks results down by discovery source, time of day
+and score threshold. `--days 7` limits it to recent data, `--stage filter` includes everything the
+Filter saw. It describes past memecoins, not future ones: use it to choose what to paper-test next.
+
+## Engine
+* Filter runs in two stages: a batched market screen, then a priority queue of deep checks
+  (graduations and smart-money signals first, then by volume) with `deep_workers` in parallel.
+  Deep checks whose market data waited longer than `deep_max_wait_seconds` are dropped (the Scout resubmits).
+* The Analyst scores `workers` tokens in parallel, and skips clearances already half-expired.
+* Exits have their own loop: a stop is never queued behind an entry's quotes. Swaps themselves are
+  serialised, and Risk is asked again right before every buy.
+
 ## GMGN wallet intelligence (optional, `GMGN_API_KEY`)
 Read-only use of GMGN's OpenAPI (paid key, Plus plan or better; never its custodial swap routes):
 * **Filter:** honeypot flag, GMGN rug label, insider / bundler / sniper shares, wash trading,
