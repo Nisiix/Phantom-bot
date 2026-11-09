@@ -443,14 +443,14 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
       </div>
       <div class="card">
         <h3>P&amp;L per trade</h3>
-        <p class="sub">Ultimi 40 trade chiusi, dal più vecchio al più recente</p>
+        <p class="sub">Ultimi 40 trade chiusi, dal più vecchio al più recente · passa sopra una barra per % e $</p>
         <div class="legend"><span><i style="background:var(--gain)"></i>Guadagno</span><span><i style="background:var(--loss)"></i>Perdita</span></div>
         <div class="chart" id="tradebars"></div>
       </div>
     </div>
     <div class="card" style="margin-top:14px">
       <h3>Trade chiusi</h3>
-      <p class="sub">Motivo di entrata e di uscita di ogni operazione</p>
+      <p class="sub">Motivo di entrata e di uscita di ogni operazione · importi in $ al prezzo attuale di SOL</p>
       <div class="scroll" id="trades"></div>
     </div>
   </section>
@@ -505,6 +505,11 @@ const fx = (x, d) => Number(x).toLocaleString("it-IT", { minimumFractionDigits: 
 const sol = (x, d = 4) => (x == null ? "—" : fx(x, d));
 const sgn = (x, d = 2) => (x >= 0 ? "+" : "") + fx(x, d);
 const usd = (x) => "$" + Number(x).toLocaleString("it-IT", { maximumFractionDigits: 0 });
+// SOL amount -> signed dollars at the current SOL price ("" while the price is unknown)
+let PX = 0;
+function usdP(solAmt) { if (!PX || solAmt == null) return ""; const v = solAmt * PX, a = Math.abs(v);
+  return (v > 0 ? "+" : v < 0 ? "−" : "") + "$" + fx(a, a >= 1000 ? 0 : 2); }
+const withUsd = (txt, solAmt) => (PX ? txt + " · " + usdP(solAmt) : txt);
 const int = (x) => Number(x || 0).toLocaleString("it-IT");
 function ago(ts) { const s = Math.max(0, Date.now() / 1000 - ts); if (!ts) return "—";
   if (s < 60) return Math.floor(s) + "s fa"; if (s < 3600) return Math.floor(s / 60) + " min fa"; return Math.floor(s / 3600) + " h fa"; }
@@ -596,10 +601,13 @@ function renderKpis(s) {
   if (b.sol_usd) eq.append(el("small", null, "≈ " + usd(b.equity * b.sol_usd)));
   const d = $("heroDeltas"); d.replaceChildren();
   const chip = (v, txt, label) => { const c = el("span", "delta " + cls(v), txt); c.append(el("span", null, label)); d.append(c); };
-  chip(b.pnl, sgn(b.pnl, 4) + " SOL", "dall'inizio"); chip(pnlPct, sgn(pnlPct) + "%", "su " + sol(b.start, 2) + " SOL"); chip(day, sgn(day) + "%", "oggi");
+  const dayPnl = b.day_start ? b.equity - b.day_start : 0;
+  if (PX) chip(b.pnl, usdP(b.pnl), "dall'inizio");
+  chip(b.pnl, sgn(b.pnl, 4) + " SOL", PX ? "" : "dall'inizio"); chip(pnlPct, sgn(pnlPct) + "%", "su " + sol(b.start, 2) + " SOL");
+  chip(day, withUsd(sgn(day) + "%", dayPnl), "oggi");
   k.append(
     tile("◉", "Saldo disponibile", sol(b.cash, 3) + " SOL", b.sol_usd ? usd(b.cash * b.sol_usd) + " liquidi" : null),
-    tile("⇅", "Oggi", sgn(day) + "%", "stop giornaliero −" + s.rules.daily_limit + "%", cls(day),
+    tile("⇅", "Oggi", sgn(day) + "%", (PX ? usdP(dayPnl) + " · " : "") + "stop giornaliero −" + s.rules.daily_limit + "%", cls(day),
       day < 0 ? Math.abs(day) / s.rules.daily_limit * 100 : 0),
     tile("▣", "Posizioni aperte", b.open + " / " + b.max_open, "max " + s.rules.max_pos_pct + "% del saldo per trade", null, b.open / Math.max(1, b.max_open) * 100),
     tile("∑", "QUANT", s.quant.enforcing ? "Attivo" : "In rodaggio", s.quant.enforcing
@@ -659,7 +667,7 @@ function renderEquity(s) {
     ch.setAttribute("x1", X(p.ts)); ch.setAttribute("x2", X(p.ts)); dot.setAttribute("cx", X(p.ts)); dot.setAttribute("cy", Y(p.v));
     ch.setAttribute("visibility", "visible"); dot.setAttribute("visibility", "visible");
     showTip(ev, (t) => { t.style.setProperty("--kc", col); t.append(el("strong", null, sol(p.v) + " SOL"), el("div", "k", "Equity"),
-      el("div", "r", sgn(p.v - s.balance.start, 4) + " SOL dall'inizio · " + new Date(p.ts * 1000).toLocaleString("it-IT"))); }); });
+      el("div", "r", withUsd(sgn(p.v - s.balance.start, 4) + " SOL", p.v - s.balance.start) + " dall'inizio · " + new Date(p.ts * 1000).toLocaleString("it-IT"))); }); });
   hit.addEventListener("pointerleave", () => { ch.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); hideTip(); });
   box.append(svg);
 }
@@ -742,9 +750,9 @@ function renderPositions(s) {
   if (!s.positions.length) { box.append(el("div", "empty", "Nessuna posizione aperta: il desk aspetta un segnale che superi tutte le regole.")); return; }
   const rows = s.positions.map((p) => { const r = el("tr"), rc = el("td"); rc.append(rail(p, s.rules));
     const ex = el("td", "n"); ex.append(el("span", "badge" + (p.trailing ? " trail" : ""), (p.trailing ? "trailing " : "stop ") + sgn(p.stop_pct, 1) + "%"));
-    r.append(tokenCell(p.symbol, p.mint, p.pnl_pct), td(sol(p.cost, 3), "n"), td(sgn(p.pnl_pct) + "%", "n " + cls(p.pnl_pct)), rc, ex,
+    r.append(tokenCell(p.symbol, p.mint, p.pnl_pct), td(sol(p.cost, 3), "n"), td(sgn(p.pnl_pct) + "%", "n " + cls(p.pnl_pct)), td(PX ? usdP(p.value - p.cost) : sgn(p.value - p.cost, 4), "n " + cls(p.pnl_pct)), rc, ex,
       td(Math.round(p.age_min) + "m", "n"), td(fx(p.score, 2), "n")); r.title = p.reason; return r; });
-  box.append(table([["Token"], ["Costo", 1], ["P&L", 1], ["Rischio"], ["Uscita", 1], ["Età", 1], ["Score", 1]], rows));
+  box.append(table([["Token"], ["Costo", 1], ["P&L %", 1], [PX ? "P&L $" : "P&L SOL", 1], ["Rischio"], ["Uscita", 1], ["Età", 1], ["Score", 1]], rows));
 }
 function renderTradeBars(s) {
   const box = $("tradebars"); box.replaceChildren();
@@ -767,7 +775,7 @@ function renderTradeBars(s) {
     const hit = sv("rect", { x: L + i * slot, y: T, width: slot, height: H - T - B, fill: "transparent", tabindex: 0 });
     hit.addEventListener("pointermove", (ev) => { bar.setAttribute("opacity", 0.75); showTip(ev, (tp) => {
       tp.style.setProperty("--kc", css(up ? "--gain" : "--loss"));
-      tp.append(el("strong", null, sgn(t.pnl_pct) + "% · " + sgn(t.pnl_sol, 4) + " SOL"), el("div", "k", t.symbol),
+      tp.append(el("strong", null, withUsd(sgn(t.pnl_pct) + "% · " + sgn(t.pnl_sol, 4) + " SOL", t.pnl_sol)), el("div", "k", t.symbol),
         el("div", "r", "Uscita: " + t.exit_reason), el("div", "r", new Date(t.exit_ts * 1000).toLocaleString("it-IT"))); }); });
     hit.addEventListener("pointerleave", () => { bar.setAttribute("opacity", 1); hideTip(); });
     svg.append(bar, hit);
@@ -782,9 +790,9 @@ function renderTrades(s) {
     const why = el("td", "why"), a = el("div", null, t.entry_reason), b = el("div", null, t.exit_reason);
     a.dataset.l = "Entrata"; b.dataset.l = "Uscita"; why.append(a, b);
     r.append(td(new Date(t.exit_ts * 1000).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })),
-      tokenCell(t.symbol, t.mint, t.pnl_pct), td(sgn(t.pnl_pct) + "%", "n " + cls(t.pnl_pct)), td(sgn(t.pnl_sol, 4), "n " + cls(t.pnl_sol)),
+      tokenCell(t.symbol, t.mint, t.pnl_pct), td(sgn(t.pnl_pct) + "%", "n " + cls(t.pnl_pct)), td(sgn(t.pnl_sol, 4), "n " + cls(t.pnl_sol)), td(usdP(t.pnl_sol) || "—", "n " + cls(t.pnl_sol)),
       td(Math.round((t.exit_ts - t.entry_ts) / 60) + "m", "n"), td(fx(t.score, 2), "n"), why); return r; });
-  box.append(table([["Chiuso"], ["Token"], ["P&L", 1], ["SOL", 1], ["Durata", 1], ["Score", 1], ["Perché"]], rows));
+  box.append(table([["Chiuso"], ["Token"], ["P&L %", 1], ["SOL", 1], ["$", 1], ["Durata", 1], ["Score", 1], ["Perché"]], rows));
   if (s.trades.length > 8) { const m = el("button", "btn", showAllTrades ? "Mostra meno" : "Mostra tutti (" + s.trades.length + ")");
     m.type = "button"; m.style.marginTop = "10px"; m.onclick = () => { showAllTrades = !showAllTrades; renderTrades(s); }; box.append(m); }
 }
@@ -834,6 +842,7 @@ function renderRules(s) {
 }
 
 function render(s) {
+  PX = (s.balance && s.balance.sol_usd) || 0;
   renderHeader(s); renderKpis(s); summary(s); renderEquity(s); renderFunnel(s); renderAgents(s);
   renderPositions(s); renderTradeBars(s); renderFeed(s); renderRules(s); renderTrades(s);
   if (s.feed.length) seenTs = s.feed[s.feed.length - 1].ts;
