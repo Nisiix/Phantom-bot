@@ -41,6 +41,7 @@ class Shadow:
     cost_pct: float
     start: float
     p: dict = field(default_factory=dict)
+    source: str = ""
     traded: bool = False
     last: float = 0.0
     max_ret: float = 0.0
@@ -111,7 +112,7 @@ class ShadowTracker:
         return self.cfg.quant.default_cost_pct
 
     def start(self, mint: str, symbol: str, stage: str, decision: str, reason: str,
-              price_usd: float, liq_usd: float, score: float | None = None) -> None:
+              price_usd: float, liq_usd: float, score: float | None = None, source: str = "") -> None:
         if not self.cfg.quant.shadow_tracking or price_usd <= 0:
             return
         key = f"{mint}:{stage}"
@@ -128,7 +129,7 @@ class ShadowTracker:
             pr, _, _ = self.desk.quant.probabilities(score)
             p = pr
         self.active[key] = Shadow(key, mint, symbol, stage, decision, reason[:200], score, price_usd, liq_usd,
-                                  self.cost_estimate(), time.time(), p)
+                                  self.cost_estimate(), time.time(), p, source)
 
     def mark_traded(self, mint: str) -> None:
         s = self.active.get(f"{mint}:analyst")
@@ -163,7 +164,7 @@ class ShadowTracker:
         self.completed += 1
         row = {
             "start_ts": s.start, "end_ts": time.time(), "mode": self.cfg.mode, "mint": s.mint, "symbol": s.symbol,
-            "stage": s.stage, "decision": s.decision, "reason": s.reason, "score": s.score,
+            "stage": s.stage, "decision": s.decision, "reason": s.reason, "score": s.score, "source": s.source,
             "traded": int(s.traded), "ref_price": s.ref_price, "ref_liq": s.ref_liq, "cost_pct": s.cost_pct,
             "desk_label": s.desk_label, "desk_hit_s": (s.desk_hit_ts - s.start) if s.desk_hit_ts else None,
             "model_label": s.model_label, "model_hit_s": (s.model_hit_ts - s.start) if s.model_hit_ts else None,

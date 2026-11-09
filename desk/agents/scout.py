@@ -72,6 +72,8 @@ class Scout(Agent):
             tasks.append(self.supervised("geckoterminal", self.gecko_loop))
         if self.c.dexscreener:
             tasks.append(self.supervised("dexscreener", self.dexscreener_loop))
+        if self.desk.gmgn is not None and self.cfg.gmgn.signal_feed:
+            tasks.append(self.supervised("gmgn-signals", self.gmgn_loop))
         self.emit("info", f"Scout online: sources pumpportal={self.c.pumpportal} "
                           f"gecko={self.c.geckoterminal} dexscreener={self.c.dexscreener}")
         await asyncio.gather(*tasks)
@@ -122,6 +124,21 @@ class Scout(Agent):
             if not await self.sleep(30):
                 return
 
+    async def gmgn_loop(self) -> None:
+        """Smart-money (type 12) and KOL (type 20) buy signals from GMGN."""
+        from ..clients.gmgn import GmgnError
+        names = {12: "smart", 20: "kol"}
+        while not self.desk.stop.is_set():
+            try:
+                for sig in await self.desk.gmgn.signals([12, 20]):
+                    kind = names.get(int(sig.get("signal_type") or 0), "signal")
+                    self.discover(sig.get("token_address"), "?", "", f"gmgn:{kind}", urgent=True)
+            except GmgnError as e:
+                self.state.bump("feed_errors")
+                self.emit("warn", f"GMGN signal feed: {e}")
+            if not await self.sleep(45):
+                return
+
     def _prune(self, force: bool = False) -> None:
         t = time.time()
         held = self.desk.portfolio.positions
@@ -155,6 +172,9 @@ class Scout(Agent):
             reason = f"liquidity collapsed {w.max_liq:,.0f} -> {liq:,.0f} USD"
             if creator:
                 self.desk.store.add_rugger(creator, mint, reason)
+            funder = self.desk.funders.get(mint)
+            if funder:
+                self.desk.store.add_rugger(funder, mint, "funded a rugging dev: " + reason)
             self.desk.blacklist[mint] = "rugged: " + reason
             self.emit("warn", f"RUG observed ({reason}); dev {('added to rug ledger: ' + creator[:6]) if creator else 'unknown'}",
                       mint, w.cand.symbol)

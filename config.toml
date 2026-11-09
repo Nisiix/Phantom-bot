@@ -95,3 +95,17 @@ shadow_tracking = true          # follow every evaluated token (bought or skippe
 shadow_weight = 0.5             # a skipped-token outcome counts half a real trade
 shadow_min_liquidity_usd = 5000 # don't follow untradeable dust
 default_cost_pct = 2.5          # assumed round-trip cost until real quotes have been measured
+
+[gmgn]
+# Optional wallet intelligence from GMGN (paid OpenAPI, Plus plan or better).
+# Active only when GMGN_API_KEY is set in .env. Read-only: GMGN never trades for this desk.
+enabled = true
+plan = "plus"                    # free | plus | pro  -> request budget
+signal_feed = true               # Scout listens to smart-money & KOL buy signals
+max_rug_ratio = 0.30             # GMGN rug label            -> permanent kill
+max_insider_rate = 0.25          # suspected insider share   -> reject
+max_bundler_rate = 0.30          # bundled-buy share         -> reject
+max_sniper_rate = 0.30           # sniper share              -> reject
+max_funding_cluster_pct = 15.0   # % supply held by wallets funded by the same wallet -> reject
+serial_min_launches = 10         # dev with >= 10 launches and...
+serial_max_graduation = 0.05     # ...<= 5% graduated -> permanent kill (and added to rug ledger)

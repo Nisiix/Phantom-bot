@@ -3,6 +3,8 @@
 Score = weighted blend of eight components (weights sum to 1):
   liquidity depth .14 | turnover (vol/liq) .10 | buy pressure .16 | momentum .12
   holder quality .14 | contract hygiene .08 | website & socials .16 | age/maturity .10
+With GMGN data a ninth component, smart money (.10: smart/renowned wallets holding, penalised
+for fresh-wallet / bot / rat-trader crowds), is added and the others are scaled by 0.9.
 Then hard caps for wash trading, insider clusters and parabolic blow-off tops.
 Every verdict carries its full breakdown and human-readable rationale.
 """
@@ -89,7 +91,26 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict) -> tuple[float, dict, l
     b["maturity"] = _band(age, 4, 25, 12 * 60, 7 * 24 * 60) * 0.85 + 0.15
     why.append(f"age {age:.0f} min")
 
-    score = sum(WEIGHTS[k] * b[k] for k in WEIGHTS)
+    gm = rug.get("gmgn") or None
+    weights = dict(WEIGHTS)
+    if gm:
+        smart = (gm.get("smart_wallets") or 0) + 0.5 * (gm.get("renowned_wallets") or 0)
+        sm = _lerp(smart, 0, 8)
+        if (gm.get("fresh_wallet_rate") or 0) > 0.4:
+            sm *= 0.7
+        if (gm.get("bot_degen_rate") or 0) > 0.5:
+            sm *= 0.7
+        if (gm.get("rat_rate") or 0) > 0.1:
+            sm *= 0.8
+        b["smart_money"] = sm
+        weights = {k: v * 0.9 for k, v in WEIGHTS.items()}
+        weights["smart_money"] = 0.10
+        why.append(f"smart wallets {int(gm.get('smart_wallets') or 0)}, KOL/renowned "
+                   f"{int(gm.get('renowned_wallets') or 0)}, fresh {100 * (gm.get('fresh_wallet_rate') or 0):.0f}%")
+        if gm.get("dev_status") == "creator_close":
+            b["hygiene"] = max(0.0, b["hygiene"] - 0.2)
+            why.append("dev has sold out")
+    score = sum(weights[k] * b[k] for k in weights)
 
     # Hard caps — any one of these makes the token untradeable regardless of the rest.
     caps = []
@@ -103,6 +124,8 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict) -> tuple[float, dict, l
         caps.append(("scam language on website", 0.3))
     if br_m5 < 0.3 and tot_m5 >= 20:
         caps.append(("heavy active selling", 0.45))
+    if gm and gm.get("synced_funding"):
+        caps.append(("holders funded by a script within 60s", 0.45))
     for reason, cap in caps:
         if score > cap:
             score = cap
@@ -187,7 +210,8 @@ class Analyst(Agent):
         self.state.bump("scored")
         if self.desk.shadow is not None:
             self.desk.shadow.start(rep.mint, m.symbol, "analyst", "approve" if trade else "reject_score",
-                                   "; ".join(why[:3]), m.price_usd, m.liquidity_usd, score=score)
+                                   "; ".join(why[:3]), m.price_usd, m.liquidity_usd, score=score,
+                                   source=rep.source)
         prev = self._last_logged.get(rep.mint)
         quiet = (not trade and prev is not None and abs(prev[0] - score) < 0.03 and issued - prev[1] < 600)
         if quiet:

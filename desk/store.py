@@ -42,6 +42,10 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
+        try:
+            self.db.execute("ALTER TABLE shadow ADD COLUMN source TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
     # ── generic ──
     def q(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:

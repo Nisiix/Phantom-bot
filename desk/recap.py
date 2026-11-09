@@ -91,6 +91,18 @@ def shadow_section(store: Store, t0: float, t1: float) -> list[str]:
         sim = sum(r["sim_net_pct"] or 0 for r in rs) / n
         lines.append(f"  - {g} (n={n}): desk +12 first {du:.0%}, -6 first {dd:.0%} | model +60 first {mu:.0%}, "
                      f"-30 first {md:.0%} | avg simulated desk trade {sim:+.1f}%")
+    by_src: dict[str, list[dict]] = {}
+    for r in rows:
+        if r["stage"] == "filter":
+            by_src.setdefault((r.get("source") or "?").split(":")[0] + ":" + (r.get("source") or "?").split(":")[-1],
+                              []).append(r)
+    if len(by_src) > 1:
+        lines.append("- By discovery source (all evaluated tokens):")
+        for src, rs in sorted(by_src.items(), key=lambda kv: -len(kv[1])):
+            n = len(rs)
+            lines.append(f"  - {src} (n={n}): desk +12 first {sum(r['desk_label'] == 'up' for r in rs) / n:.0%}, "
+                         f"model +60 first {sum(r['model_label'] == 'up' for r in rs) / n:.0%}, "
+                         f"-30 first {sum(r['model_label'] == 'down' for r in rs) / n:.0%}")
     missed = [r for r in rows if r["decision"] in ("reject", "kill", "reject_score") and r["model_label"] == "up"]
     saved = [r for r in rows if r["decision"] in ("reject", "kill", "reject_score") and r["model_label"] == "down"]
     lines.append(f"- Skipped tokens that hit +60% first (missed): {len(missed)} | hit -30% first (avoided): {len(saved)}")

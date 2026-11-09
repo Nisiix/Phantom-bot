@@ -120,6 +120,7 @@ class FilterReport:
     rug: dict = field(default_factory=dict)     # condensed RugCheck facts for the Analyst
     creator: Optional[str] = None
     ts: float = field(default_factory=now)
+    source: str = ""
 
     @property
     def failed(self) -> list[Check]:

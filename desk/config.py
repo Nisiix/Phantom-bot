@@ -96,6 +96,20 @@ class QuantCfg:
 
 
 @dataclass
+class GmgnCfg:
+    enabled: bool = True              # used only when GMGN_API_KEY is set
+    plan: str = "plus"                # free | plus | pro  (rate limits)
+    signal_feed: bool = True          # Scout: smart-money & KOL buy signals
+    max_rug_ratio: float = 0.30       # GMGN rug label (0-1)          -> permanent kill
+    max_insider_rate: float = 0.25    # suspected insider holdings     -> reject
+    max_bundler_rate: float = 0.30    # bundler-held share             -> reject
+    max_sniper_rate: float = 0.30     # top-70 sniper holdings         -> reject
+    max_funding_cluster_pct: float = 15.0  # % supply in wallets funded by the same wallet -> reject
+    serial_min_launches: int = 10     # dev with >= N launches...
+    serial_max_graduation: float = 0.05    # ...and <= 5% graduated      -> permanent kill
+
+
+@dataclass
 class RecapCfg:
     interval_hours: float = 4
 
@@ -116,6 +130,7 @@ class Secrets:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     discord_webhook_url: str = ""
+    gmgn_api_key: str = ""
 
 
 @dataclass
@@ -130,6 +145,7 @@ class Config:
     risk: RiskCfg = field(default_factory=RiskCfg)
     recap: RecapCfg = field(default_factory=RecapCfg)
     quant: QuantCfg = field(default_factory=QuantCfg)
+    gmgn: GmgnCfg = field(default_factory=GmgnCfg)
     live_gate: LiveGateCfg = field(default_factory=LiveGateCfg)
     secrets: Secrets = field(default_factory=Secrets)
     warnings: list[str] = field(default_factory=list)
@@ -224,7 +240,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()
@@ -237,6 +253,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     s.telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     s.telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     s.discord_webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "")
+    s.gmgn_api_key = os.environ.get("GMGN_API_KEY", "")
 
     enforce_hard_limits(cfg)
     cfg.data_dir.mkdir(parents=True, exist_ok=True)

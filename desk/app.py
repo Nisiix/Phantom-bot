@@ -71,6 +71,9 @@ async def build(cfg: Config) -> tuple[Desk, object]:
         rows += [shadow_to_outcome(r, q.shadow_weight) for r in st.shadow_samples()]
         desk.quant.cost_samples += [o["rt_cost_pct"] for o in st.outcomes() if o["rt_cost_pct"]]
     desk.quant.load(rows)
+    if cfg.gmgn.enabled and cfg.secrets.gmgn_api_key:
+        from .clients.gmgn import Gmgn
+        desk.gmgn = Gmgn(cfg.secrets.gmgn_api_key, cfg.gmgn.plan)
     if broker is None:
         broker = PaperBroker(portfolio)
     else:
@@ -101,6 +104,8 @@ async def run_desk(cfg: Config, use_tui: bool = True) -> None:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     await desk.http.close()
+    if desk.gmgn is not None:
+        await desk.gmgn.close()
     for a in agents:
         if isinstance(a, Analyst):
             await a.web.close()

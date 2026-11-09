@@ -24,6 +24,36 @@ The core rules are hard-coded ceilings in `desk/config.py`. `config.toml` can ma
 stricter, never looser (e.g. `max_position_pct = 20` is clamped back to 8 and flagged
 on screen).
 
+## QUANT — expected value after costs (self-calibrating)
+Before every buy the Executor asks QUANT for P(**+12% first**), P(**−6% first**) and P(**neither
+within 60 min**) for the token's score bucket, plus the typical return of each scenario, and computes
+`EV = Σ P·R − measured round-trip cost`. The trade is blocked unless EV > 0. QUANT can only block,
+never force a trade or loosen a rule. Its probabilities start at conservative priors and are
+re-estimated from data (two-level shrinkage, so a handful of outcomes can't swing it). It stays in
+**warm-up** (it computes and logs EV but doesn't block) until 30 effective outcomes exist.
+
+## Shadow tracking — even skipped tokens become data
+The Logger follows **every evaluated token, bought or skipped, for 60 minutes** and records which
+barrier was hit first, on two sets:
+* desk barriers **+12% / −6%** (net of estimated cost, like the desk's own P&L), plus a simulation of
+  the desk's exit policy on the price path;
+* model barriers **+60% / −30%** on raw price.
+
+Analyst-scored tokens that weren't bought feed QUANT at half weight, so calibration also covers scores
+below 0.6 and shows whether a higher score really means better odds. The 4h recap reports calibration
+(Brier score vs. the naive base rate), outcomes by decision and by discovery source, and
+"missed winners" (skipped tokens that hit +60% first) with the rule that rejected them.
+
+## GMGN wallet intelligence (optional, `GMGN_API_KEY`)
+Read-only use of GMGN's OpenAPI (paid key, Plus plan or better; never its custodial swap routes):
+* **Filter:** honeypot flag, GMGN rug label, insider / bundler / sniper shares, wash trading,
+  serial-launcher dev (≥ 10 launches, ≤ 5% graduated), dev's SOL funder already in our rug ledger, and
+  **funding clusters** (≥ 3 top holders funded by the same wallet = one hidden whale; also detects
+  scripted funding within 60 s).
+* **Analyst:** smart-money / KOL wallet counts (penalised for fresh-wallet, bot and rat-trader crowds).
+* **Scout:** smart-money and KOL buy signals as a discovery source, tracked by source in the recap.
+Missing GMGN data is treated as *unknown*, never as safe; on a 429 every GMGN call stops until the reset.
+
 ## Website check ("legit & tasty")
 If the pair lists a website (or the token metadata does), the Analyst fetches it and checks
 HTTPS, whether the contract address is on the page, whether it links the same socials as the
@@ -75,7 +105,18 @@ Without Docker: `pip install -r requirements.txt && python run.py` (add `--headl
 * Free public APIs are rate-limited. For live trading, use a private RPC (`SOLANA_RPC_URL`).
 * Paper results are an estimate; live slippage on thin pools can be worse.
 
+## Third-party repos evaluated
+| Repo | Verdict |
+|---|---|
+| GMGNAI/gmgn-skills | **Integrated** (read-only data API + holder-cluster and serial-dev logic, re-implemented in Python) |
+| TauricResearch/TradingAgents | Inspiration only: stock-focused, minutes per decision; too slow and costly for memecoin entries |
+| sendaifun/solana-agent-kit | Inspiration only: TypeScript; its RugCheck/DexScreener/Jupiter parts duplicate ours (and use the old Jupiter v6 API) |
+| 0xsyncroot/opentrade | Rejected: wraps the same GMGN API with looser safety gates, trades through GMGN's custodial wallet |
+| 8bitsats/Solana-MCP-Trading-Server | Rejected: no code, and its docs contain **exposed secrets including a Solana private key**: never use that wallet |
+
 ## Tests
 `python -m pytest -q` covers the mandate: config can't loosen limits, sizing can never exceed
 8%, the −6% stop, trail only after +12%, no averaging down / revenge trades, losing-streak pause,
-and the Executor refusing forged, tampered, expired or partial clearances.
+the Executor refusing forged, tampered, expired or partial clearances, QUANT (warm-up, blocking
+negative EV, cost subtraction, calibration), shadow barrier labelling, and the GMGN parsing, kills and
+rate-limit pause.

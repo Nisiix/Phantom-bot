@@ -10,6 +10,12 @@ Mandatory kills (user rules):
 Extra capital-preservation kills (config): freeze authority, dangerous Token-2022
 extensions, danger-level RugCheck risks, minimum liquidity.
 
+Optional GMGN layer (GMGN_API_KEY): honeypot flag, GMGN rug label, insider / bundler / sniper
+shares, wash trading, serial-launcher dev, dev's SOL funder in our rug ledger, and holder
+funding clusters (wallets funded by the same wallet = one hidden whale). GMGN outages never
+let a token through on missing data: a check that can't be run is simply not added, the
+mandatory checks above still apply.
+
 Only a report where EVERY check passed is signed and handed to the Analyst.
 Every rejection is logged with its reasons. A token that keeps failing for the
 same reasons is logged again only when its reasons change (no log spam).
@@ -19,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
 from .base import Agent
 
@@ -219,6 +226,10 @@ class Filter(Agent):
             checks.append(Check("rugcheck_danger", not danger, ", ".join(danger) or "none", "none",
                                 ", ".join(danger) or "no danger-level risks"))
 
+        gm = None
+        if self.desk.gmgn is not None and all(c.passed for c in checks):
+            gm = await self.gmgn_checks(cand.mint, sym, creator, checks)
+
         passed = all(c.passed for c in checks)
         rug_facts = {
             "top10_pct": t10, "holders_total": rc.get("totalHolders") or n_holders,
@@ -229,15 +240,74 @@ class Filter(Agent):
             "launchpad": (rc.get("launchpad") or {}).get("name"),
             "metadata_uri": (rc.get("tokenMeta") or {}).get("uri"),
             "decimals": token.get("decimals"),
+            "gmgn": gm,
         }
-        return FilterReport(cand.mint, sym, passed, checks, market=snap, rug=rug_facts, creator=creator)
+        return FilterReport(cand.mint, sym, passed, checks, market=snap, rug=rug_facts, creator=creator,
+                            source=cand.source)
+
+    async def gmgn_checks(self, mint: str, sym: str, creator: str | None, checks: list[Check]) -> dict | None:
+        g, gm, ledger = self.cfg.gmgn, self.desk.gmgn, self.desk.store.ruggers()
+        try:
+            info, sec = await asyncio.gather(gm.token_info(mint), gm.token_security(mint))
+        except GmgnError as e:
+            self.emit("warn", f"GMGN unavailable ({e}); GMGN checks skipped", mint, sym)
+            return None
+        s = summarize(info, sec)
+        if s["honeypot"] == 1 or s["can_not_sell"] in (1, True):
+            checks.append(Check("gmgn_honeypot", False, "honeypot", "sellable", "GMGN: cannot sell", permanent=True))
+        if s["rug_ratio"] is not None:
+            checks.append(Check("gmgn_rug_label", s["rug_ratio"] <= g.max_rug_ratio, round(s["rug_ratio"], 2),
+                                g.max_rug_ratio, f"GMGN rug ratio {s['rug_ratio']:.2f}",
+                                permanent=s["rug_ratio"] > g.max_rug_ratio))
+        for key, name, lim in (("insider_rate", "insiders", g.max_insider_rate),
+                               ("bundler_rate", "bundlers", g.max_bundler_rate),
+                               ("sniper_rate", "snipers", g.max_sniper_rate)):
+            v = s[key]
+            if v is not None:
+                checks.append(Check(f"gmgn_{name}", v <= lim, round(v * 100, 1), lim * 100,
+                                    f"{name} hold {v * 100:.1f}% (max {lim * 100:.0f}%)"))
+        if s["is_wash_trading"] in (1, True):
+            checks.append(Check("gmgn_wash_trading", False, True, False, "GMGN flags wash trading"))
+        funder = s.get("dev_funder")
+        if funder:
+            self.desk.funders[mint] = funder
+            hit = funder in ledger
+            checks.append(Check("dev_funder_rug_link", not hit, funder[:8], "clean",
+                                f"dev funded by known rugger {funder[:6]}" if hit else "dev funder clean",
+                                permanent=hit))
+        creator = creator or s.get("creator")
+        if creator:
+            try:
+                dh = dev_history(await gm.created_tokens(creator))
+                s.update({f"dev_{k}": v for k, v in dh.items()})
+                serial = (dh["launches"] >= g.serial_min_launches and dh["open_ratio"] is not None
+                          and dh["open_ratio"] <= g.serial_max_graduation)
+                checks.append(Check("dev_serial_launcher", not serial, dh["launches"], g.serial_min_launches,
+                                    f"dev launched {dh['launches']}, graduated {dh['graduated']}",
+                                    permanent=serial))
+                if serial:
+                    self.desk.store.add_rugger(creator, mint, f"serial launcher {dh['launches']} launches")
+            except GmgnError:
+                pass
+        if all(c.passed for c in checks):
+            try:
+                fc = funding_clusters(await gm.top_holders(mint), mint)
+                s.update(fc)
+                checks.append(Check("funding_clusters", fc["cluster_pct"] <= g.max_funding_cluster_pct,
+                                    fc["cluster_pct"], g.max_funding_cluster_pct,
+                                    f"{fc['cluster_pct']:.1f}% of supply in {len(fc['clusters'])} same-funder "
+                                    f"wallet clusters" + (" (scripted funding)" if fc["synced_funding"] else "")))
+            except GmgnError:
+                pass
+        return s
 
     async def route(self, cand: Candidate, report: FilterReport) -> None:
         store = self.desk.store
         if self.desk.shadow is not None and report.market is not None:
             outcome = "pass" if report.passed else ("kill" if report.permanent_fail else "reject")
             self.desk.shadow.start(report.mint, report.symbol, "filter", outcome, report.reason_text(),
-                                   report.market.price_usd, report.market.liquidity_usd)
+                                   report.market.price_usd, report.market.liquidity_usd, source=cand.source)
+        report.source = report.source or cand.source
         if report.passed:
             self.state.bump("passed")
             issued = now()
