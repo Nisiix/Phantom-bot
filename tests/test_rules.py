@@ -233,3 +233,12 @@ def test_score_bounds_and_caps():
     assert insiders <= 0.4
     wash, _, _ = score_token(snap(volume_h1=80_000 * 20), rug, web)
     assert wash <= 0.45
+
+
+def test_no_falling_knife_or_late_entry():
+    web = {"score": 0.8, "legit": 0.8, "tasty": 0.7, "flags": []}
+    rug = {"top10_pct": 9, "holders_total": 2500, "insider_pct": 3, "risks": []}
+    knife, _, why = score_token(snap(change_m5=-5.4), rug, web)
+    assert knife < 0.6 and any("falling knife" in w for w in why)
+    late, _, why = score_token(snap(change_h6=695), rug, web)
+    assert late < 0.6 and any("late entry" in w for w in why)

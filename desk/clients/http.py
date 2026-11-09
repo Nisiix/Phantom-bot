@@ -56,10 +56,15 @@ class TTLCache:
 
 
 # Requests per minute per host (conservative vs. published free-tier limits).
+# "host#lane" entries are separate budgets so position monitoring (Risk) never waits in line
+# behind discovery traffic. Lanes of one host add up to stay under that host's real limit.
 HOST_LIMITS = {
-    "api.dexscreener.com": 240,
+    "api.dexscreener.com": 150,          # Scout / Filter / Analyst / Executor
+    "api.dexscreener.com#risk": 60,      # open positions: priority lane
+    "api.dexscreener.com#shadow": 60,    # 60-minute follow-up of evaluated tokens
     "api.rugcheck.xyz": 12,
-    "lite-api.jup.ag": 50,
+    "lite-api.jup.ag": 25,               # entry quotes
+    "lite-api.jup.ag#risk": 30,          # exit-value quotes for open positions
     "api.geckoterminal.com": 8,
     "api.mainnet-beta.solana.com": 90,
 }
@@ -76,10 +81,11 @@ class Http:
         self.limiters: dict[str, RateLimiter] = {}
         self.stats: dict[str, dict[str, int]] = {}
 
-    def limiter(self, host: str) -> RateLimiter:
-        if host not in self.limiters:
-            self.limiters[host] = RateLimiter(HOST_LIMITS.get(host, 120))
-        return self.limiters[host]
+    def limiter(self, host: str, lane: str = "") -> RateLimiter:
+        key = f"{host}#{lane}" if lane else host
+        if key not in self.limiters:
+            self.limiters[key] = RateLimiter(HOST_LIMITS.get(key, HOST_LIMITS.get(host, 120)))
+        return self.limiters[key]
 
     def _stat(self, host: str, key: str) -> None:
         self.stats.setdefault(host, {"ok": 0, "err": 0, "429": 0})[key] += 1
@@ -93,9 +99,10 @@ class Http:
         params: Optional[dict] = None,
         retries: int = 3,
         expect_json: bool = True,
+        lane: str = "",
     ) -> Any:
         host = urlparse(url).hostname or ""
-        lim = self.limiter(host)
+        lim = self.limiter(host, lane)
         last_exc: Exception | None = None
         for attempt in range(retries + 1):
             await lim.wait()

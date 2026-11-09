@@ -62,6 +62,7 @@ class Risk(Agent):
         self.history: dict[str, dict] = s.get("history", {})   # mint -> {ts, pnl_sol}
         self.exiting: dict[str, float] = {}
         self.trail_announced: set[str] = set()
+        self._last_lag_warn = 0.0
         self._last_quote: dict[str, float] = {}
         self._last_equity = 0.0
         self._last_solpx = 0.0
@@ -164,7 +165,12 @@ class Risk(Agent):
     async def mark_positions(self, t: float) -> None:
         pf = self.desk.portfolio
         self.status("working")
-        snaps = await self.desk.dex.snapshots(list(pf.positions), fresh=True)
+        t0 = time.time()
+        snaps = await self.desk.dex.snapshots(list(pf.positions), fresh=True, lane="risk")
+        lag = time.time() - t0
+        if lag > 4 and t0 - self._last_lag_warn > 60:
+            self._last_lag_warn = t0
+            self.emit("warn", f"price feed slow ({lag:.1f}s) — stops may fill late; consider a private RPC/API plan")
         for mint, pos in list(pf.positions.items()):
             snap = snaps.get(mint)
             liq = None
@@ -207,7 +213,7 @@ class Risk(Agent):
     async def quote_value(self, pos: Position) -> float | None:
         raw = int(pos.tokens * 10 ** pos.decimals)
         try:
-            q = await self.desk.jup.quote(pos.mint, SOL_MINT, raw, self.cfg.executor.slippage_bps)
+            q = await self.desk.jup.quote(pos.mint, SOL_MINT, raw, self.cfg.executor.slippage_bps, lane="risk")
         except Exception:  # noqa: BLE001
             return None
         if not q:

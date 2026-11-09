@@ -12,7 +12,8 @@ class Jupiter:
     def __init__(self, http: Http) -> None:
         self.http = http
 
-    async def quote(self, input_mint: str, output_mint: str, amount_raw: int, slippage_bps: int) -> dict | None:
+    async def quote(self, input_mint: str, output_mint: str, amount_raw: int, slippage_bps: int,
+                    lane: str = "") -> dict | None:
         if amount_raw <= 0:
             return None
         q = await self.http.get(
@@ -25,6 +26,7 @@ class Jupiter:
                 "restrictIntermediateTokens": "true",
             },
             retries=2,
+            lane=lane,
         )
         if not q or "outAmount" not in q:
             return None

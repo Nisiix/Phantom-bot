@@ -97,7 +97,7 @@ class DexScreener:
         self.http = http
         self.cache = TTLCache(ttl=8.0)
 
-    async def snapshots(self, mints: Iterable[str], fresh: bool = False) -> dict[str, MarketSnapshot]:
+    async def snapshots(self, mints: Iterable[str], fresh: bool = False, lane: str = "") -> dict[str, MarketSnapshot]:
         """Batch fetch (30 mints per request). Returns only mints with market data."""
         mints = list(dict.fromkeys(m for m in mints if m))
         out: dict[str, MarketSnapshot] = {}
@@ -111,7 +111,7 @@ class DexScreener:
                 todo.append(m)
         for i in range(0, len(todo), 30):
             chunk = todo[i: i + 30]
-            data = await self.http.get(f"{BASE}/tokens/v1/solana/{','.join(chunk)}") or []
+            data = await self.http.get(f"{BASE}/tokens/v1/solana/{','.join(chunk)}", lane=lane) or []
             by_mint: dict[str, list[dict]] = {}
             for p in data if isinstance(data, list) else []:
                 by_mint.setdefault((p.get("baseToken") or {}).get("address"), []).append(p)

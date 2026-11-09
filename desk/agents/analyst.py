@@ -120,6 +120,10 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict) -> tuple[float, dict, l
         caps.append((f"insider clusters hold {ins:.0f}%", 0.4))
     if m.change_h1 > 400 or m.change_m5 > 60:
         caps.append(("parabolic blow-off, chasing risk", 0.5))
+    if m.change_h6 > 500:
+        caps.append((f"late entry: already {m.change_h6:+.0f}% in 6h", 0.5))
+    if m.change_m5 <= -5:
+        caps.append((f"falling knife: {m.change_m5:+.1f}% in the last 5 min", 0.55))
     if web.get("flags") and any("scam" in f or "drainer" in f for f in web["flags"]):
         caps.append(("scam language on website", 0.3))
     if br_m5 < 0.3 and tot_m5 >= 20:

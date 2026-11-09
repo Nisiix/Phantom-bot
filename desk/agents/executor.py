@@ -208,7 +208,7 @@ class Executor(Agent):
             quote = None
             # Capital preservation: widen slippage step by step to make sure we get OUT.
             for bps in (self.e.slippage_bps, 800, 1500, 3000):
-                quote = await self.desk.jup.quote(order.mint, SOL_MINT, raw, bps)
+                quote = await self.desk.jup.quote(order.mint, SOL_MINT, raw, bps, lane="risk")
                 if quote:
                     break
             if not quote:

@@ -142,7 +142,8 @@ class ShadowTracker:
             if self.active:
                 t = time.time()
                 try:
-                    snaps = await self.desk.dex.snapshots({s.mint for s in self.active.values()}, fresh=True)
+                    snaps = await self.desk.dex.snapshots({s.mint for s in self.active.values()}, fresh=True,
+                                                          lane="shadow")
                 except Exception:  # noqa: BLE001 - next tick retries
                     snaps = {}
                 for key, s in list(self.active.items()):
