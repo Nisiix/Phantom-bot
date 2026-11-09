@@ -37,6 +37,7 @@ class FilterCfg:
     require_mint_revoked: bool = True
     min_lp_locked_pct: float = 95.0
     max_unlockable_liquidity_pct: float = 50.0   # max share of liquidity in DLMM/CLMM pools (no LP token to lock)
+    onchain_lp_check: bool = True       # read LP locks / concentrated-pool owners from the chain (desk/onchain_lp.py)
     max_top10_pct: float = 20.0
     min_volume_h1_usd: float = 50_000.0
     reject_rug_linked_dev: bool = True

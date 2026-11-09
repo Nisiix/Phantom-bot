@@ -371,3 +371,61 @@ def test_entry_impact_uses_live_reference_quote(tmp_path):
     asyncio.run(ex.handle_verdict(v))
     assert not any("impact" in r for r in rejected), rejected
     assert "M" in desk.portfolio.positions
+
+
+# ── on-chain LP check (desk/onchain_lp.py) ──
+class FakeChain:
+    """Minimal JSON-RPC stand-in: LP mints, token accounts and concentrated-pool positions."""
+    PDA = "3f7GcQFG397GAaEnv51zR6tsTVihYRydnydDD1cXekxH"           # off-curve (locker PDA)
+    WALLET = "CF6qNim1x6UHyXStoDpqEtefD5P6ZyKKSYp7ygABRsZ9"        # on-curve (ordinary wallet)
+
+    def __init__(self, lp_holders, dlmm_owners):
+        self.lp_holders, self.dlmm_owners = lp_holders, dlmm_owners
+
+    async def call(self, method, params=None):
+        import base64 as b64
+        from solders.pubkey import Pubkey
+        if method == "getTokenSupply":
+            return {"value": {"amount": str(sum(a for _, a in self.lp_holders))}}
+        if method == "getTokenLargestAccounts":
+            return {"value": [{"address": f"ACC{i}", "amount": str(a)} for i, (_, a) in enumerate(self.lp_holders)]}
+        if method == "getMultipleAccounts":
+            owners = {f"ACC{i}": o for i, (o, _) in enumerate(self.lp_holders)}
+            return {"value": [{"data": {"parsed": {"info": {"owner": owners.get(a)}}}} for a in params[0]]}
+        if method == "getProgramAccounts":
+            return [{"account": {"data": [b64.b64encode(bytes(Pubkey.from_string(o))).decode(), "base64"]}}
+                    for o in self.dlmm_owners]
+        raise RuntimeError(method)
+
+
+def test_onchain_lp_classic_and_dlmm_owners():
+    from desk.onchain_lp import OnchainLP
+    rc = {"markets": [
+        {"pubkey": "AMM", "marketType": "raydium_cpmm", "mintLP": "LPMINT",
+         "lp": {"quoteUSD": 40_000, "baseUSD": 40_000, "lpLockedPct": 100}},
+        {"pubkey": "DLMM", "marketType": "meteoraDlmm", "mintLP": "11111111111111111111111111111111",
+         "lp": {"quoteUSD": 10_000, "baseUSD": 10_000, "lpLockedPct": 0}},
+    ]}
+    W, P = FakeChain.WALLET, FakeChain.PDA
+    # LP 100% in a locker PDA, DLMM provided by a stranger -> 100% locked, DLMM verified third-party
+    res = asyncio.run(OnchainLP(FakeChain([(P, 1000)], [W]), False).analyze(rc, {}))
+    assert res["AMM"]["locked_pct"] == 100 and res["DLMM"]["status"] == "clean"
+    b = lp_lock_breakdown(rc, res)
+    assert b["locked_pct"] == 100 and b["unlockable_pct"] == 0 and b["onchain"] == 2
+    # RugCheck says 100% but on-chain 40% of the LP sits in a plain wallet -> 60% locked
+    res = asyncio.run(OnchainLP(FakeChain([(P, 600), (W, 400)], []), False).analyze(rc, {}))
+    assert res["AMM"]["locked_pct"] == pytest.approx(60.0)
+    assert lp_lock_breakdown(rc, res)["locked_pct"] == pytest.approx(60.0)
+    # the dev provides the DLMM liquidity -> dev-linked pool
+    res = asyncio.run(OnchainLP(FakeChain([(P, 1000)], [W]), False).analyze(rc, {W: "dev"}))
+    assert res["DLMM"]["status"] == "dev" and lp_lock_breakdown(rc, res)["dev_pools"]
+    # a known rugger provides it -> dev-linked too
+    res = asyncio.run(OnchainLP(FakeChain([(P, 1000)], [W]), False).analyze(rc, {}, rugger=lambda w: w == W))
+    assert res["DLMM"]["status"] == "dev"
+    # RPC down -> no on-chain verdict, the Filter falls back to RugCheck numbers + the 50% cap
+    class Down:
+        async def call(self, *a):
+            raise RuntimeError("429")
+    res = asyncio.run(OnchainLP(Down(), False).analyze(rc, {}))
+    assert "locked_pct" not in res["AMM"] and res["DLMM"]["status"] == "unverified"
+    assert lp_lock_breakdown(rc, res)["locked_pct"] == 100

@@ -3,7 +3,8 @@
 Mandatory kills (user rules):
   1. mint authority not revoked                   (verified on-chain + RugCheck)
   2. LP not locked/burned (>= min_lp_locked_pct)  (liquidity-weighted over lockable pools; concentrated
-                                                    DLMM/CLMM pools have no LP token and are capped instead)
+                                                    DLMM/CLMM pools have no LP token and are capped instead;
+                                                    LP locks and pool owners re-read on-chain, desk/onchain_lp.py)
   3. top-10 holders > 20%                          (pools / bonding curve excluded)
   4. last-hour volume < $50k                       (all pairs)
   5. dev wallet connected to previous rugs         (RugCheck creator history, our own
@@ -27,6 +28,7 @@ import asyncio
 import time
 
 from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
+from ..onchain_lp import OnchainLP
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
 from ..research import market_features, rug_features
 from .base import Agent
@@ -46,37 +48,56 @@ def _is_unlockable(market_type: str) -> bool:
     return any(k in market_type for k in UNLOCKABLE_MARKETS)
 
 
-def lp_lock_breakdown(report: dict) -> dict:
+def lp_lock_breakdown(report: dict, onchain: dict | None = None) -> dict:
     """LP lock split between pools that CAN be locked/burned and position-style pools that can't.
 
     locked_pct     liquidity-weighted lock % over lockable pools (bonding curves are program-held => locked;
                    a concentrated pool that RugCheck does report as locked counts as lockable)
-    unlockable_pct share of total liquidity sitting in concentrated pools reported 0% locked
+    unlockable_pct share of total liquidity sitting in concentrated pools that are not verified third-party
     all_pct        the plain lock % over every pool (old metric)
+    dev_pools      concentrated pools where the dev / funder / a top holder / a known rugger provides liquidity
+    onchain        pools whose numbers came from the chain (see desk/onchain_lp.py) instead of RugCheck
     """
+    onchain = onchain or {}
     total = lock_total = locked = unl = all_locked = 0.0
-    kinds = []
+    kinds, dev_pools, n_chain = [], [], 0
     for m in report.get("markets") or []:
         mt = (m.get("marketType") or "").lower()
         lp = m.get("lp") or {}
         usd = float(lp.get("quoteUSD") or 0) + float(lp.get("baseUSD") or 0)
         if usd <= 0:
             continue
-        pct = 100.0 if mt in BONDING_CURVE_MARKETS else float(lp.get("lpLockedPct") or 0)
+        oc = onchain.get(m.get("pubkey") or "") or {}
+        pct = float(lp.get("lpLockedPct") or 0)
+        if mt in BONDING_CURVE_MARKETS:
+            pct = 100.0
+        elif "locked_pct" in oc:
+            pct, n_chain = oc["locked_pct"], n_chain + 1
         total += usd
         all_locked += usd * pct / 100
         if _is_unlockable(mt) and pct <= 0:
-            unl += usd
-            kinds.append(f"{mt}:n/a")
+            status = oc.get("status")
+            if status == "dev":
+                dev_pools.append(oc.get("detail", mt))
+                unl += usd
+                kinds.append(f"{mt}:DEV")
+            elif status == "clean":
+                n_chain += 1
+                kinds.append(f"{mt}:3rd-party")
+            else:
+                unl += usd
+                kinds.append(f"{mt}:n/a")
         else:
             lock_total += usd
             locked += usd * pct / 100
-            kinds.append(f"{mt}:{pct:.0f}%")
+            kinds.append(f"{mt}:{pct:.0f}%" + ("*" if "locked_pct" in oc else ""))
     return {
         "locked_pct": locked / lock_total * 100 if lock_total > 0 else None,
         "unlockable_pct": unl / total * 100 if total > 0 else 0.0,
         "all_pct": all_locked / total * 100 if total > 0 else None,
         "detail": ", ".join(kinds[:5]) if kinds else "no LP market found",
+        "dev_pools": dev_pools,
+        "onchain": n_chain,
     }
 
 
@@ -140,6 +161,8 @@ class Filter(Agent):
         self._deep: asyncio.PriorityQueue = asyncio.PriorityQueue()
         self._deep_pending: set[str] = set()
         self._seq = 0
+        rpc_url = self.cfg.secrets.rpc_url or ""
+        self.onchain = OnchainLP(desk.rpc, private_rpc="api.mainnet-beta.solana.com" not in rpc_url)
 
     async def run(self) -> None:
         self.status("idle")
@@ -268,7 +291,8 @@ class Filter(Agent):
         # 2. LP locked. Lockable pools (launch AMM / CPMM / bonding curve) must be >= min_lp_locked_pct locked.
         # Concentrated-liquidity pools can't be locked at all: they are left out of that %, but their share of
         # total liquidity is capped (max_unlockable_liquidity_pct; 0 = old strict rule, they count as unlocked).
-        lpb = lp_lock_breakdown(rc)
+        onchain = await self._onchain_lp(rc, creator, cand.mint) if f.onchain_lp_check else {}
+        lpb = lp_lock_breakdown(rc, onchain)
         max_unl = f.max_unlockable_liquidity_pct
         if max_unl <= 0:
             lp_pct, lp_ok = lpb["all_pct"], lpb["all_pct"] is not None and lpb["all_pct"] >= f.min_lp_locked_pct
@@ -280,9 +304,14 @@ class Filter(Agent):
                 lp_text = "no lockable LP pool: " + lpb["detail"]
             else:
                 lp_text = f"{lp_pct:.1f}% locked [{lpb['detail']}]"
-                if unl > 0:
-                    lp_text += (f", {unl:.0f}% of liquidity in concentrated pools"
+                if unl >= 0.5:
+                    lp_text += (f", {unl:.0f}% of liquidity in unverified concentrated pools"
                                 + (f" > max {max_unl:.0f}%" if unl > max_unl else ""))
+        if lpb["dev_pools"]:
+            lp_ok = False
+            lp_text = "dev-linked liquidity: " + "; ".join(lpb["dev_pools"][:2]) + " | " + lp_text
+        if lpb["onchain"]:
+            lp_text += " (on-chain)"
         checks.append(Check("lp_locked", lp_ok, None if lp_pct is None else round(lp_pct, 1),
                             f.min_lp_locked_pct, lp_text))
 
@@ -352,6 +381,27 @@ class Filter(Agent):
         }
         return FilterReport(cand.mint, sym, passed, checks, market=snap, rug=rug_facts, creator=creator,
                             source=cand.source)
+
+    async def _onchain_lp(self, rc: dict, creator: str | None, mint: str) -> dict:
+        """Read LP locks and concentrated-pool position owners from the chain (desk/onchain_lp.py)."""
+        suspicious: dict[str, str] = {}
+        pools = pool_owner_set(rc)
+        for h in (rc.get("topHolders") or [])[:12]:
+            o = h.get("owner")
+            if o and o not in pools and h.get("address") not in pools:
+                suspicious[o] = "top holder"
+        funder = self.desk.funders.get(mint)
+        if funder:
+            suspicious[funder] = "dev funder"
+        if creator:
+            suspicious[creator] = "dev"
+        try:
+            return await asyncio.wait_for(
+                self.onchain.analyze(rc, suspicious, rugger=lambda w: self.desk.store.rugger(w) is not None),
+                timeout=20)
+        except Exception:  # noqa: BLE001 - chain unreachable: RugCheck numbers + the 50% cap still apply
+            self.state.bump("onchain_lp_errors")
+            return {}
 
     async def gmgn_checks(self, mint: str, sym: str, creator: str | None, checks: list[Check]) -> dict | None:
         g, gm = self.cfg.gmgn, self.desk.gmgn
