@@ -81,7 +81,7 @@ class RiskCfg:
     trail_distance_pct: float = 6.0
     cooldown_after_loss_minutes: float = 20
     max_consecutive_losses: int = 3
-    streak_pause_minutes: float = 90
+    streak_pause_minutes: float = 30
     daily_loss_limit_pct: float = 30.0
     liquidity_drop_exit_pct: float = 35.0
     max_hold_minutes: float = 0
