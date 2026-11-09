@@ -36,6 +36,7 @@ class ScoutCfg:
 class FilterCfg:
     require_mint_revoked: bool = True
     min_lp_locked_pct: float = 95.0
+    max_unlockable_liquidity_pct: float = 50.0   # max share of liquidity in DLMM/CLMM pools (no LP token to lock)
     max_top10_pct: float = 20.0
     min_volume_h1_usd: float = 50_000.0
     reject_rug_linked_dev: bool = True
@@ -218,6 +219,8 @@ def enforce_hard_limits(cfg: Config) -> None:
     for flag in ("require_mint_revoked", "reject_rug_linked_dev"):
         clamp(f, flag, lambda v: v is True, True, f"{flag} is mandatory")
     clamp(f, "min_lp_locked_pct", lambda v: 50.0 <= v <= 100.0, 95.0, "LP lock threshold must be 50-100%")
+    clamp(f, "max_unlockable_liquidity_pct", lambda v: 0.0 <= v <= 50.0, 50.0,
+          "liquidity in unlockable (DLMM/CLMM) pools can be at most 50% of the total")
     q = cfg.quant
     clamp(q, "min_ev_pct", lambda v: v >= 0, 0.0, "QUANT may only demand a positive edge (min_ev_pct >= 0)")
     clamp(q, "min_samples_to_enforce", lambda v: 10 <= v <= 500, 30, "QUANT warm-up must be 10-500 trades")

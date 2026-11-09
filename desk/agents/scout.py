@@ -18,8 +18,11 @@ import asyncio
 import time
 from dataclasses import dataclass
 
-from ..clients.feeds import gecko_active_raydium, gecko_new_pools, pumpportal_stream
+from ..clients.feeds import gecko_active_pools, gecko_new_pools, pumpportal_stream
 from ..models import Candidate
+
+SOL_MINT = "So11111111111111111111111111111111111111112"
+STABLES = ("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB")
 from .base import Agent
 
 
@@ -96,20 +99,32 @@ class Scout(Agent):
         """GeckoTerminal's free API is ~30 req/min shared per IP: poll gently, back off on 429."""
         n, backoff = 0, 20.0
         while not self.desk.stop.is_set():
+            pools, failed = [], 0
             try:
-                pools = await gecko_new_pools(self.desk.http, pages=1)
-                if n % 10 == 5:
-                    cutoff = time.time() - 48 * 3600
-                    pools += [p for p in await gecko_active_raydium(self.desk.http)
-                              if p.get("created") and _iso(p["created"]) > cutoff]
-                for p in pools:
-                    self.discover(p["mint"], p["symbol"], "", f"{p['dex']}:pool", pair=p["pool"])
-                backoff = 20.0
-            except Exception as e:  # noqa: BLE001 - a flaky feed must not stop discovery
+                pools += await gecko_new_pools(self.desk.http, pages=1)
+            except Exception:  # noqa: BLE001 - a flaky feed must not stop discovery
+                failed += 1
+            if n % 4 == 1:
+                # Every ~80s: trending + top-volume pools. Tokens that are already moving are the ones that can
+                # pass the $50k/h volume rule; new_pools alone mostly finds dust that never gets there.
+                cutoff = time.time() - 48 * 3600
+                try:
+                    pools += [p for p in await gecko_active_pools(self.desk.http)
+                              if p.get("created") and _iso(p["created"]) > cutoff
+                              and p.get("volume_h1", 0) >= 0.5 * self.cfg.filter.min_volume_h1_usd]
+                except Exception:  # noqa: BLE001
+                    failed += 1
+            for p in pools:
+                if p["mint"] in (SOL_MINT, *STABLES):
+                    continue
+                self.discover(p["mint"], p["symbol"], "", f"{p['dex']}:pool", pair=p["pool"])
+            if failed and not pools:
                 backoff = min(backoff * 2, 300)
                 self.state.bump("feed_errors")
                 if backoff >= 160:
-                    self.emit("warn", f"GeckoTerminal throttled ({e.__class__.__name__}); backing off {backoff:.0f}s")
+                    self.emit("warn", f"GeckoTerminal throttled; backing off {backoff:.0f}s")
+            else:
+                backoff = 20.0
             n += 1
             if not await self.sleep(backoff):
                 return
@@ -160,24 +175,37 @@ class Scout(Agent):
                 self.watch.pop(mint, None)
                 self.state.bump("dropped")
 
-    def _check_rug(self, mint: str, w: Watch) -> None:
+    async def _check_rug(self, mint: str, w: Watch) -> None:
         seen = self.desk.market_seen.get(mint)
         if not seen:
             return
         liq = seen[2]
         w.max_liq = max(w.max_liq, liq)
-        if not w.rug_flagged and w.max_liq >= 10_000 and liq < 0.2 * w.max_liq:
-            w.rug_flagged = True
-            creator = self.desk.creators.get(mint)
-            reason = f"liquidity collapsed {w.max_liq:,.0f} -> {liq:,.0f} USD"
-            if creator:
-                self.desk.store.add_rugger(creator, mint, reason)
-            funder = self.desk.funders.get(mint)
-            if funder:
-                self.desk.store.add_rugger(funder, mint, "funded a rugging dev: " + reason)
-            self.desk.blacklist[mint] = "rugged: " + reason
-            self.emit("warn", f"RUG observed ({reason}); dev {('added to rug ledger: ' + creator[:6]) if creator else 'unknown'}",
-                      mint, w.cand.symbol)
+        if w.rug_flagged or w.max_liq < 10_000 or liq >= 0.2 * w.max_liq:
+            return
+        # A rug flag is permanent (blacklist + dev and funder in the rug ledger), so never act on one reading:
+        # the batched DexScreener feed sometimes returns a wrong/thin pair. Confirm on the full pair list.
+        try:
+            full = await self.desk.dex.snapshot(mint)
+        except Exception:  # noqa: BLE001 - can't confirm now, try again on the next pass
+            return
+        if full is not None:
+            self.desk.market_seen[mint] = (time.time(), full.volume_h1, full.liquidity_usd)
+            liq = full.liquidity_usd
+            if liq >= 0.2 * w.max_liq:
+                self.state.bump("rug_false_alarm")
+                return
+        w.rug_flagged = True
+        creator = self.desk.creators.get(mint)
+        reason = f"liquidity collapsed {w.max_liq:,.0f} -> {liq:,.0f} USD"
+        if creator:
+            self.desk.store.add_rugger(creator, mint, reason)
+        funder = self.desk.funders.get(mint)
+        if funder:
+            self.desk.store.add_rugger(funder, mint, "funded a rugging dev: " + reason)
+        self.desk.blacklist[mint] = "rugged: " + reason
+        self.emit("warn", f"RUG observed ({reason}); dev {('added to rug ledger: ' + creator[:6]) if creator else 'unknown'}",
+                  mint, w.cand.symbol)
 
     async def recheck_loop(self) -> None:
         last_prune = 0.0
@@ -190,7 +218,7 @@ class Scout(Agent):
             for mint, w in list(self.watch.items()):
                 if mint in self.desk.in_flight:
                     continue
-                self._check_rug(mint, w)
+                await self._check_rug(mint, w)
                 seen = self.desk.market_seen.get(mint)
                 vol = seen[1] if seen else 0
                 interval = self.c.recheck_seconds

@@ -9,7 +9,7 @@ import pytest
 
 from desk.agents.analyst import score_token
 from desk.agents.executor import Executor, position_size
-from desk.agents.filter import lp_locked_pct, top10_pct
+from desk.agents.filter import lp_lock_breakdown, lp_locked_pct, top10_pct
 from desk.agents.risk import Risk, exit_decision
 from desk.brokers.paper import PaperBroker
 from desk.config import Config, RiskCfg, enforce_hard_limits
@@ -47,12 +47,14 @@ def position(cost=1.0, value=1.0, peak=None) -> Position:
                     entry_reason="test", mark_value_sol=value, peak_value_sol=peak if peak is not None else value)
 
 
-def signed_verdict(desk: Desk, mint="M", score=0.72, all_pass=True, age=0.0) -> Verdict:
+def signed_verdict(desk: Desk, mint="M", score=0.72, all_pass=True, age=0.0, analysis=0.0) -> Verdict:
+    """age: how old the Analyst verdict is; analysis: seconds the Analyst spent after the Filter signed."""
     checks = [Check("volume_1h", True), Check("mint_revoked", True), Check("top10_holders", all_pass)]
     rep = FilterReport(mint, "TST", all_pass, checks, market=snap(mint=mint))
     t = now() - age
-    fsig = desk.authority.signer("filter").sign(FilterPass.payload(rep, t))
-    fp = FilterPass(rep, t, fsig)
+    tf = t - analysis
+    fsig = desk.authority.signer("filter").sign(FilterPass.payload(rep, tf))
+    fp = FilterPass(rep, tf, fsig)
     trade = score >= 0.6
     asig = desk.authority.signer("analyst").sign(Verdict.payload(mint, score, trade, fsig, t))
     return Verdict(mint, "TST", score, {}, [], {}, fp, t, asig, trade)
@@ -160,6 +162,10 @@ def test_executor_refuses_forged_or_incomplete_clearance(tmp_path):
     assert not ex.verify_clearance(signed_verdict(desk, score=0.59))[0]
     # expired
     assert not ex.verify_clearance(signed_verdict(desk, age=600))[0]
+    # a slow website check (Analyst busy 100 s after the Filter signed) must not expire a fresh verdict...
+    assert ex.verify_clearance(signed_verdict(desk, age=5, analysis=100))[0]
+    # ...but a Filter clearance older than ttl + the Analyst's maximum working time is refused
+    assert not ex.verify_clearance(signed_verdict(desk, age=5, analysis=400))[0]
     # tampered score after signing
     v = signed_verdict(desk, score=0.61)
     v.score = 0.99
@@ -206,8 +212,58 @@ def test_lp_lock_bonding_curve_and_weighting():
         {"marketType": "pump_fun_amm", "lp": {"quoteUSD": 45_000, "baseUSD": 45_000, "lpLockedPct": 100}},
         {"marketType": "meteoradlmm", "lp": {"quoteUSD": 5_000, "baseUSD": 5_000, "lpLockedPct": 0}},
     ]}
-    assert lp_locked_pct(rc)[0] == pytest.approx(90.0)
+    assert lp_locked_pct(rc)[0] == pytest.approx(90.0)          # strict metric: DLMM counts as unlocked
+    b = lp_lock_breakdown(rc)
+    assert b["locked_pct"] == pytest.approx(100.0)                # DLMM has no LP token: not in the lock %
+    assert b["unlockable_pct"] == pytest.approx(10.0)             # ...but its share is measured
     assert lp_locked_pct({"markets": []})[0] is None
+    assert lp_lock_breakdown({"markets": []})["locked_pct"] is None
+    # an unburned launch pool still fails, whatever concentrated pools sit next to it
+    rc = {"markets": [
+        {"marketType": "pump_fun_amm", "lp": {"quoteUSD": 45_000, "baseUSD": 45_000, "lpLockedPct": 0}},
+        {"marketType": "meteoradlmm", "lp": {"quoteUSD": 5_000, "baseUSD": 5_000, "lpLockedPct": 0}},
+    ]}
+    assert lp_lock_breakdown(rc)["locked_pct"] == 0
+    # only concentrated pools: nothing lockable at all
+    rc = {"markets": [{"marketType": "meteoradlmm", "lp": {"quoteUSD": 5_000, "baseUSD": 5_000, "lpLockedPct": 0}}]}
+    assert lp_lock_breakdown(rc)["locked_pct"] is None
+
+
+def test_filter_lp_check_caps_unlockable_liquidity(tmp_path):
+    from desk.agents.filter import Filter
+    from desk.models import Candidate
+
+    def report(dlmm_usd):
+        return {"token": {"supply": 1e9, "decimals": 6}, "creator": "DEV",
+                "markets": [{"marketType": "pump_fun_amm", "pubkey": "POOL",
+                             "lp": {"quoteUSD": 50_000, "baseUSD": 50_000, "lpLockedPct": 100}},
+                            {"marketType": "meteoradlmm", "pubkey": "DLMM",
+                             "lp": {"quoteUSD": dlmm_usd / 2, "baseUSD": dlmm_usd / 2, "lpLockedPct": 0}}],
+                "topHolders": [{"owner": "POOL", "pct": 20.0}] + [{"owner": f"W{i}", "pct": 1.0} for i in range(10)]}
+
+    class Rug:
+        rc = None
+
+        async def report(self, mint):
+            return self.rc
+
+    class Rpc:
+        async def mint_info(self, mint):
+            return {"mintAuthority": None, "freezeAuthority": None, "decimals": 6}
+
+    desk = make_desk(tmp_path)
+    desk.rug, desk.rpc = Rug(), Rpc()
+    f = Filter(desk)
+
+    def lp_check(dlmm_usd, max_unl=50.0):
+        desk.rug.rc = report(dlmm_usd)
+        f.f.max_unlockable_liquidity_pct = max_unl
+        rep = asyncio.run(f.deep(Candidate("M"), snap()))
+        return next(c for c in rep.checks if c.name == "lp_locked")
+
+    assert lp_check(30_000).passed                    # 23% in DLMM: launch LP burned -> pass (used to fail at 77%)
+    assert not lp_check(150_000).passed               # 60% of liquidity pullable -> fail
+    assert not lp_check(30_000, max_unl=0).passed     # 0 = old strict rule
 
 
 def test_top10_excludes_pools():
@@ -263,3 +319,29 @@ def test_missing_website_is_ignored_not_penalised():
     w = dict(WEIGHTS); w["website"] *= 0.3
     _, b2, _ = score_token(snap(), rug, no_site)
     assert none_s == pytest.approx(sum(w[k] * b2[k] for k in w) / sum(w.values()), abs=1e-3)
+
+
+def test_scout_rug_flag_needs_confirmation(tmp_path):
+    """One bad DexScreener reading must not blacklist a token and put its dev in the rug ledger forever."""
+    from desk.agents.scout import Scout, Watch
+    from desk.models import Candidate
+
+    desk = make_desk(tmp_path)
+
+    class Dex:
+        liq = 1_500_000.0
+
+        async def snapshot(self, mint, **kw):
+            return snap(mint=mint, liquidity_usd=self.liq)
+
+    desk.dex = Dex()
+    sc = Scout(desk)
+    desk.creators["M"] = "DEV"
+    w = Watch(Candidate("M"), added=time.time(), max_liq=1_600_000)
+    desk.market_seen["M"] = (time.time(), 90_000, 1_936)          # glitchy batched reading
+    asyncio.run(sc._check_rug("M", w))
+    assert "M" not in desk.blacklist and desk.store.rugger("DEV") is None
+    desk.dex.liq = 1_000.0                                         # confirmed collapse
+    desk.market_seen["M"] = (time.time(), 90_000, 1_000)
+    asyncio.run(sc._check_rug("M", w))
+    assert "M" in desk.blacklist and desk.store.rugger("DEV") is not None

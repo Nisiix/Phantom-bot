@@ -21,6 +21,11 @@ from ..research import market_features, rug_features
 from ..website import WebsiteInspector, pick_website
 from .base import Agent
 
+# Longest a single analysis may take (website + metadata fetch). The Executor accepts a Filter clearance that
+# is up to clearance_ttl + this old, because the Analyst's own time is spent between the two signatures.
+WEB_BUDGET_SECONDS = 90.0
+ANALYSIS_MAX_SECONDS = WEB_BUDGET_SECONDS + 30.0
+
 WEIGHTS = {
     "liquidity": 0.14, "turnover": 0.10, "buy_pressure": 0.16, "momentum": 0.12,
     "holders": 0.14, "hygiene": 0.08, "website": 0.16, "maturity": 0.10,
@@ -203,6 +208,19 @@ class Analyst(Agent):
             finally:
                 self._busy.discard(mint)
 
+    async def _website(self, m: MarketSnapshot, metadata_uri: str | None) -> dict:
+        extra, meta = [], {}
+        if not pick_website(m.websites):
+            meta = await self.web.metadata_links(metadata_uri)
+            if meta.get("website"):
+                extra.append(meta["website"])
+        socials = dict(m.socials)
+        for k in ("twitter", "telegram"):
+            if meta.get(k) and k not in socials:
+                socials[k] = meta[k]
+        return await self.web.inspect(pick_website(m.websites, extra), mint=m.mint, symbol=m.symbol,
+                                      name=m.name, socials=socials)
+
     async def analyze(self, fp: FilterPass) -> None:
         rep = fp.report
         m = rep.market
@@ -219,22 +237,12 @@ class Analyst(Agent):
             m = fresh
         web = {"score": 0.3, "legit": 0.35, "tasty": 0.2, "flags": ["website check disabled"], "notes": []}
         if self.cfg.analyst.website_check:
-            extra = []
-            meta = {}
-            if not pick_website(m.websites):
-                meta = await self.web.metadata_links(rep.rug.get("metadata_uri"))
-                if meta.get("website"):
-                    extra.append(meta["website"])
-            socials = dict(m.socials)
-            for k in ("twitter", "telegram"):
-                if meta.get(k) and k not in socials:
-                    socials[k] = meta[k]
             try:
-                web = await asyncio.wait_for(
-                    self.web.inspect(pick_website(m.websites, extra), mint=m.mint, symbol=m.symbol,
-                                     name=m.name, socials=socials), timeout=90)
+                # One budget for the whole website step (metadata JSON on IPFS can hang too).
+                web = await asyncio.wait_for(self._website(m, rep.rug.get("metadata_uri")),
+                                             timeout=WEB_BUDGET_SECONDS)
             except asyncio.TimeoutError:
-                web = {"url": pick_website(m.websites, extra), "score": 0.2, "legit": 0.2, "tasty": 0.1,
+                web = {"url": pick_website(m.websites), "score": 0.2, "legit": 0.2, "tasty": 0.1,
                        "flags": ["website check timed out"], "notes": []}
 
         score, breakdown, why = score_token(m, rep.rug, web)

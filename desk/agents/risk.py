@@ -210,6 +210,15 @@ class Risk(Agent):
             if mint in self.exiting:
                 continue
             reason, detail = exit_decision(pos, self.r, t, liq)
+            if reason == "LIQUIDITY_PULL":
+                # The batched feed can return a wrong/thin pair: confirm on the full pair list before dumping.
+                try:
+                    full = await self.desk.dex.snapshot(mint, lane="risk")
+                except Exception:  # noqa: BLE001 - feed down: the DATA_LOSS rule covers a dead market
+                    full = None
+                if full is not None:
+                    pos.last_liquidity_usd = full.liquidity_usd
+                    reason, detail = exit_decision(pos, self.r, t, full.liquidity_usd)
             if reason is None and t - pos.last_price_ts > 60:
                 reason, detail = "DATA_LOSS", "no price and no sell quote for 60s"
             if pos.trailing_active and mint not in self.trail_announced:

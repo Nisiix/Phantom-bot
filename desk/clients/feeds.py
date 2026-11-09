@@ -72,14 +72,28 @@ async def gecko_new_pools(http: Http, pages: int = 2) -> list[dict]:
     return out
 
 
-async def gecko_active_raydium(http: Http) -> list[dict]:
-    """Raydium pools by 24h volume — catches young pools that slipped past new_pools."""
+async def gecko_active_pools(http: Http) -> list[dict]:
+    """Pools that are already trading hard: Solana trending pools plus the top pools by 24h volume on
+    PumpSwap (where pump.fun graduates trade), Raydium and LaunchLab. Catches young tokens that slipped past
+    new_pools or whose launch happened before the desk started (those are the ones with $50k/h volume)."""
     out = []
-    for dex in ("raydium", "raydium-launchlab"):
-        data = await http.get(f"{GECKO}/dexes/{dex}/pools", params={"page": 1, "sort": "h24_volume_usd_desc"},
-                              retries=1) or {}
+    urls = [(f"{GECKO}/trending_pools", {"page": 1})]
+    urls += [(f"{GECKO}/dexes/{dex}/pools", {"page": 1, "sort": "h24_volume_usd_desc"})
+             for dex in ("pumpswap", "raydium", "raydium-launchlab")]
+    errors = 0
+    for url, params in urls:
+        try:
+            data = await http.get(url, params=params, retries=1) or {}
+        except RuntimeError:        # one throttled list must not throw away the others
+            errors += 1
+            continue
         for p in data.get("data") or []:
             pool = _gecko_pool(p)
             if pool:
                 out.append(pool)
+    if errors == len(urls):
+        raise RuntimeError("GeckoTerminal active pools unavailable")
     return out
+
+
+gecko_active_raydium = gecko_active_pools   # old name

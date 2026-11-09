@@ -2,7 +2,8 @@
 
 Mandatory kills (user rules):
   1. mint authority not revoked                   (verified on-chain + RugCheck)
-  2. LP not locked/burned (>= min_lp_locked_pct)  (liquidity-weighted over all pools)
+  2. LP not locked/burned (>= min_lp_locked_pct)  (liquidity-weighted over lockable pools; concentrated
+                                                    DLMM/CLMM pools have no LP token and are capped instead)
   3. top-10 holders > 20%                          (pools / bonding curve excluded)
   4. last-hour volume < $50k                       (all pairs)
   5. dev wallet connected to previous rugs         (RugCheck creator history, our own
@@ -35,9 +36,26 @@ OVERLAP_RISK_WORDS = ("lp", "liquidity", "holder", "mint authority", "freeze aut
 BONDING_CURVE_MARKETS = {"pump_fun", "pumpfun", "raydium_launchlab", "launchlab", "meteora_dbc", "letsbonk"}
 
 
-def lp_locked_pct(report: dict) -> tuple[float | None, str]:
-    """Liquidity-weighted LP locked %. Bonding curves are program-held => locked."""
-    total, locked, kinds = 0.0, 0.0, []
+# Concentrated-liquidity / position-NFT pools (Meteora DLMM & DAMM v2, Raydium CLMM, Orca whirlpools) have no
+# fungible LP token, so RugCheck reports them as 0% locked even though there is nothing to burn. They are
+# usually third-party market-maker liquidity next to the launch pool, not the dev's LP.
+UNLOCKABLE_MARKETS = ("dlmm", "clmm", "whirlpool", "orca", "damm_v2", "dammv2")
+
+
+def _is_unlockable(market_type: str) -> bool:
+    return any(k in market_type for k in UNLOCKABLE_MARKETS)
+
+
+def lp_lock_breakdown(report: dict) -> dict:
+    """LP lock split between pools that CAN be locked/burned and position-style pools that can't.
+
+    locked_pct     liquidity-weighted lock % over lockable pools (bonding curves are program-held => locked;
+                   a concentrated pool that RugCheck does report as locked counts as lockable)
+    unlockable_pct share of total liquidity sitting in concentrated pools reported 0% locked
+    all_pct        the plain lock % over every pool (old metric)
+    """
+    total = lock_total = locked = unl = all_locked = 0.0
+    kinds = []
     for m in report.get("markets") or []:
         mt = (m.get("marketType") or "").lower()
         lp = m.get("lp") or {}
@@ -46,11 +64,26 @@ def lp_locked_pct(report: dict) -> tuple[float | None, str]:
             continue
         pct = 100.0 if mt in BONDING_CURVE_MARKETS else float(lp.get("lpLockedPct") or 0)
         total += usd
-        locked += usd * pct / 100
-        kinds.append(f"{mt}:{pct:.0f}%")
-    if total <= 0:
-        return None, "no LP market found"
-    return locked / total * 100, ", ".join(kinds[:4])
+        all_locked += usd * pct / 100
+        if _is_unlockable(mt) and pct <= 0:
+            unl += usd
+            kinds.append(f"{mt}:n/a")
+        else:
+            lock_total += usd
+            locked += usd * pct / 100
+            kinds.append(f"{mt}:{pct:.0f}%")
+    return {
+        "locked_pct": locked / lock_total * 100 if lock_total > 0 else None,
+        "unlockable_pct": unl / total * 100 if total > 0 else 0.0,
+        "all_pct": all_locked / total * 100 if total > 0 else None,
+        "detail": ", ".join(kinds[:5]) if kinds else "no LP market found",
+    }
+
+
+def lp_locked_pct(report: dict) -> tuple[float | None, str]:
+    """Liquidity-weighted LP locked % over EVERY pool (strict metric). Bonding curves are program-held => locked."""
+    b = lp_lock_breakdown(report)
+    return b["all_pct"], b["detail"]
 
 
 def pool_owner_set(report: dict) -> set[str]:
@@ -232,11 +265,26 @@ class Filter(Agent):
                                 f"freeze authority {'ACTIVE' if freeze_auth else 'revoked'} ({src})",
                                 permanent=freeze_auth is not None))
 
-        # 2. LP locked
-        lp_pct, lp_detail = lp_locked_pct(rc)
-        checks.append(Check("lp_locked", lp_pct is not None and lp_pct >= f.min_lp_locked_pct,
-                            None if lp_pct is None else round(lp_pct, 1), f.min_lp_locked_pct,
-                            f"{lp_pct:.1f}% locked [{lp_detail}]" if lp_pct is not None else lp_detail))
+        # 2. LP locked. Lockable pools (launch AMM / CPMM / bonding curve) must be >= min_lp_locked_pct locked.
+        # Concentrated-liquidity pools can't be locked at all: they are left out of that %, but their share of
+        # total liquidity is capped (max_unlockable_liquidity_pct; 0 = old strict rule, they count as unlocked).
+        lpb = lp_lock_breakdown(rc)
+        max_unl = f.max_unlockable_liquidity_pct
+        if max_unl <= 0:
+            lp_pct, lp_ok = lpb["all_pct"], lpb["all_pct"] is not None and lpb["all_pct"] >= f.min_lp_locked_pct
+            lp_text = (f"{lp_pct:.1f}% locked [{lpb['detail']}]" if lp_pct is not None else lpb["detail"])
+        else:
+            lp_pct, unl = lpb["locked_pct"], lpb["unlockable_pct"]
+            lp_ok = lp_pct is not None and lp_pct >= f.min_lp_locked_pct and unl <= max_unl
+            if lp_pct is None:
+                lp_text = "no lockable LP pool: " + lpb["detail"]
+            else:
+                lp_text = f"{lp_pct:.1f}% locked [{lpb['detail']}]"
+                if unl > 0:
+                    lp_text += (f", {unl:.0f}% of liquidity in concentrated pools"
+                                + (f" > max {max_unl:.0f}%" if unl > max_unl else ""))
+        checks.append(Check("lp_locked", lp_ok, None if lp_pct is None else round(lp_pct, 1),
+                            f.min_lp_locked_pct, lp_text))
 
         # 3. Top 10 holders
         t10, n_holders = top10_pct(rc)
@@ -294,7 +342,7 @@ class Filter(Agent):
         rug_facts = {
             "top10_pct": t10, "holders_total": rc.get("totalHolders") or n_holders,
             "insider_pct": insider_pct(rc), "insider_networks": len(rc.get("insiderNetworks") or []),
-            "lp_locked_pct": lp_pct, "risks": [(r.get("name"), r.get("level")) for r in rc.get("risks") or []],
+            "lp_locked_pct": lp_pct, "lp_unlockable_pct": lpb["unlockable_pct"], "risks": [(r.get("name"), r.get("level")) for r in rc.get("risks") or []],
             "creator": creator, "creator_prior_launches": len(prior),
             "mutable_metadata": bool((rc.get("tokenMeta") or {}).get("mutable")),
             "launchpad": (rc.get("launchpad") or {}).get("name"),

@@ -122,8 +122,20 @@ class DexScreener:
                     out[m] = snap
         return out
 
-    async def snapshot(self, mint: str, fresh: bool = True) -> MarketSnapshot | None:
-        return (await self.snapshots([mint], fresh=fresh)).get(mint)
+    async def snapshot(self, mint: str, fresh: bool = True, lane: str = "") -> MarketSnapshot | None:
+        """One token, ALL its pairs. The batched /tokens/v1 endpoint returns a single pair per token, and now
+        and then a wrong/thin one (seen live: a $1.6M pool read as $1,936). Use this for anything that acts on
+        the numbers (Analyst score, Executor checks, rug / liquidity-pull confirmation)."""
+        if not fresh:
+            hit = self.cache.get(mint)
+            if hit is not None:
+                return hit if hit != "none" else None
+        data = await self.http.get(f"{BASE}/token-pairs/v1/solana/{mint}", lane=lane)
+        if not isinstance(data, list):
+            return (await self.snapshots([mint], fresh=fresh, lane=lane)).get(mint)
+        snap = snapshot_from_pairs(mint, data)
+        self.cache.set(mint, snap if snap else "none")
+        return snap
 
     async def latest_profiles(self) -> list[dict]:
         out = []

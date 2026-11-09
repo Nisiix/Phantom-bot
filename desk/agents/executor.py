@@ -3,7 +3,8 @@
 It will only buy a token when ALL of these hold:
   * the Verdict's Analyst signature verifies, and the embedded Filter clearance
     signature verifies, and that clearance shows every filter check passed;
-  * both clearances are fresh (clearance_ttl_seconds) and the score is >= 0.6;
+  * the Analyst verdict is fresh (clearance_ttl_seconds), the Filter clearance too (plus the Analyst's
+    own working time), and the score is >= 0.6;
   * Risk approves the entry (no averaging down, no revenge, cooldowns, limits);
   * the live buy quote's price impact and the buy->sell round-trip cost are acceptable
     (catches honeypots, hidden taxes and thin books right before execution);
@@ -23,6 +24,7 @@ from ..config import HARD_MAX_POSITION_PCT, HARD_MIN_SCORE
 from ..models import ExitOrder, FilterPass, Position, Verdict, now
 from ..portfolio import AveragingDownError
 from ..quant import label_outcome, outcome_row
+from .analyst import ANALYSIS_MAX_SECONDS
 from .base import Agent
 
 
@@ -109,8 +111,12 @@ class Executor(Agent):
         if not v.trade or v.score < max(HARD_MIN_SCORE, self.cfg.analyst.min_score):
             return False, f"score {v.score:.2f} below threshold"
         ttl = self.e.clearance_ttl_seconds
-        if t - fp.issued_at > ttl or t - v.issued_at > ttl:
-            return False, f"clearance expired (> {ttl:.0f}s old)"
+        if t - v.issued_at > ttl:
+            return False, f"Analyst clearance expired (> {ttl:.0f}s old)"
+        # The Filter clearance also covers the Analyst's own working time (website check up to 90 s):
+        # judging it by ttl alone expired good tokens whose website was slow to load.
+        if t - fp.issued_at > ttl + ANALYSIS_MAX_SECONDS:
+            return False, f"Filter clearance expired (> {ttl + ANALYSIS_MAX_SECONDS:.0f}s old)"
         return True, "ok"
 
     def reject(self, v: Verdict, reason: str) -> None:
@@ -183,7 +189,10 @@ class Executor(Agent):
             impact = float(buy_q.get("priceImpactPct") or 0) * 100
         if impact > self.e.max_entry_price_impact_pct:
             return self.reject(v, f"entry price impact {impact:.2f}% > {self.e.max_entry_price_impact_pct}%")
-        sell_q = await self.desk.jup.quote(v.mint, SOL_MINT, int(buy_q["outAmount"]), self.e.slippage_bps)
+        try:
+            sell_q = await self.desk.jup.quote(v.mint, SOL_MINT, int(buy_q["outAmount"]), self.e.slippage_bps)
+        except Exception as e:  # noqa: BLE001 - record why, instead of crashing the entry loop silently
+            return self.reject(v, f"sell-quote check failed: {e.__class__.__name__}: {e}")
         if not sell_q:
             return self.reject(v, "HONEYPOT GUARD: no sell route for the tokens we'd buy")
         back = int(sell_q["outAmount"]) / 1e9
