@@ -86,9 +86,6 @@ class Terminal:
             gate.append("DAILY LOSS HALT")
         if time.time() < self.risk.pause_until:
             gate.append(f"STREAK PAUSE {(self.risk.pause_until - time.time()) / 60:.0f}m")
-        cd = self.risk.r.cooldown_after_loss_minutes * 60 - (time.time() - self.risk.last_loss_ts)
-        if cd > 0:
-            gate.append(f"LOSS COOLDOWN {cd / 60:.0f}m")
         body = [t]
         if gate:
             body.append(Text("  ENTRY GATE: " + " | ".join(gate), style="bold red"))

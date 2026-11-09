@@ -54,7 +54,7 @@ def test_risk_recheck_before_swap_blocks_entry_after_concurrent_loss(tmp_path):
         async def quote(self, i, o, amount, bps):
             if i.startswith("So111"):
                 return {"inAmount": str(amount), "outAmount": str(int(amount / 1e9 / 0.00001 * 1e6))}
-            risk.last_loss_ts = time.time()      # an exit closed at a loss while we were quoting
+            risk.pause_until = time.time() + 600  # a losing streak paused entries while we were quoting
             return {"outAmount": str(int(int(amount) * 0.00001 / 1e6 * 1e9 * 0.98))}
 
     class FakeDex:

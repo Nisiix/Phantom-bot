@@ -9,8 +9,8 @@ Exits (checked every couple of seconds on executable value, i.e. after exit cost
 
 Entry permission (Executor must ask before every buy):
   * no averaging down: never add to a held token
-  * no revenge trades: never re-enter a token we lost money on; global cooldown after any loss;
-    longer pause after a losing streak; daily loss limit halts new entries
+  * no revenge trades: never re-enter a token we lost money on (the post-loss block is per token,
+    other pairs stay open); global pause after a losing streak; daily loss limit (live only)
   * max open positions
 """
 from __future__ import annotations
@@ -92,9 +92,6 @@ class Risk(Agent):
             return False, f"daily loss limit hit (-{self.r.daily_loss_limit_pct}%), entries halted until UTC midnight"
         if t < self.pause_until:
             return False, f"losing-streak pause ({(self.pause_until - t) / 60:.0f} min left)"
-        cd = self.r.cooldown_after_loss_minutes * 60
-        if t - self.last_loss_ts < cd:
-            return False, f"post-loss cooldown ({(cd - (t - self.last_loss_ts)) / 60:.0f} min left)"
         pending = len({m for m in self.desk.in_flight if m not in pf.positions}) - (1 if own_order else 0)
         if len(pf.positions) + max(0, pending) >= self.cfg.executor.max_open_positions:
             return False, f"max open positions ({self.cfg.executor.max_open_positions})"
@@ -112,8 +109,8 @@ class Risk(Agent):
                                   f"{self.r.streak_pause_minutes:.0f} min")
                 self.consecutive_losses = 0
             else:
-                self.emit("risk", f"loss recorded -> cooldown {self.r.cooldown_after_loss_minutes:.0f} min "
-                                  f"(no revenge trades)")
+                self.emit("risk", "loss recorded -> token blocked for good (no revenge trades), "
+                                  "other pairs stay open")
         else:
             self.consecutive_losses = 0
         self._save()

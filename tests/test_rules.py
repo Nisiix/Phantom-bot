@@ -135,9 +135,7 @@ def test_no_averaging_down_and_no_revenge(tmp_path):
     risk.record_result(trade)
     ok, why = risk.approve_entry("M")
     assert not ok and "revenge" in why
-    ok, why = risk.approve_entry("OTHER")
-    assert not ok and "cooldown" in why
-    risk.last_loss_ts = 0
+    # The post-loss block is per token: other pairs stay open right away.
     assert risk.approve_entry("OTHER")[0]
 
 

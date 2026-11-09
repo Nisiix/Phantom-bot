@@ -65,7 +65,7 @@ class Dashboard:
     def state(self) -> dict:
         d, pf, r = self.desk, self.desk.portfolio, self.risk
         t = time.time()
-        cd_left = max(0.0, r.r.cooldown_after_loss_minutes * 60 - (t - r.last_loss_ts))
+        cd_left = 0.0   # post-loss block is per token (see Risk.approve_entry), no global cooldown
         agents = [{"name": n, "status": s.status, "last": s.last, "last_ts": s.last_ts,
                    "counters": s.counters, "errors": s.errors} for n, s in d.hub.agents.items()]
         feed = [{"ts": e.ts, "agent": e.agent, "kind": e.kind, "symbol": e.symbol, "mint": e.mint,
