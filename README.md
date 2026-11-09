@@ -93,19 +93,30 @@ crashes or reboots. Then:
 | Go live (after the gate passes) | set `mode = "live"` in `config.toml`, fill the LIVE section of `.env`, `docker compose up -d` |
 
 ### Run it on your own PC (Windows)
-1. Install **Python 3.12** from python.org (tick "Add python.exe to PATH") and **Git**.
-2. In PowerShell, from the project folder:
-   ```powershell
-   py -3.12 -m venv .venv
-   .\.venv\Scripts\Activate.ps1      # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-   pip install -r requirements.txt
-   copy .env.example .env             # then edit .env (Telegram, optional keys)
-   python run.py                      # live terminal; Ctrl-C stops (positions are saved)
-   ```
-   Use **Windows Terminal** for the full-screen dashboard. `python run.py --headless` prints plain log lines.
-3. The desk only runs while the PC is on and awake. For 24/7, use the VPS setup above.
+1. Install **Python 3.12** from python.org (tick **"Add python.exe to PATH"**).
+2. Get the code (the GitHub "Code → Download ZIP" button works too, then unzip).
+3. **Double-click `start.bat`.** The first run creates `.venv`, installs everything (1–2 min) and creates
+   `.env`; then the dashboard opens. Every later run starts straight away.
+   * `start.bat recap` · `start.bat gate` · `start.bat wallet` · `start.bat --headless` from a terminal.
+   * Ctrl-C stops the desk; open positions are saved and resume on the next start.
+4. The desk only runs while the PC is on and awake (disable sleep, or use the VPS setup for 24/7).
 
-Linux/macOS: `python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && python run.py`.
+Linux/macOS: `./start.sh` (same commands: `./start.sh recap`, `gate`, `wallet`, `--headless`).
+
+## Connecting a Phantom wallet (live only — paper needs no wallet)
+The desk doesn't "connect" like a website does: it signs swaps itself with the wallet's private key, which
+stays on your machine in `.env` and is never sent anywhere (Jupiter only receives the *signed* transaction).
+1. In Phantom, create a **new, dedicated account** for the bot (Phantom → account menu → *Add / Connect
+   Wallet* → *Create new account*). Fund it only with what you accept to risk. Never use your main wallet.
+2. Export its key: Phantom → ⚙ *Settings* → *Manage Accounts* → the bot account → *Show Private Key* →
+   password → copy the long base58 string.
+3. Paste it in `.env`: `WALLET_PRIVATE_KEY=<that string>` (no quotes, no spaces). Never share it, never
+   commit `.env` (it's git-ignored), never paste it in a chat.
+4. Check it: `start.bat wallet` (or `python run.py wallet`) shows the address, balance and whether live is
+   unlocked, without ever printing the key.
+5. Go live only after the paper gate passes: set `mode = "live"` in `config.toml` and
+   `LIVE_CONFIRM=I_ACCEPT_THE_RISK` in `.env`, then start again. A private RPC (`SOLANA_RPC_URL`, e.g.
+   Helius) is strongly recommended for live.
 
 ## Honest limits
 * Memecoins can gap through a stop (a rug can take the price −90% between two polls).

@@ -53,8 +53,12 @@ async def build(cfg: Config) -> tuple[Desk, object]:
         if not cfg.secrets.wallet_private_key:
             raise LiveRefused("Live trading refused — WALLET_PRIVATE_KEY missing in .env.")
         from .brokers.live import LiveBroker
-        broker = LiveBroker(rpc, jup, cfg.secrets.wallet_private_key,
-                            cfg.executor.priority_fee_max_lamports, cfg.executor.fee_reserve_sol)
+        try:
+            broker = LiveBroker(rpc, jup, cfg.secrets.wallet_private_key,
+                                cfg.executor.priority_fee_max_lamports, cfg.executor.fee_reserve_sol)
+        except Exception:  # noqa: BLE001 - never surface parser details of a secret
+            raise LiveRefused("Live trading refused — WALLET_PRIVATE_KEY is not a valid Solana private key "
+                              "(check it with: python run.py wallet).") from None
         starting = await broker.cash()
         hub.banner.append(f"LIVE wallet {broker.pubkey[:4]}…{broker.pubkey[-4:]} — real funds at risk")
     portfolio = Portfolio(store, cfg.mode, starting)
