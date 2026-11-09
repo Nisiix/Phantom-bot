@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from ..clients.feeds import is_pump_token
 from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
 from ..onchain_lp import OnchainLP
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
@@ -242,6 +243,14 @@ class Filter(Agent):
                                                                "no DEX pair indexed yet")])
         self.desk.market_seen[cand.mint] = (time.time(), snap.volume_h1, snap.liquidity_usd)
         checks = self._market_checks(snap)
+        if self.cfg.scout.venues == "pumpfun":
+            # pump.fun-only desk: tokens born elsewhere (Raydium LaunchLab, Meteora, ...) that reach us through
+            # DexScreener profiles never get RugCheck / RPC time. Not permanent: it is a scope choice, not a risk.
+            ok = is_pump_token(cand.mint, snap.dex_id)
+            checks.append(Check("venue", ok, snap.dex_id or "?", "pump.fun / PumpSwap",
+                                "pump.fun token" if ok else f"not a pump.fun token (main pair on {snap.dex_id or '?'})"))
+            if not ok:   # out of scope for good: the Scout drops it, no more re-screens (quietly, not a "kill")
+                self.desk.blacklist[cand.mint] = "not a pump.fun token"
         if not all(c.passed for c in checks):
             # Cheap market checks failed: stop here, don't burn RugCheck quota.
             return FilterReport(cand.mint, sym, False, checks, market=snap)
@@ -499,7 +508,7 @@ class Filter(Agent):
                             "attempt": cand.attempts})
         # Only surface rejections that got past the cheap market checks, or permanent kills,
         # in the live activity feed (everything is still written to the database).
-        deep = any(c.name not in ("market", "volume_1h", "liquidity") for c in report.checks)
+        deep = any(c.name not in ("market", "volume_1h", "liquidity", "venue") for c in report.checks)
         self.emit("reject" if not report.permanent_fail else "kill",
                   f"{'KILLED' if report.permanent_fail else 'rejected'}: {reason}", report.mint, report.symbol,
                   deep=deep)

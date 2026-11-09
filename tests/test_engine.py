@@ -227,3 +227,17 @@ def test_shadow_rows_carry_market_regime(tmp_path):
     st.start("M", "TST", "filter", "reject", "r", 0.001, 80_000, features=market_features(snap(), "x"))
     f = st.active["M:filter"].features
     assert "mkt_btc_h1" in f and len(desk.market.launches) == 1
+
+
+def test_pump_fun_only_venue_scope(tmp_path):
+    from desk.clients.feeds import TRACKED_DEXES, is_pump_token, venue_dexes
+    assert venue_dexes("pumpfun") == ("pump-fun", "pumpswap") and venue_dexes("all") == TRACKED_DEXES
+    assert is_pump_token("Abcpump", "raydium") and is_pump_token("Xyz", "pumpswap")
+    assert not is_pump_token("Xyzbonk", "raydium")
+    desk = make_desk(tmp_path)
+    f = Filter(desk)
+    assert f.screen(Candidate("Okpump"), snap(mint="Okpump", dex_id="raydium")) is None
+    out = f.screen(Candidate("Ray"), snap(mint="Ray", dex_id="raydium"))
+    assert out is not None and [c.name for c in out.failed] == ["venue"] and "Ray" in desk.blacklist
+    desk.cfg.scout.venues = "all"
+    assert f.screen(Candidate("Ray2"), snap(mint="Ray2", dex_id="raydium")) is None

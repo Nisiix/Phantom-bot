@@ -27,6 +27,7 @@ class ScoutCfg:
     pumpportal: bool = True
     geckoterminal: bool = True
     dexscreener: bool = True
+    venues: str = "pumpfun"         # "pumpfun" = pump.fun + PumpSwap only, "all" = also Raydium / LaunchLab / others
     watch_minutes: float = 180
     recheck_seconds: float = 45
     max_watchlist: int = 4000

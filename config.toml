@@ -21,8 +21,10 @@ data_dir = "data"
 
 [scout]
 pumpportal = true            # real-time pump.fun launches + migrations (websocket)
-geckoterminal = true         # new pools on Raydium / PumpSwap / pump.fun (polled)
+geckoterminal = true         # new + trending pools on pump.fun / PumpSwap (and Raydium if venues = "all")
 dexscreener = true           # newly listed / boosted Solana token profiles (polled)
+venues = "pumpfun"           # "pumpfun" = only pump.fun tokens (bonding curve + PumpSwap)
+                             # "all"     = also Raydium / LaunchLab / letsbonk / Meteora tokens
 watch_minutes = 180          # how long a discovered token stays on the watchlist
 recheck_seconds = 45         # how often watchlist tokens are re-sent to Filter
 max_watchlist = 4000

@@ -13,6 +13,18 @@ PUMPPORTAL_WS = "wss://pumpportal.fun/api/data"
 GECKO = "https://api.geckoterminal.com/api/v2/networks/solana"
 # GeckoTerminal dex ids we care about.
 TRACKED_DEXES = ("raydium", "raydium-clmm", "raydium-launchlab", "pump-fun", "pumpswap", "letsbonk-fun")
+PUMP_DEXES = ("pump-fun", "pumpswap")
+# DexScreener dex ids of pump.fun's own venues (bonding curve, then PumpSwap after graduation).
+PUMP_DEX_IDS = ("pumpfun", "pumpswap")
+
+
+def venue_dexes(venues: str) -> tuple[str, ...]:
+    return PUMP_DEXES if venues == "pumpfun" else TRACKED_DEXES
+
+
+def is_pump_token(mint: str, dex_id: str) -> bool:
+    """pump.fun mints end in "pump"; a token whose main pair is on pump.fun / PumpSwap counts too."""
+    return mint.endswith("pump") or (dex_id or "").lower() in PUMP_DEX_IDS
 
 
 async def pumpportal_stream(stop: asyncio.Event) -> AsyncIterator[dict]:
@@ -61,25 +73,26 @@ def _gecko_pool(p: dict) -> dict | None:
     }
 
 
-async def gecko_new_pools(http: Http, pages: int = 2) -> list[dict]:
+async def gecko_new_pools(http: Http, pages: int = 2, dexes: tuple[str, ...] = TRACKED_DEXES) -> list[dict]:
     out = []
     for page in range(1, pages + 1):
         data = await http.get(f"{GECKO}/new_pools", params={"page": page}, retries=1) or {}
         for p in data.get("data") or []:
             pool = _gecko_pool(p)
-            if pool and pool["dex"] in TRACKED_DEXES:
+            if pool and pool["dex"] in dexes:
                 out.append(pool)
     return out
 
 
-async def gecko_active_pools(http: Http) -> list[dict]:
+async def gecko_active_pools(http: Http, dexes: tuple[str, ...] | None = None) -> list[dict]:
     """Pools that are already trading hard: Solana trending pools plus the top pools by 24h volume on
     PumpSwap (where pump.fun graduates trade), Raydium and LaunchLab. Catches young tokens that slipped past
-    new_pools or whose launch happened before the desk started (those are the ones with $50k/h volume)."""
+    new_pools or whose launch happened before the desk started (those are the ones with $50k/h volume).
+    With `dexes` set (pump.fun-only desk) only those venues are listed and trending pools are filtered too."""
     out = []
     urls = [(f"{GECKO}/trending_pools", {"page": 1})]
     urls += [(f"{GECKO}/dexes/{dex}/pools", {"page": 1, "sort": "h24_volume_usd_desc"})
-             for dex in ("pumpswap", "raydium", "raydium-launchlab")]
+             for dex in ("pumpswap", "raydium", "raydium-launchlab") if dexes is None or dex in dexes]
     errors = 0
     for url, params in urls:
         try:
@@ -89,7 +102,7 @@ async def gecko_active_pools(http: Http) -> list[dict]:
             continue
         for p in data.get("data") or []:
             pool = _gecko_pool(p)
-            if pool:
+            if pool and (dexes is None or pool["dex"] in dexes):
                 out.append(pool)
     if errors == len(urls):
         raise RuntimeError("GeckoTerminal active pools unavailable")

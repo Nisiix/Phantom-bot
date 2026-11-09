@@ -1,9 +1,9 @@
-"""SCOUT — discovers new pairs on pump.fun and Raydium in real time.
+"""SCOUT — discovers new pairs on pump.fun (and, with [scout] venues = "all", Raydium & co) in real time.
 
 Sources
   * PumpPortal websocket: every pump.fun launch + every graduation/migration (push, real time)
-  * GeckoTerminal new_pools: newest pools on Raydium / Raydium LaunchLab / PumpSwap / pump.fun
-  * GeckoTerminal Raydium pools by volume: young Raydium pools that are already trading
+  * GeckoTerminal new_pools: newest pools on pump.fun / PumpSwap (venues = "all": also Raydium / LaunchLab)
+  * GeckoTerminal trending + top-volume pools: young pools that are already trading
   * DexScreener latest token profiles & boosts (Solana)
 
 The Scout never judges quality. It keeps a watchlist and keeps re-submitting
@@ -18,7 +18,7 @@ import asyncio
 import time
 from dataclasses import dataclass
 
-from ..clients.feeds import gecko_active_pools, gecko_new_pools, pumpportal_stream
+from ..clients.feeds import gecko_active_pools, gecko_new_pools, pumpportal_stream, venue_dexes
 from ..models import Candidate
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
@@ -77,7 +77,7 @@ class Scout(Agent):
             tasks.append(self.supervised("dexscreener", self.dexscreener_loop))
         if self.desk.gmgn is not None and self.cfg.gmgn.signal_feed:
             tasks.append(self.supervised("gmgn-signals", self.gmgn_loop))
-        self.emit("info", f"Scout online: sources pumpportal={self.c.pumpportal} "
+        self.emit("info", f"Scout online: venues={self.c.venues} sources pumpportal={self.c.pumpportal} "
                           f"gecko={self.c.geckoterminal} dexscreener={self.c.dexscreener}")
         await asyncio.gather(*tasks)
 
@@ -101,7 +101,7 @@ class Scout(Agent):
         while not self.desk.stop.is_set():
             pools, failed = [], 0
             try:
-                pools += await gecko_new_pools(self.desk.http, pages=1)
+                pools += await gecko_new_pools(self.desk.http, pages=1, dexes=venue_dexes(self.c.venues))
             except Exception:  # noqa: BLE001 - a flaky feed must not stop discovery
                 failed += 1
             if n % 4 == 1:
@@ -109,7 +109,8 @@ class Scout(Agent):
                 # pass the $50k/h volume rule; new_pools alone mostly finds dust that never gets there.
                 cutoff = time.time() - 48 * 3600
                 try:
-                    pools += [p for p in await gecko_active_pools(self.desk.http)
+                    pools += [p for p in await gecko_active_pools(
+                        self.desk.http, venue_dexes(self.c.venues) if self.c.venues == "pumpfun" else None)
                               if p.get("created") and _iso(p["created"]) > cutoff
                               and p.get("volume_h1", 0) >= 0.5 * self.cfg.filter.min_volume_h1_usd]
                 except Exception:  # noqa: BLE001
