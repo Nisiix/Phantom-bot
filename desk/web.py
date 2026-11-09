@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 import webbrowser
 from pathlib import Path
@@ -16,6 +17,9 @@ from .recap import build_recap, live_gate_status
 from .store import Store
 
 PAGE = Path(__file__).with_name("dashboard.html")
+PAGE_3D = Path(__file__).with_name("agents3d.html")
+# Event payload fields worth showing in the 3D view's detail panel (the rest stays server-side).
+DETAIL_KEYS = ("score", "breakdown", "why", "pnl_pct", "ev_pct", "reason", "checks", "failed")
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
 
@@ -26,6 +30,27 @@ def _downsample(rows: list[dict], n: int) -> list[dict]:
     out = [rows[int(i * step)] for i in range(n)]
     out[-1] = rows[-1]
     return out
+
+
+def _clean(v, depth: int = 0):
+    """JSON-safe copy: NaN/inf become null, odd objects become strings, nesting is capped."""
+    if isinstance(v, float):
+        return v if math.isfinite(v) else None
+    if v is None or isinstance(v, (bool, int, str)):
+        return v
+    if depth > 3:
+        return str(v)
+    if isinstance(v, dict):
+        return {str(k): _clean(x, depth + 1) for k, x in list(v.items())[:40]}
+    if isinstance(v, (list, tuple)):
+        return [_clean(x, depth + 1) for x in list(v)[:40]]
+    return str(v)
+
+
+def _detail(data) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    return {k: _clean(data[k]) for k in DETAIL_KEYS if k in data}
 
 
 class Dashboard:
@@ -100,6 +125,34 @@ class Dashboard:
             self._cache = (t, json.dumps(self.state(), default=str, allow_nan=False).encode())
         return self._cache[1]
 
+    def activity(self, limit: int = 600) -> dict:
+        """Recent agent events with their rationale, for the standalone 3D view."""
+        d = self.desk
+        live = list(d.hub.feed)
+        rows = [{"ts": e.ts, "agent": e.agent, "kind": e.kind, "symbol": e.symbol, "mint": e.mint,
+                 "message": e.message, "data": _detail(e.data)} for e in live]
+        room = limit - len(rows)
+        if room > 0:  # after a restart the in-memory feed is short: backfill from the event log
+            oldest = rows[0]["ts"] if rows else time.time()
+            try:
+                old = d.store.q("SELECT ts,agent,kind,symbol,mint,message,data FROM events WHERE ts<? "
+                                "ORDER BY ts DESC LIMIT ?", (oldest, room))
+            except Exception:  # noqa: BLE001
+                old = []
+            back = []
+            for r in reversed(old):
+                try:
+                    data = json.loads(r["data"] or "{}")
+                except (TypeError, ValueError):
+                    data = {}
+                back.append({"ts": r["ts"], "agent": r["agent"], "kind": r["kind"], "symbol": r["symbol"],
+                             "mint": r["mint"], "message": r["message"], "data": _detail(data)})
+            rows = back + rows
+        agents = [{"name": n, "status": s.status, "last": s.last, "last_ts": s.last_ts,
+                   "counters": s.counters, "errors": s.errors} for n, s in d.hub.agents.items()]
+        return {"now": time.time(), "mode": d.cfg.mode, "started": d.hub.started,
+                "agents": agents, "events": rows[-limit:]}
+
     def recap_text(self) -> bytes:
         d = self.desk
         t1 = time.time()
@@ -122,6 +175,11 @@ class Dashboard:
             if path == "/":
                 body = PAGE.read_bytes()
                 return await self._send(writer, 200, body, "text/html; charset=utf-8")
+            if path in ("/3d", "/3d/"):
+                return await self._send(writer, 200, PAGE_3D.read_bytes(), "text/html; charset=utf-8")
+            if path == "/api/activity":
+                body = json.dumps(self.activity(), default=str, allow_nan=False).encode()
+                return await self._send(writer, 200, body, "application/json")
             if path == "/api/state":
                 return await self._send(writer, 200, self.state_json(), "application/json")
             if path == "/api/recap":

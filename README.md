@@ -103,6 +103,10 @@ crashes or reboots. Then:
 4. **Web dashboard:** your browser opens **http://127.0.0.1:8080** by itself (balance, equity curve, the six
    agents live, positions, P&L per trade, every decision with its reason, QUANT calibration, recap on demand).
    It's read-only and reachable only from your own PC. The terminal dashboard keeps working alongside it.
+   The **Vista 3D** button (or **http://127.0.0.1:8080/3d**) opens a standalone 3D scene of the six agents:
+   every operation is a block on a spiral around its agent (click it for the comment, score breakdown and the
+   token's full path), and tokens fly between agents as they move through the pipeline. The 3D library (three.js)
+   loads from a CDN, so that page needs internet; the rest of the dashboard doesn't.
 5. The desk only runs while the PC is on and awake (disable sleep, or use the VPS setup for 24/7).
 
 Linux/macOS: `./start.sh` (same commands: `./start.sh recap`, `gate`, `wallet`, `--headless`).

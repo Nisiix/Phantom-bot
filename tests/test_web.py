@@ -42,3 +42,18 @@ def test_http_guards(tmp_path):
     assert _request(dash, b"GET / HTTP/1.1\r\nHost: localhost:PORT\r\n\r\n").startswith(b"HTTP/1.1 200")
     assert _request(dash, b"GET /api/state HTTP/1.1\r\nHost: evil.example\r\n\r\n").startswith(b"HTTP/1.1 403")
     assert _request(dash, b"POST /api/state HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n").startswith(b"HTTP/1.1 405")
+
+
+def test_activity_view(tmp_path):
+    dash = make_dash(tmp_path)
+    from desk.models import Event
+    dash.desk.hub.emit(Event("Analyst", "score", "score 0.71", "MINT1", "TST",
+                             {"score": 0.71, "breakdown": {"liq": float("nan")}, "why": ["liquidity ok"], "x": 1}))
+    a = json.loads(json.dumps(dash.activity(), allow_nan=False))
+    ev = a["events"][-1]
+    assert ev["agent"] == "Analyst" and ev["data"]["why"] == ["liquidity ok"] and "x" not in ev["data"]
+    assert ev["data"]["breakdown"]["liq"] is None and len(a["agents"]) == 6
+    page = _request(dash, b"GET /3d HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n")
+    assert page.startswith(b"HTTP/1.1 200") and b"three" in page
+    api = _request(dash, b"GET /api/activity HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n")
+    assert api.startswith(b"HTTP/1.1 200") and b'"events"' in api
