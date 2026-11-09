@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PHANTOM DESK launcher for Linux/macOS: ./start.sh [recap|gate|wallet] [--headless]
+# PHANTOM DESK launcher for Linux/macOS: ./start.sh [recap|gate|wallet|research] [--headless]
 set -euo pipefail
 cd "$(dirname "$0")"
 PY=""

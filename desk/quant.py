@@ -91,6 +91,9 @@ class QuantModel:
     cost_samples: list[float] = field(default_factory=list)   # measured round-trip costs (%)
     blocked: int = 0
     evaluated: int = 0
+    # Estimates are recomputed only when outcomes change (the shadow tracker adds thousands of rows,
+    # and every Analyst verdict / shadow start asks for probabilities).
+    _cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     # ── data ──
     def load(self, rows: list[dict]) -> None:
@@ -122,11 +125,20 @@ class QuantModel:
         return p, r
 
     def probabilities(self, score: float) -> tuple[dict, dict, int]:
-        gp, gr = self._estimate(self.outcomes, PRIOR_P, PRIOR_R, self.prior_strength)
         b = bucket_of(score)
-        rows = [o for o in self.outcomes if bucket_of(o["score"]) == b]
-        p, _ = self._estimate(rows, gp, gr, self.bucket_strength)
-        return p, gr, len(rows)   # payoffs are pooled globally (too noisy per bucket)
+        key = (id(self.outcomes), len(self.outcomes), self.prior_strength, self.bucket_strength)
+        if self._cache.get("key") != key:
+            self._cache.clear()
+            self._cache["key"] = key
+        if b not in self._cache:
+            if "global" not in self._cache:
+                self._cache["global"] = self._estimate(self.outcomes, PRIOR_P, PRIOR_R, self.prior_strength)
+            gp, gr = self._cache["global"]
+            rows = [o for o in self.outcomes if bucket_of(o["score"]) == b]
+            p, _ = self._estimate(rows, gp, gr, self.bucket_strength)
+            self._cache[b] = (p, gr, len(rows))   # payoffs are pooled globally (too noisy per bucket)
+        p, gr, n = self._cache[b]
+        return dict(p), dict(gr), n
 
     def evaluate(self, score: float, cost_pct: float) -> QuantView:
         self.evaluated += 1

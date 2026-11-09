@@ -6,6 +6,7 @@
   python run.py recap           print a recap of the last 4h right now
   python run.py gate            show whether the paper record unlocks live trading
   python run.py wallet          check the wallet key in .env (shows address + balance, never the key)
+  python run.py research        which signals separated winners from losers (from the 60-min shadow data)
 """
 from __future__ import annotations
 
@@ -65,10 +66,13 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description="Phantom Desk")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research"])
     ap.add_argument("--mode", choices=["paper", "live"], help="override mode from config.toml")
     ap.add_argument("--headless", action="store_true", help="plain log output instead of the live terminal")
     ap.add_argument("--config", help="path to config.toml")
+    ap.add_argument("--stage", choices=["analyst", "filter"], default="analyst",
+                    help="research: tokens scored by the Analyst (default) or everything the Filter saw")
+    ap.add_argument("--days", type=float, default=0, help="research: only the last N days (0 = all)")
     args = ap.parse_args()
     cfg = load_config(args.config, args.mode)
     for w in cfg.warnings:
@@ -78,6 +82,13 @@ def main() -> int:
         ok, msgs = live_gate_status(Store(cfg.data_dir / "paper.db"), cfg.live_gate)
         print(("LIVE UNLOCKED: " if ok else "LIVE LOCKED: ") + "; ".join(msgs))
         return 0 if ok else 1
+
+    if args.command == "research":
+        from desk.research import build_research
+        store = Store(cfg.data_dir / f"{cfg.mode}.db")
+        since = time.time() - args.days * 86400 if args.days else 0
+        print(build_research(store.shadow_research_rows(args.stage, since), args.stage))
+        return 0
 
     if args.command == "wallet":
         return asyncio.run(check_wallet(cfg))

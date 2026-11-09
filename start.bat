@@ -6,6 +6,7 @@ rem  Uso da terminale:  start.bat            avvia il desk (dashboard)
 rem                     start.bat recap      recap delle ultime 4 ore
 rem                     start.bat gate       il paper ha sbloccato il live?
 rem                     start.bat wallet     verifica il wallet in .env
+rem                     start.bat research   quali segnali hanno funzionato (dati shadow 60 min)
 rem ============================================================================
 setlocal
 chcp 65001 >nul

@@ -41,6 +41,9 @@ reject_rugcheck_danger = true      # any "danger"-level RugCheck risk
 min_liquidity_usd = 20000.0
 serial_dev_min_launches = 3        # dev with >= N prior launches...
 serial_dev_dead_ratio = 0.8        # ...of which >= 80% died (< $10k mcap) = rug-linked
+# ── engine ──
+deep_workers = 3                   # deep checks in parallel (RugCheck keeps its own rate limit)
+deep_max_wait_seconds = 60         # drop queued deep checks whose market data got stale
 
 [analyst]
 min_score = 0.6              # user rule: under 0.6 = no trade (can only be raised)
@@ -49,6 +52,7 @@ website_check = true
 # Used only when ANTHROPIC_API_KEY is set in .env.
 claude_website_review = true
 claude_model = "claude-opus-5-5"
+workers = 3                  # tokens scored in parallel (one slow website no longer blocks the rest)
 
 [executor]
 max_position_pct = 8.0       # user rule: max 8% of current balance per trade (hard ceiling)

@@ -46,18 +46,28 @@ class Executor(Agent):
         self.broker = broker
         self.risk = risk
         self.e = self.cfg.executor
+        # Swaps are serialised (live fills are measured from wallet balance deltas, so a buy and a
+        # sell must not settle at the same time). Only the swap itself holds it, not the checks.
+        self._swap_lock = asyncio.Lock()
 
     async def run(self) -> None:
         self.status("idle")
         self.emit("info", f"Executor online [{self.broker.mode.upper()}]: max {self.e.max_position_pct}% "
                           f"of balance per trade, max {self.e.max_open_positions} positions")
-        await self.supervised("executor", self.loop)
+        await asyncio.gather(self.supervised("executor-exits", self.exit_loop),
+                             self.supervised("executor-entries", self.loop))
+
+    async def exit_loop(self) -> None:
+        """Exits run on their own loop: a stop is never queued behind an entry's quotes and checks."""
+        while not self.desk.stop.is_set():
+            try:
+                order = await asyncio.wait_for(self.desk.exits.get(), timeout=1)
+            except asyncio.TimeoutError:
+                continue
+            await self.handle_exit(order)
 
     async def loop(self) -> None:
         while not self.desk.stop.is_set():
-            # Exits first, always.
-            while not self.desk.exits.empty():
-                await self.handle_exit(self.desk.exits.get_nowait())
             try:
                 v = await asyncio.wait_for(self.desk.verdicts.get(), timeout=0.5)
             except asyncio.TimeoutError:
@@ -156,7 +166,13 @@ class Executor(Agent):
             self.state.bump("ev_block")
             return self.reject(v, qv.reason)
 
-        fill = await self.broker.buy(v.mint, size, decimals, buy_q)
+        async with self._swap_lock:
+            # Exits run concurrently now: a loss may have landed while we were quoting.
+            # Ask Risk again right before the swap (cooldown / streak pause / daily halt / max positions).
+            ok, why = self.risk.approve_entry(v.mint, own_order=True)
+            if not ok:
+                return self.reject(v, f"Risk (re-check before swap): {why}")
+            fill = await self.broker.buy(v.mint, size, decimals, buy_q)
         if not fill.ok or fill.tokens <= 0:
             return self.reject(v, f"buy failed: {fill.error or 'no tokens received'} {fill.tx}")
 
@@ -219,7 +235,8 @@ class Executor(Agent):
                 self.emit("error", f"EXIT BLOCKED ({order.reason}): no sell route, retrying", order.mint, pos.symbol)
                 self.risk.exit_failed(order.mint)
                 return
-            fill = await self.broker.sell(order.mint, tokens, pos.decimals, quote)
+            async with self._swap_lock:
+                fill = await self.broker.sell(order.mint, tokens, pos.decimals, quote)
             if not fill.ok:
                 self.emit("error", f"SELL FAILED ({order.reason}): {fill.error}, retrying", order.mint, pos.symbol)
                 self.risk.exit_failed(order.mint)
