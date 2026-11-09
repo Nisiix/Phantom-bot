@@ -58,8 +58,30 @@ Filter saw. It describes past memecoins, not future ones: use it to choose what 
   (graduations and smart-money signals first, then by volume) with `deep_workers` in parallel.
   Deep checks whose market data waited longer than `deep_max_wait_seconds` are dropped (the Scout resubmits).
 * The Analyst scores `workers` tokens in parallel, and skips clearances already half-expired.
-* Exits have their own loop: a stop is never queued behind an entry's quotes. Swaps themselves are
-  serialised, and Risk is asked again right before every buy.
+* Exits have their own loop and each exit runs as its own task: a stop is never queued behind an entry,
+  and several stops hit at once are sold in parallel. Risk is asked again right before every buy.
+
+## Execution — how positions are opened and closed
+Live trading uses **Jupiter Swap V2** (`/swap/v2/order` + `/swap/v2/execute`, the successor of Ultra):
+* **One call = quote + transaction.** The order that passes the impact / round-trip / EV checks is
+  exactly the one that gets signed and sent; no rebuild in between.
+* **Entries** run in "ultra" mode: Jupiter's real-time slippage estimate (RTSE), RFQ market makers
+  competing with on-chain routes, MEV-protected landing, gasless when possible. If Jupiter's slippage
+  estimate is above `slippage_bps` (3%) the entry is skipped: too volatile to enter safely.
+* **Entry checks run in parallel:** balance→size→order, token decimals and fresh market data are fetched
+  at the same time, then the sell-back (honeypot) quote.
+* **Exits:** first try at Jupiter's own slippage estimate (best price). If the sell fails it is retried
+  **immediately** at `exit_slippage_ladder_bps` (800 → 1500 → 3000 bps), re-reading the wallet, instead of
+  waiting for Risk's next tick. If an earlier attempt actually landed, it is booked, not sold twice.
+* **Fills are exact and per transaction** (Jupiter's reported amounts, or the transaction metadata),
+  never wallet balance deltas: there is no swap lock, so an exit never waits for an entry to land.
+* Every fill records its timing (`checks_ms`, `swap_ms`, `trigger_to_fill_ms`, route) in the trade
+  log and decision record.
+* `execution = "rpc"` keeps the classic path (`/swap/v1/swap` sent through `SOLANA_RPC_URL`) with
+  `skipPreflight`, `maxRetries = 0` and our own rebroadcast every 2 s until it lands or the blockhash
+  expires. Use it only with a fast private/staked RPC (Helius, Triton, QuickNode…); on the public RPC
+  Jupiter V2 lands faster.
+Speed only reduces slippage and late stops; it does not make a trade profitable.
 
 ## GMGN wallet intelligence (optional, `GMGN_API_KEY`)
 Read-only use of GMGN's OpenAPI (paid key, Plus plan or better; never its custodial swap routes):

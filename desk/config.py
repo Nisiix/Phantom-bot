@@ -69,6 +69,8 @@ class ExecutorCfg:
     clearance_ttl_seconds: float = 120
     fee_reserve_sol: float = 0.05
     priority_fee_max_lamports: int = 200_000
+    execution: str = "jupiter_v2"        # live: "jupiter_v2" (order/execute) or "rpc" (own RPC landing)
+    exit_slippage_ladder_bps: list = field(default_factory=lambda: [800, 1500, 3000])
 
 
 @dataclass
@@ -223,6 +225,11 @@ def enforce_hard_limits(cfg: Config) -> None:
     clamp(q, "shadow_weight", lambda v: 0 <= v <= 1, 0.5, "shadow sample weight must be 0-1")
     clamp(q, "default_cost_pct", lambda v: v >= 0.5, 2.5, "assumed round-trip cost must be >= 0.5%")
     clamp(q, "prior_strength", lambda v: 1 <= v <= 200, 10.0, "QUANT prior strength must be 1-200")
+    clamp(e, "execution", lambda v: v in ("jupiter_v2", "rpc"), "jupiter_v2",
+          'executor.execution must be "jupiter_v2" or "rpc"')
+    clamp(e, "exit_slippage_ladder_bps",
+          lambda v: isinstance(v, list) and 0 < len(v) <= 6 and all(isinstance(b, int) and 0 < b <= 5000 for b in v),
+          [800, 1500, 3000], "exit slippage ladder must be 1-6 values of 1-5000 bps")
     if cfg.mode not in ("paper", "live"):
         w.append(f"config: mode {cfg.mode!r} invalid, using 'paper'")
         cfg.mode = "paper"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, field
 
 from .clients.dexscreener import DexScreener
@@ -44,3 +45,4 @@ class Desk:
     shadow: object = None                                         # Logger: ShadowTracker (60-min follow-up)
     gmgn: object = None                                           # optional GMGN client (read-only)
     funders: dict[str, str] = field(default_factory=dict)        # Filter: mint -> dev's SOL funder (GMGN)
+    exec_stats: deque = field(default_factory=lambda: deque(maxlen=200))  # Executor: recent fill timings

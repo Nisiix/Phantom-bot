@@ -63,7 +63,13 @@ max_entry_price_impact_pct = 2.5
 max_round_trip_loss_pct = 6.0   # buy+sell quote test: reject honeypots / heavy taxes
 clearance_ttl_seconds = 120     # a Filter/Analyst clearance expires after this
 fee_reserve_sol = 0.05          # live: always keep this much SOL for fees
-priority_fee_max_lamports = 200000
+priority_fee_max_lamports = 200000   # "rpc" execution only (Jupiter V2 sets fees itself)
+# Live execution. "jupiter_v2": Jupiter Swap V2 order/execute (quote + transaction in one call, RTSE
+# slippage, RFQ market makers, Jupiter lands it MEV-protected, exact fill returned). "rpc": legacy
+# /swap/v1 sent through SOLANA_RPC_URL with our own fast rebroadcast loop (pair it with a private RPC).
+execution = "jupiter_v2"
+# Exit retries: if a sell fails it is retried IMMEDIATELY at these slippages (bps) to make sure we get out.
+exit_slippage_ladder_bps = [800, 1500, 3000]
 
 [risk]
 hard_stop_pct = -6.0          # user rule: hard stop at -6% (can only be tightened)
