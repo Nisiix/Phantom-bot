@@ -81,3 +81,17 @@ interval_hours = 4
 min_paper_trades = 30
 require_positive_paper_pnl = true
 max_paper_drawdown_pct = 20.0
+
+[quant]
+# QUANT: trade only if expected value AFTER the measured round-trip cost is positive.
+# Probabilities of "+12% first / -6% first / neither in 60 min" are learned from real trades
+# and from following every evaluated token for 60 minutes (shadow tracking).
+enabled = true
+horizon_minutes = 60
+min_samples_to_enforce = 30     # warm-up: log EV but don't block until this many outcomes exist
+min_ev_pct = 0.0                # required edge in % (can only be >= 0)
+prior_strength = 10.0
+shadow_tracking = true          # follow every evaluated token (bought or skipped) for 60 min
+shadow_weight = 0.5             # a skipped-token outcome counts half a real trade
+shadow_min_liquidity_usd = 5000 # don't follow untradeable dust
+default_cost_pct = 2.5          # assumed round-trip cost until real quotes have been measured

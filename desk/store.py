@@ -22,6 +22,15 @@ CREATE TABLE IF NOT EXISTS trades (
 CREATE TABLE IF NOT EXISTS positions (mint TEXT PRIMARY KEY, data TEXT);
 CREATE TABLE IF NOT EXISTS equity (ts REAL PRIMARY KEY, cash_sol REAL, equity_sol REAL, sol_usd REAL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS outcomes (
+  id INTEGER PRIMARY KEY, ts REAL, mode TEXT, mint TEXT, symbol TEXT, score REAL, label TEXT,
+  ret_net_pct REAL, rt_cost_pct REAL, gross_pct REAL, p_up REAL, p_down REAL, p_neither REAL, ev_pct REAL);
+CREATE TABLE IF NOT EXISTS shadow (
+  id INTEGER PRIMARY KEY, start_ts REAL, end_ts REAL, mode TEXT, mint TEXT, symbol TEXT, stage TEXT,
+  decision TEXT, reason TEXT, score REAL, traded INTEGER, ref_price REAL, ref_liq REAL, cost_pct REAL,
+  desk_label TEXT, desk_hit_s REAL, model_label TEXT, model_hit_s REAL, ret_end_pct REAL, max_pct REAL,
+  min_pct REAL, sim_net_pct REAL, p_up REAL, p_down REAL, p_neither REAL);
+CREATE INDEX IF NOT EXISTS ix_shadow_end ON shadow(end_ts);
 CREATE TABLE IF NOT EXISTS rug_ledger (wallet TEXT PRIMARY KEY, mint TEXT, reason TEXT, ts REAL);
 """
 
@@ -81,6 +90,26 @@ class Store:
     def add_equity(self, ts, cash, equity, sol_usd) -> None:
         self.db.execute("INSERT OR REPLACE INTO equity(ts,cash_sol,equity_sol,sol_usd) VALUES(?,?,?,?)",
                         (ts, cash, equity, sol_usd))
+
+    def add_outcome(self, o: dict) -> None:
+        self.db.execute(
+            "INSERT INTO outcomes(ts,mode,mint,symbol,score,label,ret_net_pct,rt_cost_pct,gross_pct,p_up,p_down,"
+            "p_neither,ev_pct) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (o["ts"], o["mode"], o["mint"], o["symbol"], o["score"], o["label"], o["ret_net_pct"],
+             o["rt_cost_pct"], o["gross_pct"], o["p_up"], o["p_down"], o["p_neither"], o["ev_pct"]))
+
+    def add_shadow(self, r: dict) -> None:
+        cols = ",".join(r)
+        self.db.execute(f"INSERT INTO shadow({cols}) VALUES({','.join('?' * len(r))})", tuple(r.values()))
+
+    def shadows_between(self, t0: float, t1: float) -> list[dict]:
+        return self.q("SELECT * FROM shadow WHERE end_ts>=? AND end_ts<? ORDER BY end_ts", (t0, t1))
+
+    def shadow_samples(self) -> list[dict]:
+        return self.q("SELECT * FROM shadow WHERE stage='analyst' AND traded=0 AND score IS NOT NULL")
+
+    def outcomes(self) -> list[dict]:
+        return self.q("SELECT * FROM outcomes ORDER BY ts")
 
     def add_rugger(self, wallet: str, mint: str, reason: str) -> None:
         self.db.execute("INSERT OR IGNORE INTO rug_ledger(wallet,mint,reason,ts) VALUES(?,?,?,?)",

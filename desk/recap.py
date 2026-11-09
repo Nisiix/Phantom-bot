@@ -49,7 +49,63 @@ def trade_stats(trades: list[dict]) -> dict:
     }
 
 
-def build_recap(store: Store, portfolio, mode: str, t0: float, t1: float, agents: dict | None = None) -> str:
+def quant_section(quant) -> list[str]:
+    if quant is None:
+        return []
+    lines = ["", "## QUANT — edge after costs (calibration)", f"- Status: {quant.status()} | signals evaluated "
+             f"{quant.evaluated}, blocked for negative EV {quant.blocked}"]
+    model, naive = quant.brier()
+    if model is not None:
+        verdict = "beats" if model < naive else "does NOT beat"
+        lines.append(f"- Forecast quality (Brier, lower = better): model {model:.3f} vs base-rate {naive:.3f} "
+                     f"→ model {verdict} the naive base rate")
+    lines.append("- Score bucket → observed outcome of '+12% first / -6% first / neither in 60m' "
+                 "(trades + skipped tokens) | model now | avg net")
+    for c in quant.calibration():
+        if not c["n"]:
+            continue
+        o, m = c["observed"], c["model_now"]
+        lines.append(f"  - {c['bucket']}: n={c['n']} ({c['trades']} real) | ↑{o['up']:.0%} ↓{o['down']:.0%} "
+                     f"→{o['neither']:.0%} | model ↑{m['up']:.0%} ↓{m['down']:.0%} | {c['avg_net_pct']:+.1f}%")
+    _, r, _ = quant.probabilities(0.65)
+    lines.append(f"- Learned gross payoff per scenario: ↑ {r['up']:+.1f}% | ↓ {r['down']:+.1f}% | "
+                 f"→ {r['neither']:+.1f}%")
+    return lines
+
+
+def shadow_section(store: Store, t0: float, t1: float) -> list[str]:
+    rows = store.shadows_between(t0, t1)
+    if not rows:
+        return ["", "## Shadow tracking (60 min after every decision)", "- no completed follow-ups in this window yet"]
+    lines = ["", "## Shadow tracking (60 min after every decision)",
+             f"- {len(rows)} tokens followed to the end of their 60-minute window"]
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(f"{r['stage']}:{r['decision']}", []).append(r)
+    for g, rs in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        n = len(rs)
+        du = sum(r["desk_label"] == "up" for r in rs) / n
+        dd = sum(r["desk_label"] == "down" for r in rs) / n
+        mu = sum(r["model_label"] == "up" for r in rs) / n
+        md = sum(r["model_label"] == "down" for r in rs) / n
+        sim = sum(r["sim_net_pct"] or 0 for r in rs) / n
+        lines.append(f"  - {g} (n={n}): desk +12 first {du:.0%}, -6 first {dd:.0%} | model +60 first {mu:.0%}, "
+                     f"-30 first {md:.0%} | avg simulated desk trade {sim:+.1f}%")
+    missed = [r for r in rows if r["decision"] in ("reject", "kill", "reject_score") and r["model_label"] == "up"]
+    saved = [r for r in rows if r["decision"] in ("reject", "kill", "reject_score") and r["model_label"] == "down"]
+    lines.append(f"- Skipped tokens that hit +60% first (missed): {len(missed)} | hit -30% first (avoided): {len(saved)}")
+    reasons = Counter()
+    for r in missed:
+        reasons[(r["reason"] or "").split(":")[0][:40]] += 1
+    if reasons:
+        lines.append("- Missed winners were rejected for: " + ", ".join(f"{k} ×{v}" for k, v in reasons.most_common(5)))
+    for r in sorted(missed, key=lambda r: -r["max_pct"])[:5]:
+        lines.append(f"  - {r['symbol']}: max {r['max_pct']:+.0f}% / min {r['min_pct']:+.0f}% — {r['reason'][:110]}")
+    return lines
+
+
+def build_recap(store: Store, portfolio, mode: str, t0: float, t1: float, agents: dict | None = None,
+                quant=None) -> str:
     trades = store.trades_between(t0, t1)
     all_trades = store.all_trades()
     eq = store.equity_series(t0)
@@ -127,6 +183,8 @@ def build_recap(store: Store, portfolio, mode: str, t0: float, t1: float, agents
         lines += ["", "## Risk & incident log"]
         lines += [f"- {_ts(e['ts'])[11:]} [{e['agent']}] {e['symbol'] or ''} {e['message'][:180]}"
                   for e in risk_events[-25:]]
+    lines += quant_section(quant)
+    lines += shadow_section(store, t0, t1)
     if agents:
         lines += ["", "## Agent health"]
         for name, st in agents.items():

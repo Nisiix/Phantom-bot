@@ -22,6 +22,8 @@ from .context import Desk
 from .hub import Hub
 from .models import ClearanceAuthority
 from .portfolio import Portfolio
+from .quant import QuantModel
+from .shadow import shadow_to_outcome
 from .recap import live_gate_status
 from .store import Store
 from .terminal import Terminal, headless
@@ -58,6 +60,17 @@ async def build(cfg: Config) -> tuple[Desk, object]:
     portfolio = Portfolio(store, cfg.mode, starting)
     desk = Desk(cfg=cfg, hub=hub, store=store, http=http, dex=DexScreener(http), rug=RugCheck(http), jup=jup,
                 rpc=rpc, portfolio=portfolio, authority=ClearanceAuthority())
+    # QUANT learns from paper AND live outcomes (paper fills are priced on real quotes).
+    q = cfg.quant
+    desk.quant = QuantModel(min_samples_to_enforce=q.min_samples_to_enforce, min_ev_pct=q.min_ev_pct,
+                            prior_strength=q.prior_strength)
+    stores = [store] + ([Store(cfg.data_dir / "paper.db")] if cfg.is_live else [])
+    rows = []
+    for st in stores:
+        rows += [{**o, "weight": 1.0, "source": "trade"} for o in st.outcomes()]
+        rows += [shadow_to_outcome(r, q.shadow_weight) for r in st.shadow_samples()]
+        desk.quant.cost_samples += [o["rt_cost_pct"] for o in st.outcomes() if o["rt_cost_pct"]]
+    desk.quant.load(rows)
     if broker is None:
         broker = PaperBroker(portfolio)
     else:

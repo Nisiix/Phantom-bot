@@ -13,6 +13,7 @@ from .config import Config
 from .hub import Hub
 from .models import Candidate, ClearanceAuthority, ExitOrder, FilterPass, Verdict
 from .portfolio import Portfolio
+from .quant import QuantModel
 from .store import Store
 
 
@@ -28,6 +29,7 @@ class Desk:
     rpc: SolanaRPC
     portfolio: Portfolio
     authority: ClearanceAuthority
+    quant: QuantModel = field(default_factory=QuantModel)
     stop: asyncio.Event = field(default_factory=asyncio.Event)
     # Hand-off queues (the only paths between agents)
     candidates: asyncio.Queue[Candidate] = field(default_factory=lambda: asyncio.Queue(maxsize=5000))
@@ -39,3 +41,4 @@ class Desk:
     market_seen: dict[str, tuple] = field(default_factory=dict)  # Filter: mint -> (ts, vol_h1, liq_usd)
     creators: dict[str, str] = field(default_factory=dict)       # Scout/Filter: mint -> creator wallet
     in_flight: set[str] = field(default_factory=set)             # Executor: mints being bought/sold
+    shadow: object = None                                         # Logger: ShadowTracker (60-min follow-up)

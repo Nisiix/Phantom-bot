@@ -78,6 +78,7 @@ class Terminal:
         t.append(f"{day_pct:+.2f}%", style="green" if day_pct >= 0 else "red")
         t.append(f"   Open {len(pf.positions)}/{d.cfg.executor.max_open_positions}")
         t.append(f"   SOL ${usd:,.2f}" if usd else "")
+        t.append(f"   {d.quant.status()}", style="magenta")
         t.append(f"   Up {up // 3600}h{(up % 3600) // 60:02d}m   Recap in {nxt // 3600}h{(nxt % 3600) // 60:02d}m",
                  style="grey62")
         gate = []
@@ -105,9 +106,9 @@ class Terminal:
             "Scout": ("watching", "discovered", "sent", "dropped"),
             "Filter": ("evaluated", "passed", "rejected", "blacklisted"),
             "Analyst": ("scored", "approved", "rejected"),
-            "Executor": ("buys", "sells", "wins", "losses", "declined"),
+            "Executor": ("buys", "sells", "wins", "losses", "declined", "ev_block"),
             "Risk": ("open",),
-            "Logger": ("logged", "recaps"),
+            "Logger": ("logged", "shadowing", "shadow_done", "recaps"),
         }
         for name in AGENTS:
             st = self.desk.hub.agents[name]

@@ -83,6 +83,19 @@ class RiskCfg:
 
 
 @dataclass
+class QuantCfg:
+    enabled: bool = True
+    horizon_minutes: float = 60
+    min_samples_to_enforce: int = 30
+    min_ev_pct: float = 0.0
+    prior_strength: float = 10.0
+    shadow_tracking: bool = True
+    shadow_weight: float = 0.5
+    shadow_min_liquidity_usd: float = 5000.0
+    default_cost_pct: float = 2.5
+
+
+@dataclass
 class RecapCfg:
     interval_hours: float = 4
 
@@ -116,6 +129,7 @@ class Config:
     executor: ExecutorCfg = field(default_factory=ExecutorCfg)
     risk: RiskCfg = field(default_factory=RiskCfg)
     recap: RecapCfg = field(default_factory=RecapCfg)
+    quant: QuantCfg = field(default_factory=QuantCfg)
     live_gate: LiveGateCfg = field(default_factory=LiveGateCfg)
     secrets: Secrets = field(default_factory=Secrets)
     warnings: list[str] = field(default_factory=list)
@@ -174,6 +188,13 @@ def enforce_hard_limits(cfg: Config) -> None:
     for flag in ("require_mint_revoked", "reject_rug_linked_dev"):
         clamp(f, flag, lambda v: v is True, True, f"{flag} is mandatory")
     clamp(f, "min_lp_locked_pct", lambda v: 50.0 <= v <= 100.0, 95.0, "LP lock threshold must be 50-100%")
+    q = cfg.quant
+    clamp(q, "min_ev_pct", lambda v: v >= 0, 0.0, "QUANT may only demand a positive edge (min_ev_pct >= 0)")
+    clamp(q, "min_samples_to_enforce", lambda v: 10 <= v <= 500, 30, "QUANT warm-up must be 10-500 trades")
+    clamp(q, "horizon_minutes", lambda v: 5 <= v <= 24 * 60, 60.0, "QUANT horizon must be 5-1440 min")
+    clamp(q, "shadow_weight", lambda v: 0 <= v <= 1, 0.5, "shadow sample weight must be 0-1")
+    clamp(q, "default_cost_pct", lambda v: v >= 0.5, 2.5, "assumed round-trip cost must be >= 0.5%")
+    clamp(q, "prior_strength", lambda v: 1 <= v <= 200, 10.0, "QUANT prior strength must be 1-200")
     if cfg.mode not in ("paper", "live"):
         w.append(f"config: mode {cfg.mode!r} invalid, using 'paper'")
         cfg.mode = "paper"
@@ -203,7 +224,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()

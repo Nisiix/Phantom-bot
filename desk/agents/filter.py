@@ -234,6 +234,10 @@ class Filter(Agent):
 
     async def route(self, cand: Candidate, report: FilterReport) -> None:
         store = self.desk.store
+        if self.desk.shadow is not None and report.market is not None:
+            outcome = "pass" if report.passed else ("kill" if report.permanent_fail else "reject")
+            self.desk.shadow.start(report.mint, report.symbol, "filter", outcome, report.reason_text(),
+                                   report.market.price_usd, report.market.liquidity_usd)
         if report.passed:
             self.state.bump("passed")
             issued = now()

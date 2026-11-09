@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import httpx
 
 from ..recap import build_recap, next_recap_time
+from ..shadow import ShadowTracker
 from .base import Agent
 
 
@@ -24,6 +25,8 @@ class Logger(Agent):
         self.logfile = (self.dir / "desk.log").open("a", buffering=1)
         self.last_recap_path: str = ""
         self.next_recap: float = 0.0
+        self.shadow = ShadowTracker(desk, self.emit)
+        desk.shadow = self.shadow
 
     async def run(self) -> None:
         self.status("working")
@@ -34,7 +37,20 @@ class Logger(Agent):
                           f"(next {datetime.fromtimestamp(self.next_recap, timezone.utc):%H:%M} UTC), "
                           f"telegram={'on' if self._tg() else 'off'} discord={'on' if self._dc() else 'off'}")
         await asyncio.gather(self.supervised("persist", self.persist_loop),
-                             self.supervised("recap", self.recap_loop))
+                             self.supervised("recap", self.recap_loop),
+                             self.supervised("shadow", self.shadow_loop))
+
+    async def shadow_loop(self) -> None:
+        if not self.cfg.quant.shadow_tracking:
+            return
+        self.emit("info", f"Shadow tracker on: following every evaluated token for "
+                          f"{self.cfg.quant.horizon_minutes:g} min (desk +12/-6, model +60/-30)")
+        task = asyncio.create_task(self.shadow.loop())
+        while not self.desk.stop.is_set() and not task.done():
+            self.state.counters["shadowing"] = len(self.shadow.active)
+            self.state.counters["shadow_done"] = self.shadow.completed
+            await asyncio.sleep(2)
+        await task
 
     def _tg(self) -> bool:
         s = self.cfg.secrets
@@ -77,7 +93,8 @@ class Logger(Agent):
         t1 = t1 or time.time()
         hours = self.cfg.recap.interval_hours
         t0 = self.desk.store.kv_get("last_recap_ts", 0.0) or (t1 - hours * 3600)
-        text = build_recap(self.desk.store, self.desk.portfolio, self.cfg.mode, t0, t1, self.hub.agents)
+        text = build_recap(self.desk.store, self.desk.portfolio, self.cfg.mode, t0, t1, self.hub.agents,
+                           self.desk.quant)
         stamp = datetime.fromtimestamp(t1, timezone.utc).strftime("%Y%m%d_%H%M")
         path = self.cfg.data_dir / "reports" / f"recap_{self.cfg.mode}_{stamp}.md"
         path.write_text(text)

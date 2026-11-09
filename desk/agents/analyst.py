@@ -185,6 +185,9 @@ class Analyst(Agent):
         sig = self.signer.sign(Verdict.payload(rep.mint, score, trade, fp.signature, issued))
         verdict = Verdict(rep.mint, m.symbol, score, breakdown, why, web, fp, issued, sig, trade)
         self.state.bump("scored")
+        if self.desk.shadow is not None:
+            self.desk.shadow.start(rep.mint, m.symbol, "analyst", "approve" if trade else "reject_score",
+                                   "; ".join(why[:3]), m.price_usd, m.liquidity_usd, score=score)
         prev = self._last_logged.get(rep.mint)
         quiet = (not trade and prev is not None and abs(prev[0] - score) < 0.03 and issued - prev[1] < 600)
         if quiet:

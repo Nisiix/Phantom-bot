@@ -185,6 +185,11 @@ class Risk(Agent):
                     pos.last_price_ts = t
             if pos.mark_value_sol > pos.peak_value_sol:
                 pos.peak_value_sol = pos.mark_value_sol
+            # QUANT labels: remember when each barrier was first touched.
+            if not pos.hit_up_ts and pos.pnl_pct >= self.r.trail_activate_pct:
+                pos.hit_up_ts = t
+            if not pos.hit_down_ts and pos.pnl_pct <= self.r.hard_stop_pct:
+                pos.hit_down_ts = t
             if mint in self.exiting:
                 continue
             reason, detail = exit_decision(pos, self.r, t, liq)

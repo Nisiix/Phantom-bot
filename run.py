@@ -16,7 +16,9 @@ import time
 from desk.app import LiveRefused, run_desk
 from desk.config import load_config
 from desk.portfolio import Portfolio
+from desk.quant import QuantModel
 from desk.recap import build_recap, live_gate_status
+from desk.shadow import shadow_to_outcome
 from desk.store import Store
 
 
@@ -40,7 +42,11 @@ def main() -> int:
         store = Store(cfg.data_dir / f"{cfg.mode}.db")
         pf = Portfolio(store, cfg.mode, cfg.paper_starting_balance_sol)
         t1 = time.time()
-        print(build_recap(store, pf, cfg.mode, t1 - cfg.recap.interval_hours * 3600, t1))
+        quant = QuantModel(min_samples_to_enforce=cfg.quant.min_samples_to_enforce,
+                           min_ev_pct=cfg.quant.min_ev_pct, prior_strength=cfg.quant.prior_strength)
+        quant.load([{**o, "weight": 1.0, "source": "trade"} for o in store.outcomes()]
+                   + [shadow_to_outcome(r, cfg.quant.shadow_weight) for r in store.shadow_samples()])
+        print(build_recap(store, pf, cfg.mode, t1 - cfg.recap.interval_hours * 3600, t1, quant=quant))
         return 0
 
     try:

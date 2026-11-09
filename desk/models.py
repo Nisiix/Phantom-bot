@@ -197,6 +197,14 @@ class Position:
     last_price_ts: float = 0.0
     last_liquidity_usd: float = 0.0
     tx_in: str = ""
+    # QUANT bookkeeping: first time each barrier was touched, cost and forecast at entry
+    hit_up_ts: float = 0.0
+    hit_down_ts: float = 0.0
+    rt_cost_pct: float = 0.0
+    p_up: float = 0.0
+    p_down: float = 0.0
+    p_neither: float = 0.0
+    ev_pct: float = 0.0
 
     @property
     def pnl_pct(self) -> float:

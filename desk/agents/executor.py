@@ -6,7 +6,9 @@ It will only buy a token when ALL of these hold:
   * both clearances are fresh (clearance_ttl_seconds) and the score is >= 0.6;
   * Risk approves the entry (no averaging down, no revenge, cooldowns, limits);
   * the live buy quote's price impact and the buy->sell round-trip cost are acceptable
-    (catches honeypots, hidden taxes and thin books right before execution).
+    (catches honeypots, hidden taxes and thin books right before execution);
+  * QUANT: expected value after the measured round-trip cost is positive, using calibrated
+    probabilities of +12% first / -6% first / neither within 60 min (blocks only, never forces).
 Size = max_position_pct (<= 8%, hard ceiling) of the CURRENT balance. Never more.
 Exits ordered by Risk are always processed before new entries.
 """
@@ -19,6 +21,7 @@ from ..clients.jupiter import SOL_MINT
 from ..config import HARD_MAX_POSITION_PCT, HARD_MIN_SCORE
 from ..models import ExitOrder, FilterPass, Position, Verdict, now
 from ..portfolio import AveragingDownError
+from ..quant import label_outcome, outcome_row
 from .base import Agent
 
 
@@ -145,6 +148,13 @@ class Executor(Agent):
         if rt_loss > self.e.max_round_trip_loss_pct:
             return self.reject(v, f"round-trip cost {rt_loss:.2f}% > {self.e.max_round_trip_loss_pct}% "
                                   f"(tax/honeypot/thin book)")
+        cost = max(0.0, rt_loss)
+        quant = self.desk.quant
+        quant.cost_samples.append(cost)
+        qv = quant.evaluate(v.score, cost)
+        if self.cfg.quant.enabled and not qv.passes:
+            self.state.bump("ev_block")
+            return self.reject(v, qv.reason)
 
         fill = await self.broker.buy(v.mint, size, decimals, buy_q)
         if not fill.ok or fill.tokens <= 0:
@@ -154,12 +164,13 @@ class Executor(Agent):
         reason = (f"score {v.score:.2f} | {'; '.join(v.rationale[:5])} | filters: "
                   + ", ".join(f"{c.name}={c.value}" for c in rep.checks)
                   + f" | size {size:.4f} SOL = {self.e.max_position_pct}% of {cash:.3f} | impact {impact:.2f}% "
-                    f"| round-trip {rt_loss:.2f}%")
+                    f"| round-trip {rt_loss:.2f}% | {qv.short()}")
         pos = Position(
             mint=v.mint, symbol=v.symbol, tokens=fill.tokens, decimals=decimals, cost_sol=fill.sol,
             entry_price_sol=fill.sol / fill.tokens, entry_ts=now(), entry_liquidity_usd=snap.liquidity_usd,
             exit_cost_pct=max(0.0, rt_loss / 2), score=v.score, entry_reason=reason,
             mark_value_sol=fill.sol * (1 - max(0.0, rt_loss) / 100), tx_in=fill.tx,
+            rt_cost_pct=cost, p_up=qv.p["up"], p_down=qv.p["down"], p_neither=qv.p["neither"], ev_pct=qv.ev_pct,
         )
         pos.peak_value_sol = pos.mark_value_sol
         pos.last_price_ts = now()
@@ -171,10 +182,12 @@ class Executor(Agent):
         if self.broker.mode == "live":
             pf.set_cash(await self.broker.cash())
         self.state.bump("buys")
+        if self.desk.shadow is not None:
+            self.desk.shadow.mark_traded(v.mint)
         self.desk.store.add_decision(now(), "executor", "buy", v.mint, v.symbol, reason,
                                      {"breakdown": v.breakdown, "website": v.website.get("url"), "tx": fill.tx})
         self.emit("trade", f"BUY {fill.sol:.4f} SOL -> {fill.tokens:,.0f} {v.symbol} (score {v.score:.2f}, "
-                           f"impact {impact:.1f}%, rt {rt_loss:.1f}%)", v.mint, v.symbol, reason=reason, tx=fill.tx)
+                           f"impact {impact:.1f}%, rt {rt_loss:.1f}%, EV {qv.ev_pct:+.1f}%)", v.mint, v.symbol, reason=reason, tx=fill.tx)
 
     # ── exits ──
     async def handle_exit(self, order: ExitOrder) -> None:
@@ -201,7 +214,7 @@ class Executor(Agent):
             if not quote:
                 if order.reason in ("LIQUIDITY_PULL", "DATA_LOSS") and self.broker.mode == "paper":
                     trade = pf.close(order.mint, 0.0, f"{order.reason}: no route, marked total loss")
-                    self._finish(trade, order)
+                    self._finish(trade, order, pos)
                     return
                 self.emit("error", f"EXIT BLOCKED ({order.reason}): no sell route, retrying", order.mint, pos.symbol)
                 self.risk.exit_failed(order.mint)
@@ -214,13 +227,19 @@ class Executor(Agent):
             trade = pf.close(order.mint, fill.sol, f"{order.reason}: {order.detail}", fill.tx)
             if self.broker.mode == "live":
                 pf.set_cash(await self.broker.cash())
-            self._finish(trade, order)
+            self._finish(trade, order, pos)
         finally:
             self.desk.in_flight.discard(order.mint)
 
-    def _finish(self, trade: dict, order: ExitOrder) -> None:
+    def _finish(self, trade: dict, order: ExitOrder, pos: Position) -> None:
         self.risk.exit_done(order.mint)
         self.risk.record_result(trade)
+        # QUANT learning sample: which barrier did this trade touch first within the horizon?
+        label = label_outcome(pos.entry_ts, trade["exit_ts"], pos.hit_up_ts, pos.hit_down_ts, trade["pnl_pct"],
+                              self.cfg.quant.horizon_minutes * 60, self.cfg.risk.hard_stop_pct)
+        row = outcome_row(trade, pos, label, self.cfg.mode)
+        self.desk.store.add_outcome(row)
+        self.desk.quant.add(row)
         self.state.bump("sells")
         self.state.bump("wins" if trade["pnl_sol"] > 0 else "losses")
         self.desk.store.add_decision(now(), "executor", "sell", trade["mint"], trade["symbol"],
