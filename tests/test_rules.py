@@ -223,7 +223,7 @@ def test_top10_excludes_pools():
 
 # ── analyst ──
 def test_score_bounds_and_caps():
-    web = {"score": 0.8, "legit": 0.8, "tasty": 0.7, "flags": []}
+    web = {"url": "https://example.org", "score": 0.8, "legit": 0.8, "tasty": 0.7, "flags": []}
     rug = {"top10_pct": 9, "holders_total": 2500, "insider_pct": 3, "risks": []}
     good, _, _ = score_token(snap(), rug, web)
     assert 0.6 <= good <= 1.0
@@ -236,9 +236,30 @@ def test_score_bounds_and_caps():
 
 
 def test_no_falling_knife_or_late_entry():
-    web = {"score": 0.8, "legit": 0.8, "tasty": 0.7, "flags": []}
+    web = {"url": "https://example.org", "score": 0.8, "legit": 0.8, "tasty": 0.7, "flags": []}
     rug = {"top10_pct": 9, "holders_total": 2500, "insider_pct": 3, "risks": []}
     knife, _, why = score_token(snap(change_m5=-5.4), rug, web)
     assert knife < 0.6 and any("falling knife" in w for w in why)
     late, _, why = score_token(snap(change_h6=695), rug, web)
     assert late < 0.6 and any("late entry" in w for w in why)
+
+
+def test_missing_website_is_ignored_not_penalised():
+    rug = {"top10_pct": 9, "holders_total": 2500, "insider_pct": 3, "risks": []}
+    no_site = {"url": None, "score": 0.3, "legit": 0.35, "tasty": 0.2, "flags": ["no website"]}
+    dead_site = {"url": "https://dead.example", "score": 0.08, "legit": 0.1, "tasty": 0.0,
+                 "flags": ["website HTTP 404"]}
+    good_site = {"url": "https://good.example", "score": 0.9, "legit": 0.9, "tasty": 0.8, "flags": []}
+    none_s, b, why = score_token(snap(), rug, no_site)
+    dead_s, _, _ = score_token(snap(), rug, dead_site)
+    good_s, _, _ = score_token(snap(), rug, good_site)
+    assert any("no website" in w for w in why)
+    assert b["website"] == pytest.approx(0.8)  # only socials scored (twitter + telegram in snap())
+    # a missing site is neutral: better than a broken one, and only a strong real site beats it
+    assert dead_s < none_s
+    assert 0.0 <= none_s <= 1.0 and good_s > dead_s
+    # the result equals the score with the website share of the weight removed entirely
+    from desk.agents.analyst import WEIGHTS
+    w = dict(WEIGHTS); w["website"] *= 0.3
+    _, b2, _ = score_token(snap(), rug, no_site)
+    assert none_s == pytest.approx(sum(w[k] * b2[k] for k in w) / sum(w.values()), abs=1e-3)

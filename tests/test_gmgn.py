@@ -129,7 +129,7 @@ def test_rate_limit_block_pauses_all_calls():
 
 
 def test_smart_money_component_and_scripted_cap():
-    web = {"score": 0.8, "legit": 0.8, "tasty": 0.7, "flags": []}
+    web = {"url": "https://example.org", "score": 0.8, "legit": 0.8, "tasty": 0.7, "flags": []}
     base = {"top10_pct": 9, "holders_total": 2500, "insider_pct": 3, "risks": []}
     plain, b0, _ = score_token(snap(), base, web)
     smart, b1, _ = score_token(snap(), {**base, "gmgn": {"smart_wallets": 10, "renowned_wallets": 2}}, web)

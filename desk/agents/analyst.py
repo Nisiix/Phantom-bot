@@ -3,6 +3,9 @@
 Score = weighted blend of eight components (weights sum to 1):
   liquidity depth .14 | turnover (vol/liq) .10 | buy pressure .16 | momentum .12
   holder quality .14 | contract hygiene .08 | website & socials .16 | age/maturity .10
+The website part of "website & socials" (70% of that component) only counts when the token
+actually has a project website: with none listed (or website checks off) it is left out and the
+remaining weights are renormalised, so a missing site neither helps nor hurts the score.
 With GMGN data a ninth component, smart money (.10: smart/renowned wallets holding, penalised
 for fresh-wallet / bot / rat-trader crowds), is added and the others are scaled by 0.9.
 Then hard caps for wash trading, insider clusters and parabolic blow-off tops.
@@ -84,9 +87,15 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict) -> tuple[float, dict, l
     soc = m.socials or {}
     social_pts = (0.5 if "twitter" in soc else 0) + (0.3 if "telegram" in soc else 0) + \
                  (0.2 if len(soc) >= 3 else 0)
-    b["website"] = 0.7 * float(web.get("score", 0.3)) + 0.3 * social_pts
-    why.append(f"website {web.get('score', 0):.2f} (legit {web.get('legit', 0):.2f} / tasty "
-               f"{web.get('tasty', 0):.2f}), socials: {', '.join(soc) or 'none'}")
+    has_site = bool(web.get("url"))
+    if has_site:
+        b["website"] = 0.7 * float(web.get("score", 0.3)) + 0.3 * social_pts
+        why.append(f"website {web.get('score', 0):.2f} (legit {web.get('legit', 0):.2f} / tasty "
+                   f"{web.get('tasty', 0):.2f}), socials: {', '.join(soc) or 'none'}")
+    else:
+        # No website: only the socials share of this component is scored, the rest is ignored.
+        b["website"] = social_pts
+        why.append(f"no website (ignored in score), socials: {', '.join(soc) or 'none'}")
 
     age = m.age_minutes
     b["maturity"] = _band(age, 4, 25, 12 * 60, 7 * 24 * 60) * 0.85 + 0.15
@@ -111,7 +120,9 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict) -> tuple[float, dict, l
         if gm.get("dev_status") == "creator_close":
             b["hygiene"] = max(0.0, b["hygiene"] - 0.2)
             why.append("dev has sold out")
-    score = sum(weights[k] * b[k] for k in weights)
+    if not has_site:
+        weights["website"] *= 0.3
+    score = sum(weights[k] * b[k] for k in weights) / sum(weights.values())
 
     # Hard caps — any one of these makes the token untradeable regardless of the rest.
     caps = []
@@ -223,7 +234,8 @@ class Analyst(Agent):
                     self.web.inspect(pick_website(m.websites, extra), mint=m.mint, symbol=m.symbol,
                                      name=m.name, socials=socials), timeout=90)
             except asyncio.TimeoutError:
-                web = {"score": 0.2, "legit": 0.2, "tasty": 0.1, "flags": ["website check timed out"], "notes": []}
+                web = {"url": pick_website(m.websites, extra), "score": 0.2, "legit": 0.2, "tasty": 0.1,
+                       "flags": ["website check timed out"], "notes": []}
 
         score, breakdown, why = score_token(m, rep.rug, web)
         min_score = self.cfg.analyst.min_score
