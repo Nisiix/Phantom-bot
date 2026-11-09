@@ -23,6 +23,12 @@ from desk.store import Store
 
 
 def main() -> int:
+    # Windows consoles/pipes may default to cp1252: never crash on token names or chart glyphs.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description="Phantom Desk")
     ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate"])
     ap.add_argument("--mode", choices=["paper", "live"], help="override mode from config.toml")

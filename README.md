@@ -92,7 +92,20 @@ crashes or reboots. Then:
 | Is live unlocked? | `docker exec phantom-desk python run.py gate` |
 | Go live (after the gate passes) | set `mode = "live"` in `config.toml`, fill the LIVE section of `.env`, `docker compose up -d` |
 
-Without Docker: `pip install -r requirements.txt && python run.py` (add `--headless` for plain logs).
+### Run it on your own PC (Windows)
+1. Install **Python 3.12** from python.org (tick "Add python.exe to PATH") and **Git**.
+2. In PowerShell, from the project folder:
+   ```powershell
+   py -3.12 -m venv .venv
+   .\.venv\Scripts\Activate.ps1      # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+   pip install -r requirements.txt
+   copy .env.example .env             # then edit .env (Telegram, optional keys)
+   python run.py                      # live terminal; Ctrl-C stops (positions are saved)
+   ```
+   Use **Windows Terminal** for the full-screen dashboard. `python run.py --headless` prints plain log lines.
+3. The desk only runs while the PC is on and awake. For 24/7, use the VPS setup above.
+
+Linux/macOS: `python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && python run.py`.
 
 ## Honest limits
 * Memecoins can gap through a stop (a rug can take the price −90% between two polls).

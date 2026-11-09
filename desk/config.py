@@ -219,7 +219,7 @@ def enforce_hard_limits(cfg: Config) -> None:
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
         return
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -233,7 +233,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     _load_dotenv(ROOT / ".env")
     raw: dict = {}
     if path.exists():
-        raw = tomllib.loads(path.read_text())
+        raw = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     cfg = Config()
     w = cfg.warnings
     cfg.mode = str(raw.get("mode", cfg.mode)).lower()

@@ -22,7 +22,7 @@ class Logger(Agent):
         self.dir = self.cfg.data_dir / self.cfg.mode
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.cfg.data_dir / "reports").mkdir(parents=True, exist_ok=True)
-        self.logfile = (self.dir / "desk.log").open("a", buffering=1)
+        self.logfile = (self.dir / "desk.log").open("a", buffering=1, encoding="utf-8")
         self.last_recap_path: str = ""
         self.next_recap: float = 0.0
         self.shadow = ShadowTracker(desk, self.emit)
@@ -76,7 +76,7 @@ class Logger(Agent):
                 self.logfile.write(f"{stamp} [{ev.agent:<8}] {ev.kind.upper():<6} "
                                    f"{(ev.symbol or '')[:12]:<12} {ev.message}\n")
             if ev.kind == "trade":
-                with (self.dir / "trades.jsonl").open("a") as fh:
+                with (self.dir / "trades.jsonl").open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps({"ts": ev.ts, "symbol": ev.symbol, "mint": ev.mint,
                                          "message": ev.message, **ev.data}, default=str) + "\n")
 
@@ -97,7 +97,7 @@ class Logger(Agent):
                            self.desk.quant)
         stamp = datetime.fromtimestamp(t1, timezone.utc).strftime("%Y%m%d_%H%M")
         path = self.cfg.data_dir / "reports" / f"recap_{self.cfg.mode}_{stamp}.md"
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         self.last_recap_path = str(path)
         self.desk.store.kv_set("last_recap_ts", t1)
         self.next_recap = next_recap_time(t1 + 1, hours)
