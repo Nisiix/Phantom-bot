@@ -58,7 +58,7 @@ class Risk(Agent):
         self.pause_until: float = s.get("pause_until", 0.0)
         self.day: str = s.get("day", "")
         self.day_start_equity: float = s.get("day_start_equity", 0.0)
-        self.day_halted: bool = s.get("day_halted", False)
+        self.day_halted: bool = s.get("day_halted", False) and self.cfg.is_live
         self.history: dict[str, dict] = s.get("history", {})   # mint -> {ts, pnl_sol}
         self.exiting: dict[str, float] = {}
         self.trail_announced: set[str] = set()
@@ -88,7 +88,7 @@ class Risk(Agent):
             return False, "no revenge trades: we already lost on this token"
         if h and t - h.get("ts", 0) < 6 * 3600:
             return False, "traded this token in the last 6h"
-        if self.day_halted:
+        if self.day_halted and self.cfg.is_live:
             return False, f"daily loss limit hit (-{self.r.daily_loss_limit_pct}%), entries halted until UTC midnight"
         if t < self.pause_until:
             return False, f"losing-streak pause ({(self.pause_until - t) / 60:.0f} min left)"
@@ -151,7 +151,8 @@ class Risk(Agent):
                     pf.set_sol_usd(px or await self.desk.jup.sol_usd())
                 except Exception as e:  # noqa: BLE001
                     self.emit("warn", f"SOL price refresh failed: {e}")
-            if self.day_start_equity > 0 and not self.day_halted:
+            # Daily loss limit applies to live trading only; paper keeps trading to collect data.
+            if self.cfg.is_live and self.day_start_equity > 0 and not self.day_halted:
                 dd = (pf.equity_sol / self.day_start_equity - 1) * 100
                 if dd <= -self.r.daily_loss_limit_pct:
                     self.day_halted = True

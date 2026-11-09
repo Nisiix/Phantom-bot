@@ -78,7 +78,7 @@ trail_distance_pct = 6.0      # trailing stop distance below the peak
 cooldown_after_loss_minutes = 20     # no revenge trading: pause new entries after a loss
 max_consecutive_losses = 3           # ...and a longer pause after a losing streak
 streak_pause_minutes = 90
-daily_loss_limit_pct = 10.0          # halt new entries for the day after -10% equity
+daily_loss_limit_pct = 30.0          # live only: halt new entries for the day after -30% equity (ignored in paper)
 liquidity_drop_exit_pct = 35.0       # emergency exit if pool liquidity drops this much
 max_hold_minutes = 0                 # 0 = no time stop
 price_poll_seconds = 2.0
