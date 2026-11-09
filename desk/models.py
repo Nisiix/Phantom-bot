@@ -206,6 +206,7 @@ class Position:
     p_down: float = 0.0
     p_neither: float = 0.0
     ev_pct: float = 0.0
+    regime: dict = field(default_factory=dict)   # market regime at entry (measurement only)
 
     @property
     def pnl_pct(self) -> float:

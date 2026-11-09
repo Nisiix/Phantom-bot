@@ -105,6 +105,8 @@ shadow_tracking = true          # follow every evaluated token (bought or skippe
 shadow_weight = 0.5             # a skipped-token outcome counts half a real trade
 shadow_min_liquidity_usd = 5000 # don't follow untradeable dust
 default_cost_pct = 2.5          # assumed round-trip cost until real quotes have been measured
+market_regime = true            # MEASUREMENT ONLY: store BTC / SOL / memecoin 1h & 24h moves with every
+                                # shadow row and trade; `run.py research` compares outcomes by regime
 
 [gmgn]
 # Optional wallet intelligence from GMGN (paid OpenAPI, Plus plan or better).

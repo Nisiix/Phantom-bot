@@ -87,7 +87,8 @@ def main() -> int:
         from desk.research import build_research
         store = Store(cfg.data_dir / f"{cfg.mode}.db")
         since = time.time() - args.days * 86400 if args.days else 0
-        print(build_research(store.shadow_research_rows(args.stage, since), args.stage))
+        print(build_research(store.shadow_research_rows(args.stage, since), args.stage,
+                             trades=[t for t in store.all_trades() if (t["entry_ts"] or 0) >= since]))
         return 0
 
     if args.command == "wallet":

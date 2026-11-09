@@ -250,6 +250,7 @@ class Executor(Agent):
             exit_cost_pct=max(0.0, rt_loss / 2), score=v.score, entry_reason=reason,
             mark_value_sol=fill.sol * (1 - max(0.0, rt_loss) / 100), tx_in=fill.tx,
             rt_cost_pct=cost, p_up=qv.p["up"], p_down=qv.p["down"], p_neither=qv.p["neither"], ev_pct=qv.ev_pct,
+            regime=self.desk.market.snapshot() if self.desk.market is not None else {},
         )
         pos.peak_value_sol = pos.mark_value_sol
         pos.last_price_ts = now()

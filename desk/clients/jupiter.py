@@ -89,6 +89,10 @@ class Jupiter:
                                    retries=2, lane="exec", timeout=60.0)
         return res or {}
 
+    async def prices(self, mints: list[str]) -> dict:
+        """Price API v3: {mint: {"usdPrice": .., "priceChange24h": .., ...}} for up to 50 mints."""
+        return await self.http.get(f"{BASE}/price/v3", params={"ids": ",".join(mints)}, retries=2) or {}
+
     async def sol_usd(self) -> float:
         data = await self.http.get(f"{BASE}/price/v3", params={"ids": SOL_MINT}, retries=2) or {}
         return float((data.get(SOL_MINT) or {}).get("usdPrice") or 0.0)

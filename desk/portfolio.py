@@ -77,7 +77,8 @@ class Portfolio:
             "pnl_pct": (proceeds_sol / pos.cost_sol - 1) * 100 if pos.cost_sol else 0.0,
             "peak_pnl_pct": pos.peak_pnl_pct, "score": pos.score,
             "entry_reason": pos.entry_reason, "exit_reason": reason,
-            "tx_in": pos.tx_in, "tx_out": tx_out, "data": extra or {},
+            "tx_in": pos.tx_in, "tx_out": tx_out,
+            "data": {**(extra or {}), **({"regime": pos.regime} if pos.regime else {})},
         }
         self.store.add_trade(trade)
         return trade

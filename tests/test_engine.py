@@ -168,3 +168,62 @@ def test_shadow_rows_keep_features(tmp_path):
     st._store(s)
     rows = desk.store.shadow_research_rows("analyst")
     assert json.loads(rows[0]["features"])["source"] == "pumpfun:new"
+
+
+def test_market_regime_snapshot_and_crash_flag(tmp_path):
+    from desk.market import BTC_MINT, MEME_BASKET, MarketRegime, is_crash
+    from desk.clients.jupiter import SOL_MINT
+    mr = MarketRegime()
+    t0 = 1_700_000_000.0
+    memes = list(MEME_BASKET)
+    for i in range(61):                       # one sample a minute for an hour
+        t = t0 + i * 60
+        btc = 100_000 * (1 - 0.03 * i / 60)  # BTC -3% over the hour
+        prices = {BTC_MINT: {"usdPrice": btc, "priceChange24h": -4.0},
+                  SOL_MINT: {"usdPrice": 150.0, "priceChange24h": 1.0}}
+        prices.update({m: {"usdPrice": 1.0 + 0.01 * i / 60, "priceChange24h": 2.0} for m in memes})
+        mr.record(prices, t)
+    for i in range(12):
+        mr.note_launch(10.0 + i, 80_000.0, t)
+    s = mr.snapshot(t)
+    assert round(s["mkt_btc_h1"], 1) == -3.0 and s["mkt_sol_h1"] == 0.0
+    assert round(s["mkt_meme_h1"], 1) == 1.0 and s["mkt_btc_h24"] == -4.0
+    assert s["mkt_launch_h1"] == 15.5 and s["mkt_launch_vol"] == 80_000.0
+    assert is_crash(s) is True
+    assert is_crash({**s, "mkt_btc_h1": -0.5}) is False
+    assert is_crash({}) is None
+    # Less than an hour of history: no 1h change rather than a wrong one.
+    young = MarketRegime()
+    young.record({BTC_MINT: {"usdPrice": 1.0}}, t0)
+    young.record({BTC_MINT: {"usdPrice": 2.0}}, t0 + 600)
+    assert young.snapshot(t0 + 600)["mkt_btc_h1"] is None
+
+
+def test_research_reports_outcomes_by_market_regime():
+    rnd = random.Random(3)
+    rows = []
+    for i in range(240):
+        crash = i % 4 == 0
+        f = {"score": 0.7, "mkt_btc_h1": -3.0 if crash else rnd.uniform(-1, 1), "mkt_sol_h1": 0.0,
+             "mkt_meme_h1": 0.0}
+        win = rnd.random() < (0.1 if crash else 0.5)
+        rows.append(_row(i, f, "up" if win else "down", 10.0 if win else -7.0))
+    trades = [{"pnl_pct": -6.0, "entry_ts": 1, "data": json.dumps({"regime": {"mkt_btc_h1": -3.0}})},
+              {"pnl_pct": 12.0, "entry_ts": 1, "data": json.dumps({"regime": {"mkt_btc_h1": 0.2}})},
+              {"pnl_pct": 5.0, "entry_ts": 1, "data": "{}"}]
+    text = build_research(rows, trades=trades)
+    assert "By market regime" in text and "crash hours" in text and "CLEAR difference" in text
+    assert "Real trades by market regime" in text
+    old = [_row(i, {"score": 0.7}, "up", 10.0) for i in range(40)]
+    assert "No regime data yet" in build_research(old)
+
+
+def test_shadow_rows_carry_market_regime(tmp_path):
+    from desk.market import MarketRegime
+    from desk.shadow import ShadowTracker
+    desk = make_desk(tmp_path)
+    desk.market = MarketRegime()
+    st = ShadowTracker(desk, lambda *a, **k: None)
+    st.start("M", "TST", "filter", "reject", "r", 0.001, 80_000, features=market_features(snap(), "x"))
+    f = st.active["M:filter"].features
+    assert "mkt_btc_h1" in f and len(desk.market.launches) == 1

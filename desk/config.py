@@ -99,6 +99,7 @@ class QuantCfg:
     shadow_weight: float = 0.5
     shadow_min_liquidity_usd: float = 5000.0
     default_cost_pct: float = 2.5
+    market_regime: bool = True        # record BTC/SOL/meme regime with every shadow row & trade (no blocking)
 
 
 @dataclass

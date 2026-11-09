@@ -53,6 +53,15 @@ intervals overlap are marked as noise. It also breaks results down by discovery 
 and score threshold. `--days 7` limits it to recent data, `--stage filter` includes everything the
 Filter saw. It describes past memecoins, not future ones: use it to choose what to paper-test next.
 
+### Market regime (measurement only)
+With `market_regime = true` (in `[quant]`) the desk reads BTC (cbBTC), SOL and a basket of large Solana
+memecoins (BONK, WIF, POPCAT, FARTCOIN, TRUMP, PNUT) from Jupiter's price API once a minute, plus the
+median 1h move and volume of the new tokens the Filter is screening. That snapshot is stored with every
+shadow row and every real trade. `python run.py research` then adds a "By market regime" section:
+"crash hours" (BTC 1h <= -2%, SOL 1h <= -3% or meme index 1h <= -5%) against normal hours, and outcomes
+per bucket of each regime value. Nothing blocks entries on it: an entry block is worth adding only if
+this report shows a clear difference over several weeks of data.
+
 ## Engine
 * Filter runs in two stages: a batched market screen, then a priority queue of deep checks
   (graduations and smart-money signals first, then by volume) with `deep_workers` in parallel.

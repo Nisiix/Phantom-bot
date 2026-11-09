@@ -121,6 +121,11 @@ class ShadowTracker:
         key = f"{mint}:{stage}"
         if key in self.started:
             return
+        market = self.desk.market
+        if market is not None and features is not None:
+            if stage == "filter":
+                market.note_launch(features.get("chg_h1"), features.get("vol_h1"))   # launch breadth
+            features = {**features, **market.snapshot()}     # regime at decision time (measurement only)
         if stage == "filter" and (liq_usd < self.cfg.quant.shadow_min_liquidity_usd
                                   or len(self.active) >= self.max_active):
             return                       # untradeable dust, or at capacity (analyst rows always go in)

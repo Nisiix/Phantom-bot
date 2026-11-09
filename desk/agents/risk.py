@@ -146,7 +146,9 @@ class Risk(Agent):
             if t - self._last_solpx > 60:
                 self._last_solpx = t
                 try:
-                    pf.set_sol_usd(await self.desk.jup.sol_usd())
+                    # One call refreshes SOL/USD and the market regime (BTC, SOL, meme basket).
+                    px = await self.desk.market.refresh() if self.desk.market is not None else 0.0
+                    pf.set_sol_usd(px or await self.desk.jup.sol_usd())
                 except Exception as e:  # noqa: BLE001
                     self.emit("warn", f"SOL price refresh failed: {e}")
             if self.day_start_equity > 0 and not self.day_halted:

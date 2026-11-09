@@ -78,6 +78,9 @@ async def build(cfg: Config) -> tuple[Desk, object]:
         rows += [shadow_to_outcome(r, q.shadow_weight) for r in st.shadow_samples()]
         desk.quant.cost_samples += [o["rt_cost_pct"] for o in st.outcomes() if o["rt_cost_pct"]]
     desk.quant.load(rows)
+    if q.market_regime:
+        from .market import MarketRegime
+        desk.market = MarketRegime(jup, store)
     if cfg.gmgn.enabled and cfg.secrets.gmgn_api_key:
         from .clients.gmgn import Gmgn
         desk.gmgn = Gmgn(cfg.secrets.gmgn_api_key, cfg.gmgn.plan)

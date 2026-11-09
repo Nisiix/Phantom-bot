@@ -9,6 +9,8 @@ holder data, the Analyst's component scores). This module turns those rows into 
   * per signal: the rows split into thirds (low / mid / high value) with hit rates and average
     simulated return, plus a 95% interval, ranked by how much the signal separates outcomes;
   * by discovery source and by UTC time of day;
+  * by market regime: BTC / SOL / meme index moves at decision time, "crash hours" vs normal hours,
+    for shadow rows and for real trades (measurement only: nothing blocks entries on it);
   * score thresholds: what trading only above 0.55 / 0.60 / ... would have returned.
 
 It is descriptive, not a promise: a split that looked good on a few hundred memecoins can vanish
@@ -21,6 +23,8 @@ import json
 import math
 import statistics
 from datetime import datetime, timezone
+
+from .market import CRASH, is_crash
 
 # Signals reported, with a readable label. Missing values are simply skipped.
 SIGNALS = {
@@ -49,7 +53,26 @@ SIGNALS = {
     "c_website": "score: website & socials",
     "c_maturity": "score: age",
     "c_smart_money": "score: smart money",
+    # market regime at decision time (desk/market.py, measurement only)
+    "mkt_btc_h1": "market: BTC 1h %",
+    "mkt_sol_h1": "market: SOL 1h %",
+    "mkt_meme_h1": "market: meme index 1h %",
+    "mkt_btc_h24": "market: BTC 24h %",
+    "mkt_sol_h24": "market: SOL 24h %",
+    "mkt_meme_h24": "market: meme index 24h %",
+    "mkt_launch_h1": "market: new launches median 1h %",
+    "mkt_launch_vol": "market: new launches median 1h vol",
 }
+
+# Fixed bucket edges per regime feature (same edges every week, so reports stay comparable).
+REGIME_BUCKETS = {
+    "mkt_btc_h1": ("BTC 1h", (-2.0, -0.5, 0.5, 2.0)),
+    "mkt_sol_h1": ("SOL 1h", (-3.0, -1.0, 1.0, 3.0)),
+    "mkt_meme_h1": ("meme index 1h", (-5.0, -1.5, 1.5, 5.0)),
+    "mkt_btc_h24": ("BTC 24h", (-5.0, -1.5, 1.5, 5.0)),
+    "mkt_launch_h1": ("new launches median 1h", (-20.0, 0.0, 20.0, 60.0)),
+}
+BUCKET_NAMES = ("crash", "down", "flat", "up", "strong up")
 
 
 def market_features(m, source: str = "") -> dict:
@@ -156,7 +179,84 @@ def _line(name: str, s: dict) -> str:
             f"+60% {s['p_moon']:>4.0%}  avg {s['avg']:+6.2f}% [{s['lo']:+.1f}, {s['hi']:+.1f}]")
 
 
-def build_research(raw_rows: list[dict], stage: str = "analyst", min_rows: int = 30) -> str:
+def _bucket(v: float, edges: tuple) -> int:
+    for i, e in enumerate(edges):
+        if v <= e:
+            return i
+    return len(edges)
+
+
+def _bucket_label(i: int, edges: tuple) -> str:
+    lo = "" if i == 0 else f"{edges[i - 1]:+g}"
+    hi = "" if i == len(edges) else f"{edges[i]:+g}"
+    rng = f"<= {hi}%" if not lo else (f"> {lo}%" if not hi else f"{lo}..{hi}%")
+    return f"{BUCKET_NAMES[i]} ({rng})"
+
+
+def _separated(a: dict, b: dict) -> bool:
+    return a["n"] > 1 and b["n"] > 1 and (a["lo"] > b["hi"] or b["lo"] > a["hi"])
+
+
+def regime_section(rows: list[dict], trades: list[dict] | None = None, min_rows: int = 10) -> list[str]:
+    """Outcomes split by the market regime at decision time. Empty if no row carries regime data yet."""
+    with_regime = [r for r in rows if is_crash(r["f"]) is not None]
+    lines = ["## By market regime (BTC / SOL / memecoins at decision time)"]
+    if not with_regime:
+        return lines + ["No regime data yet: it is recorded from this version on (market_regime = true).", ""]
+    first = min(r["start_ts"] for r in with_regime)
+    lines.append(f"{len(with_regime)} of {len(rows)} tokens carry regime data "
+                 f"(since {datetime.fromtimestamp(first, timezone.utc):%Y-%m-%d %H:%M} UTC).")
+    crash = [r for r in with_regime if is_crash(r["f"])]
+    calm = [r for r in with_regime if not is_crash(r["f"])]
+    rule = " or ".join(f"{SIGNALS[k].split(': ')[1].replace(' %', '')} <= {v:g}%" for k, v in CRASH.items())
+    lines.append(f"Crash hour = {rule}.")
+    lines.append(_line("normal hours", _summary(calm)) if calm else "  normal hours: none")
+    lines.append(_line("crash hours", _summary(crash)) if crash else "  crash hours: none yet")
+    if len(crash) >= min_rows and len(calm) >= min_rows:
+        verdict = ("CLEAR difference (95% intervals do not overlap)" if _separated(_summary(crash), _summary(calm))
+                   else "no clear difference yet (intervals overlap)")
+    else:
+        verdict = f"too few crash-hour tokens to judge (need {min_rows} on each side)"
+    lines += [f"  -> {verdict}", ""]
+    for key, (name, edges) in REGIME_BUCKETS.items():
+        groups: dict[int, list[dict]] = {}
+        for r in with_regime:
+            v = r["f"].get(key)
+            if isinstance(v, (int, float)):
+                groups.setdefault(_bucket(float(v), edges), []).append(r)
+        if not groups:
+            continue
+        lines.append(f"- {name}")
+        lines += [_line(_bucket_label(i, edges), _summary(groups[i])) for i in sorted(groups)]
+    lines.append("")
+    if trades:
+        tr = [t for t in trades if (t.get("regime") or {}) and is_crash(t["regime"]) is not None]
+        if tr:
+            lines.append("## Real trades by market regime at entry")
+            for name, sel in (("normal hours", [t for t in tr if not is_crash(t["regime"])]),
+                              ("crash hours", [t for t in tr if is_crash(t["regime"])])):
+                if sel:
+                    wins = sum(t["pnl_pct"] > 0 for t in sel) / len(sel)
+                    avg = statistics.fmean(t["pnl_pct"] for t in sel)
+                    lines.append(f"  {name:<28} n={len(sel):<5} winners {wins:>4.0%}  avg {avg:+6.2f}%")
+            lines.append("")
+    return lines
+
+
+def trades_with_regime(raw: list[dict]) -> list[dict]:
+    out = []
+    for t in raw:
+        try:
+            d = json.loads(t.get("data") or "{}")
+        except ValueError:
+            continue
+        if isinstance(d, dict) and d.get("regime"):
+            out.append({**t, "regime": d["regime"]})
+    return out
+
+
+def build_research(raw_rows: list[dict], stage: str = "analyst", min_rows: int = 30,
+                   trades: list[dict] | None = None) -> str:
     rows = parse_rows(raw_rows)
     lines = [f"# Signal research — {stage} stage, {len(rows)} tokens followed for 60 min", ""]
     if len(rows) < min_rows:
@@ -190,6 +290,8 @@ def build_research(raw_rows: list[dict], stage: str = "analyst", min_rows: int =
     lines.append("## By time of day")
     lines += [_line(k, _summary(v)) for k, v in sorted(by_hour.items())]
     lines.append("")
+
+    lines += regime_section(rows, trades_with_regime(trades or []))
 
     scored = [r for r in rows if isinstance(r["f"].get("score"), (int, float))]
     if scored:
