@@ -49,7 +49,9 @@ def _band(x: float, lo0: float, lo1: float, hi1: float, hi0: float) -> float:
     return 1.0
 
 
-def score_token(m: MarketSnapshot, rug: dict, web: dict) -> tuple[float, dict, list[str]]:
+def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[float, dict, list[str]]:
+    from ..config import AnalystCfg
+    cfg = cfg or AnalystCfg()
     b: dict[str, float] = {}
     why: list[str] = []
 
@@ -135,10 +137,14 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict) -> tuple[float, dict, l
         caps.append(("wash-trading pattern (turnover > 15x)", 0.45))
     if ins > 40:
         caps.append((f"insider clusters hold {ins:.0f}%", 0.4))
-    if m.change_h1 > 400 or m.change_m5 > 60:
-        caps.append(("parabolic blow-off, chasing risk", 0.5))
-    if m.change_h6 > 500:
-        caps.append((f"late entry: already {m.change_h6:+.0f}% in 6h", 0.5))
+    # Age-aware: for a young token the 1h/6h change counts from its launch/graduation, so only a true blow-off
+    # is capped; a token older than young_age_hours may have pumped already and gets stricter caps.
+    old_token = age >= cfg.young_age_hours * 60
+    h1_cap = cfg.old_parabolic_h1_pct if old_token else 400.0
+    if m.change_h1 > h1_cap or m.change_m5 > 60:
+        caps.append((f"parabolic blow-off, chasing risk ({m.change_h1:+.0f}% 1h / {m.change_m5:+.0f}% 5m)", 0.5))
+    if old_token and m.change_h6 > cfg.old_late_entry_h6_pct:
+        caps.append((f"late entry: {age / 60:.1f}h old and already {m.change_h6:+.0f}% in 6h", 0.5))
     if m.change_m5 <= -5:
         caps.append((f"falling knife: {m.change_m5:+.1f}% in the last 5 min", 0.55))
     if web.get("flags") and any("scam" in f or "drainer" in f for f in web["flags"]):
@@ -245,7 +251,7 @@ class Analyst(Agent):
                 web = {"url": pick_website(m.websites), "score": 0.2, "legit": 0.2, "tasty": 0.1,
                        "flags": ["website check timed out"], "notes": []}
 
-        score, breakdown, why = score_token(m, rep.rug, web)
+        score, breakdown, why = score_token(m, rep.rug, web, self.cfg.analyst)
         min_score = self.cfg.analyst.min_score
         trade = score >= min_score
         issued = now()

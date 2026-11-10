@@ -41,6 +41,10 @@ class FilterCfg:
     onchain_lp_check: bool = True       # read LP locks / concentrated-pool owners from the chain (desk/onchain_lp.py)
     max_top10_pct: float = 20.0
     min_volume_h1_usd: float = 50_000.0
+    # A token younger than volume_full_after_minutes can't have a full hour of volume yet: it must show the same
+    # pace instead ($50k/h -> $12.5k after 15 min), never less than volume_min_fraction of the floor.
+    volume_full_after_minutes: float = 60.0
+    volume_min_fraction: float = 0.2
     reject_rug_linked_dev: bool = True
     require_freeze_revoked: bool = True
     reject_dangerous_token2022: bool = True
@@ -59,6 +63,12 @@ class AnalystCfg:
     claude_website_review: bool = True
     claude_model: str = "claude-opus-5-5"
     workers: int = 3                    # tokens scored in parallel (a slow website no longer blocks the rest)
+    # Age-aware caution. For a token younger than young_age_hours DexScreener's "6h" change is its whole life
+    # (since launch / graduation), so it is not a sign of a late entry: only the parabolic cap applies.
+    # Older tokens may have pumped already: stricter caps.
+    young_age_hours: float = 4.0
+    old_late_entry_h6_pct: float = 300.0   # older token up more than this in 6h -> capped (young: no 6h cap)
+    old_parabolic_h1_pct: float = 200.0    # older token up more than this in 1h -> capped (young: 400%)
 
 
 @dataclass
@@ -217,6 +227,13 @@ def enforce_hard_limits(cfg: Config) -> None:
           "trail distance must be between 0 and 12%")
     clamp(f, "max_top10_pct", lambda v: 0 < v <= HARD_MAX_TOP10_PCT, HARD_MAX_TOP10_PCT,
           "top-10 holder ceiling can never exceed 20%")
+    clamp(f, "volume_full_after_minutes", lambda v: 15.0 <= v <= 60.0, 60.0,
+          "the young-token volume pace must reach the full floor within 15-60 minutes")
+    clamp(f, "volume_min_fraction", lambda v: 0.1 <= v <= 1.0, 0.2,
+          "a young token needs at least 10% of the volume floor")
+    clamp(a, "old_late_entry_h6_pct", lambda v: 0 < v <= 500.0, 300.0, "late-entry cap can never exceed +500% in 6h")
+    clamp(a, "old_parabolic_h1_pct", lambda v: 0 < v <= 400.0, 200.0, "parabolic cap can never exceed +400% in 1h")
+    clamp(a, "young_age_hours", lambda v: 0 <= v <= 6.0, 4.0, "a token counts as young for at most 6 hours")
     clamp(f, "min_volume_h1_usd", lambda v: v >= HARD_MIN_VOLUME_H1_USD, HARD_MIN_VOLUME_H1_USD,
           "1h volume floor can never be below $50k")
     for flag in ("require_mint_revoked", "reject_rug_linked_dev"):

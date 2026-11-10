@@ -6,7 +6,7 @@ Mandatory kills (user rules):
                                                     DLMM/CLMM pools have no LP token and are capped instead;
                                                     LP locks and pool owners re-read on-chain, desk/onchain_lp.py)
   3. top-10 holders > 20%                          (pools / bonding curve excluded)
-  4. last-hour volume < $50k                       (all pairs)
+  4. last-hour volume < $50k                       (all pairs; a token younger than 1h needs the same pace)
   5. dev wallet connected to previous rugs         (RugCheck creator history, our own
                                                     rug ledger, serial dead-launch pattern)
 Extra capital-preservation kills (config): freeze authority, dangerous Token-2022
@@ -256,12 +256,25 @@ class Filter(Agent):
             return FilterReport(cand.mint, sym, False, checks, market=snap)
         return None
 
+    def volume_floor(self, snap: MarketSnapshot) -> float:
+        """$50k/h for a token at least an hour old; the same PACE for a younger one (it can't have a full hour
+        of volume yet, and waiting for it means buying after the pump), never under volume_min_fraction."""
+        f = self.f
+        age = snap.age_minutes if snap.pair_created_at else None
+        if age is None or age >= f.volume_full_after_minutes:
+            return f.min_volume_h1_usd
+        return f.min_volume_h1_usd * max(f.volume_min_fraction, age / f.volume_full_after_minutes)
+
     def _market_checks(self, snap: MarketSnapshot) -> list[Check]:
         f = self.f
+        floor = self.volume_floor(snap)
+        young = floor < f.min_volume_h1_usd
+        label = f"${floor:,.0f}" + (f" (age {snap.age_minutes:.0f} min, pace of ${f.min_volume_h1_usd:,.0f}/h)"
+                                    if young else "")
         return [
-            Check("volume_1h", snap.volume_h1 >= f.min_volume_h1_usd, round(snap.volume_h1),
-                  f.min_volume_h1_usd, f"${snap.volume_h1:,.0f}/h < ${f.min_volume_h1_usd:,.0f}"
-                  if snap.volume_h1 < f.min_volume_h1_usd else f"${snap.volume_h1:,.0f}/h"),
+            Check("volume_1h", snap.volume_h1 >= floor, round(snap.volume_h1), round(floor),
+                  f"${snap.volume_h1:,.0f}/h < {label}" if snap.volume_h1 < floor
+                  else f"${snap.volume_h1:,.0f}/h" + (f" >= {label}" if young else "")),
             Check("liquidity", snap.liquidity_usd >= f.min_liquidity_usd, round(snap.liquidity_usd),
                   f.min_liquidity_usd, f"${snap.liquidity_usd:,.0f}"),
         ]
