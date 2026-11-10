@@ -48,6 +48,10 @@ class Scout(Agent):
                  creator: str | None = None, pair: str | None = None, urgent: bool = False) -> None:
         if not mint or mint in self.desk.blacklist:
             return
+        from ..controller import source_key
+        sec, key = source_key(source)
+        if not getattr(getattr(self.cfg, sec, None), key, True):
+            return            # source switched off at runtime (e.g. by the Controller)
         if creator:
             self.desk.creators.setdefault(mint, creator)
         w = self.watch.get(mint)

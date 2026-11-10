@@ -126,6 +126,26 @@ max_funding_cluster_pct = 15.0   # % supply held by wallets funded by the same w
 serial_min_launches = 10         # dev with >= 10 launches and...
 serial_max_graduation = 0.05     # ...<= 5% graduated -> permanent kill (and added to rug ledger)
 
+[controller]
+# CONTROLLORE: checks that the other agents behave (every health_seconds) and, every interval_minutes,
+# replays different settings on the tokens the desk already followed for 60 minutes (no API calls, no trades).
+# With auto_apply it APPLIES the improvements it finds by itself (never beyond the hard limits), records why
+# (controller_decisions table, kept forever), re-checks each change on the tokens that come after it and rolls
+# back what the new data disproves. Applied values: data/controller_overrides_<mode>.json, loaded over this file
+# at every start (delete that file to go back to config.toml). Report: data/reports/controller_<mode>_latest.md,
+# dashboard, `python run.py controller`.
+enabled = true
+interval_minutes = 10
+health_seconds = 60
+random_variants = 24      # new random combinations tried per agent each round (plus the best of earlier rounds)
+min_rows = 30             # fewest tokens a situation needs before it is judged
+holdout_pct = 30          # newest share of the data kept aside to verify the winner
+lookback_days = 14
+auto_apply = "paper"      # "paper" = applies by itself on the paper desk (live: proposals only) | "always" | "off"
+confirm_rounds = 3        # a PROMETTENTE result must win 3 rounds in a row before it is applied (SOLIDA: at once)
+apply_cooldown_minutes = 60   # at most one change per agent per hour, so each effect can be measured
+review_min_rows = 30      # new tokens needed to confirm an applied change or roll it back
+
 [dashboard]
 # Web dashboard (read-only) — opens in your browser at http://127.0.0.1:8080
 enabled = true

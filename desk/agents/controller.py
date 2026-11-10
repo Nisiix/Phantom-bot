@@ -1,7 +1,8 @@
-"""CONTROLLER (Controllore) agent — watches the other agents and tests other settings offline.
+"""CONTROLLER (Controllore) agent — watches the other agents, tests other settings offline and, when
+[controller] auto_apply allows it, applies the improvements it finds and remembers why (desk/controller_memory.py).
 
-Read-only by design: it never edits the configuration, never places an order and makes no API calls
-(everything comes from memory and the local database). See desk/controller.py for the logic.
+It never places an order and makes no API calls (everything comes from memory and the local database).
+Its memory (rounds, best variants, streaks, decisions, last report) lives in the database and survives restarts.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import sqlite3
 import time
 from collections import Counter, deque
 
+from .. import controller_memory as mem
 from ..controller import build_report, health_checks, proposals, reason_category, run_experiments
 from .base import Agent
 
@@ -44,7 +46,15 @@ class Controller(Agent):
         self.rounds: int = st.get("rounds", 0)
         self.trials: int = st.get("trials", 0)
         self.best: dict = st.get("best", {})
+        self.streaks: dict = st.get("streaks", {})
+        self.last_applied: dict = st.get("last_applied", {})
         self._announced: set[str] = set()
+        # Survive restarts: last report, last test round and last checks are shown again right away.
+        last = desk.store.kv_get("controller_last", {}) or {}
+        self.report, self.report_ts = last.get("report", ""), last.get("report_ts", 0.0)
+        self.exp, self.health = last.get("exp"), last.get("health", [])
+        self.state.counters["rounds"], self.state.counters["trials"] = self.rounds, self.trials
+        self.state.counters["applied"] = sum(d["kind"] == "apply" for d in mem.decisions(desk.store))
         desk.controller = self
 
     async def run(self) -> None:
@@ -54,8 +64,12 @@ class Controller(Agent):
             return
         self.status("working")
         self.emit("info", f"Controller online: checks the agents every {self.c.health_seconds:g}s, tests other "
-                          f"settings on logged data every {self.c.interval_minutes:g} min (proposals only, "
-                          "nothing is changed automatically, no API calls)")
+                          f"settings on logged data every {self.c.interval_minutes:g} min, applies improvements "
+                          f"{'by itself' if mem.auto_apply_on(self.cfg) else 'NO (proposals only)'}, no API calls; "
+                          f"memory: {self.rounds} rounds, {self.trials} settings tried, "
+                          f"{len(mem.decisions(self.desk.store))} decisions"
+                          + (f", Controller settings in use: {', '.join(f'{k}={v}' for k, v in self.cfg.controller_overrides.items())}"
+                             if self.cfg.controller_overrides else ""))
         self.next_round = time.time() + 60          # first round after a minute (let the desk start up)
         await asyncio.gather(self.supervised("health", self.health_loop),
                              self.supervised("experiments", self.experiment_loop))
@@ -153,9 +167,65 @@ class Controller(Agent):
             db.close()
         return an, fi, rej
 
-    def _round(self) -> dict:
+    def _round(self, reviews: list[dict] | None = None) -> dict:
         an, fi, rej = self._load()
-        return run_experiments(self.cfg, an, fi, rej, self.best)
+        return run_experiments(self.cfg, an, fi, rej, self.best, reviews=reviews)
+
+    def _save_state(self) -> None:
+        self.desk.store.kv_set("controller_state", {"rounds": self.rounds, "trials": self.trials, "best": self.best,
+                                                    "streaks": self.streaks, "last_applied": self.last_applied})
+
+    # ── decisions: verify earlier ones, apply new ones ──
+    def review(self, exp: dict) -> None:
+        store = self.desk.store
+        by_id = {d["id"]: d for d in mem.decisions(store)}
+        for rv in exp.get("reviews", []):
+            d = by_id.get(rv["id"])
+            if d is None:
+                continue
+            verdict = mem.judge_review(rv, self.c.review_min_rows)
+            store.db.execute("UPDATE controller_decisions SET review=?, review_ts=?, status=? WHERE id=?",
+                             (json.dumps(rv), time.time(), verdict or "attiva", d["id"]))
+            if verdict == "confermata":
+                self.emit("info", f"decision confirmed by {rv['n']} new tokens: {'; '.join(d['changes'])} "
+                                  f"({rv['mean']:+.2f} pts/token)")
+            elif verdict == "smentita":
+                self.revert(d, rv, exp)
+
+    def revert(self, d: dict, rv: dict, exp: dict) -> None:
+        """A change the newer data disproved goes back to the previous values (if nothing changed them since)."""
+        cur = {k: getattr(getattr(self.cfg, k.split(".")[0]), k.split(".")[1]) for k in (d["after"] or {})}
+        if cur != d["after"]:
+            return
+        triples = [(k.split(".")[0], k.split(".")[1], v) for k, v in (d["before"] or {}).items()]
+        before, after = mem.set_values(self.cfg, triples)
+        mem.save_overrides(self.cfg, after)
+        why = (f"Annullata la decisione #{d['id']} ({'; '.join(d['changes'])}): sui {rv['n']} token arrivati dopo, "
+               f"la nuova impostazione ha fatto {rv['mean']:+.2f} punti % per token rispetto alla vecchia "
+               f"(intervallo [{rv['lo']:+.2f}, {rv['hi']:+.2f}]). Torno ai valori precedenti e non riproverò "
+               "questa modifica.")
+        mem.record(self.desk.store, self.cfg, "revert", d["agent"], [f"{k} = {v}" for k, v in after.items()],
+                   before, after, None, 0, exp, why)
+        self.last_applied[d["agent"]] = time.time()
+        self.emit("risk", f"ROLLED BACK: {why}")
+
+    def auto_apply(self, exp: dict, props: list[dict]) -> int:
+        if not mem.auto_apply_on(self.cfg):
+            return 0
+        picked, self.streaks = mem.choose(props, self.cfg, self.streaks, self.last_applied,
+                                          mem.refuted_keys(self.desk.store), time.time())
+        for p, triples, streak in picked:
+            if mem.scout_all_off(self.cfg, triples):
+                continue
+            before, after = mem.set_values(self.cfg, triples)
+            mem.save_overrides(self.cfg, after)
+            why = mem.reasoning_text(p, streak, exp, before, after)
+            mem.record(self.desk.store, self.cfg, "apply", p["agent"], p["changes"], before, after, p, streak, exp,
+                       why, p.get("current"), p.get("variant"))
+            self.last_applied[p["agent"]] = time.time()
+            self.streaks = {k: v for k, v in self.streaks.items() if not k.startswith(p["agent"] + "|")}
+            self.emit("risk", f"APPLIED: {why}")
+        return len(picked)
 
     async def experiment_loop(self) -> None:
         while not self.desk.stop.is_set():
@@ -166,15 +236,18 @@ class Controller(Agent):
                 continue
             self.status("working")
             t0 = time.time()
-            exp = await asyncio.to_thread(self._round)
+            reviews = mem.pending_reviews(self.desk.store)
+            exp = await asyncio.to_thread(self._round, reviews)
             self.exp = exp
             self.rounds += 1
             self.trials += exp["tried"]
             self.best = exp["best"]
-            self.desk.store.kv_set("controller_state", {"rounds": self.rounds, "trials": self.trials,
-                                                        "best": self.best})
-            self.write_report()
+            self.review(exp)
             props = proposals(exp, self.cfg)
+            applied = self.auto_apply(exp, props)
+            self.state.counters["applied"] = self.state.counters.get("applied", 0) + applied
+            self._save_state()
+            self.write_report()
             self.desk.store.db.execute(
                 "INSERT INTO controller_runs(ts,trials,health,proposals,report) VALUES(?,?,?,?,?)",
                 (time.time(), exp["tried"], json.dumps(self.health), json.dumps(props, default=str), self.report))
@@ -190,8 +263,11 @@ class Controller(Agent):
             self.status("idle")
 
     def write_report(self) -> str:
-        self.report = build_report(self.health, self.exp, self.cfg, self.trials, self.rounds)
+        self.report = build_report(self.health, self.exp, self.cfg, self.trials, self.rounds,
+                                   mem.report_section(self.desk.store, self.cfg))
         self.report_ts = time.time()
+        self.desk.store.kv_set("controller_last", {"report": self.report, "report_ts": self.report_ts,
+                                                   "exp": self.exp, "health": self.health})
         path = self.cfg.data_dir / "reports" / f"controller_{self.cfg.mode}_latest.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.report, encoding="utf-8")
@@ -202,5 +278,9 @@ class Controller(Agent):
         return {"health": self.health, "rounds": self.rounds, "trials": self.trials,
                 "next_round": self.next_round, "report_ts": self.report_ts,
                 "proposals": proposals(self.exp, self.cfg) if self.exp else [],
+                "auto_apply": self.c.auto_apply, "auto_on": mem.auto_apply_on(self.cfg),
+                "overrides": self.cfg.controller_overrides,
+                "decisions": [{k: d[k] for k in ("id", "ts", "agent", "kind", "changes", "status", "reasoning",
+                                                 "review")} for d in mem.decisions(self.desk.store, 12)],
                 "data": {k: self.exp.get(k) for k in ("analyst_rows", "with_path", "filter_rows", "tried")}
                 if self.exp else {}}

@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS trades_archive (
   entry_ts REAL, exit_ts REAL, cost_sol REAL, proceeds_sol REAL, pnl_sol REAL, pnl_pct REAL,
   peak_pnl_pct REAL, score REAL, entry_reason TEXT, exit_reason TEXT, tx_in TEXT, tx_out TEXT, data TEXT);
 CREATE TABLE IF NOT EXISTS equity_archive (reset_ts REAL, ts REAL, cash_sol REAL, equity_sol REAL, sol_usd REAL);
+CREATE TABLE IF NOT EXISTS controller_decisions (
+  id INTEGER PRIMARY KEY, ts REAL, mode TEXT, agent TEXT, kind TEXT, changes TEXT, before TEXT, after TEXT,
+  verdict TEXT, gain REAL, lo REAL, hi REAL, valid_n INTEGER, n INTEGER, streak INTEGER, also TEXT, data TEXT,
+  reasoning TEXT, variant_before TEXT, variant_after TEXT, status TEXT, review TEXT, review_ts REAL);
 CREATE TABLE IF NOT EXISTS controller_runs (
   id INTEGER PRIMARY KEY, ts REAL, trials INTEGER, health TEXT, proposals TEXT, report TEXT);
 CREATE TABLE IF NOT EXISTS rug_ledger (wallet TEXT PRIMARY KEY, mint TEXT, reason TEXT, ts REAL);

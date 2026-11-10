@@ -264,3 +264,86 @@ def test_reset_never_drops_learning_memory(tmp_path):
     risk = Risk(desk2)
     assert risk.consecutive_losses == 0
     assert not risk.approve_entry("LOSER")[0] and not risk.approve_entry("OTHER")[0]
+
+
+def _fill_shadow(desk, rows):
+    for r in rows:
+        desk.store.add_shadow({"start_ts": r["start_ts"], "end_ts": r["start_ts"] + 3600, "mode": "paper",
+                               "mint": r["mint"], "symbol": "T", "stage": "analyst", "decision": "approve",
+                               "reason": "", "score": r["score"], "traded": 0, "ref_price": 1.0, "ref_liq": 1.0,
+                               "cost_pct": 2.0, "desk_label": "up", "sim_net_pct": r["sim_net_pct"],
+                               "features": r["features"], "path": r["path"]})
+
+
+def test_auto_apply_records_why_persists_and_survives_restart(tmp_path):
+    from desk import controller_memory as mem
+    from desk.config import load_config
+    desk = make_desk(tmp_path)
+    desk.cfg.controller.confirm_rounds = 1
+    an, _ = _rows(300)
+    _fill_shadow(desk, an)
+    ctl = Controller(desk)
+    ctl.health = []
+    exp = ctl._round(mem.pending_reviews(desk.store))
+    props = proposals(exp, desk.cfg)
+    applied = ctl.auto_apply(exp, props)
+    assert applied >= 1
+    ds = mem.decisions(desk.store)
+    assert ds[0]["kind"] == "apply" and ds[0]["status"] == "attiva" and "Scelta perché" in ds[0]["reasoning"]
+    assert ds[0]["variant_after"] and ds[0]["before"] and ds[0]["after"]
+    # the live config object changed, within the hard limits
+    assert desk.cfg.analyst.min_score >= 0.6 and desk.cfg.risk.hard_stop_pct >= -6
+    # second change for the same agent waits for the cooldown
+    assert ctl.auto_apply(exp, props) == 0
+    # persisted: overrides file, loaded over config.toml at the next start
+    ov = mem.overrides_path(tmp_path, "paper")
+    assert ov.exists()
+    toml = tmp_path / "c.toml"
+    toml.write_text(f'data_dir = "{tmp_path.as_posix()}"\n', encoding="utf-8")
+    cfg2 = load_config(toml)
+    assert cfg2.controller_overrides and all(k in json.loads(ov.read_text()) for k in cfg2.controller_overrides)
+    toml.write_text(f'data_dir = "{tmp_path.as_posix()}"\n[controller]\nauto_apply = "off"\n', encoding="utf-8")
+    assert load_config(toml).controller_overrides == {}
+    # memory and report survive a restart
+    ctl.exp = exp
+    ctl._save_state()
+    ctl.write_report()
+    ctl2 = Controller(desk)
+    assert ctl2.report and "Decisioni del Controllore" in ctl2.report and ctl2.exp and ctl2.rounds == ctl.rounds
+    assert ctl2.summary()["decisions"]
+
+
+def test_disproved_decision_is_rolled_back_and_never_retried(tmp_path):
+    from desk import controller_memory as mem
+    desk = make_desk(tmp_path)
+    ctl = Controller(desk)
+    exp = {"tried": 1}
+    before, after = mem.set_values(desk.cfg, [("risk", "max_hold_minutes", 45)])
+    p = {"agent": "Risk", "changes": ["[risk] max_hold_minutes = 45"], "verdict": "solida", "gain": 1.0, "lo": 0.1,
+         "hi": 2.0, "n": 50, "valid_n": 15, "also": []}
+    did = mem.record(desk.store, desk.cfg, "apply", "Risk", p["changes"], before, after, p, 1, exp, "test",
+                     {"x": 0}, {"x": 1})
+    ctl.review({"reviews": [{"id": did, "n": 40, "mean": -5.0, "lo": -8.0, "hi": -2.0}]})
+    assert desk.cfg.risk.max_hold_minutes == 0
+    ds = mem.decisions(desk.store)
+    assert {d["kind"] for d in ds} == {"apply", "revert"}
+    assert next(d for d in ds if d["id"] == did)["status"] == "smentita"
+    refuted = mem.refuted_keys(desk.store)
+    picked, _ = mem.choose([{**p, "situation": "all"}], desk.cfg, {}, {}, refuted, time.time())
+    assert picked == []
+
+
+def test_choose_needs_confirmation_and_skips_non_config(tmp_path):
+    from desk import controller_memory as mem
+    cfg = Config()
+    p = {"agent": "Risk", "situation": "all", "changes": ["[risk] max_hold_minutes = 30"], "verdict": "promettente"}
+    hint = {"agent": "Executor", "situation": "all", "changes": ["accettare i token rifiutati per 'x'"],
+            "verdict": "solida"}
+    picked, st = mem.choose([p, hint], cfg, {}, {}, set(), time.time())
+    assert picked == [] and list(st.values()) == [1]
+    picked, st = mem.choose([p], cfg, st, {}, set(), time.time())
+    picked, st = mem.choose([p], cfg, st, {}, set(), time.time())
+    assert len(picked) == 1                                         # third round in a row
+    off = {"agent": "Scout", "situation": "all", "verdict": "solida",
+           "changes": ["[scout] pumpportal = false", "[scout] geckoterminal = false", "[scout] dexscreener = false"]}
+    assert mem.choose([off], cfg, {}, {}, set(), time.time())[0] == []

@@ -81,7 +81,9 @@ def controller_report(cfg) -> str:
     exp = run_experiments(cfg, an, fi, rej, st.get("best", {}))
     health = [{"level": "info", "agent": "Controller", "check": "verifiche sugli agenti",
                "detail": "disponibili solo con il bot in esecuzione (dashboard, sezione Controllore)"}]
-    return build_report(health, exp, cfg, st.get("trials", 0) + exp["tried"], st.get("rounds", 0) + 1)
+    from desk.controller_memory import report_section
+    return build_report(health, exp, cfg, st.get("trials", 0) + exp["tried"], st.get("rounds", 0) + 1,
+                        report_section(store, cfg))
 
 
 def reset_paper(cfg) -> str:

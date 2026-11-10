@@ -19,7 +19,7 @@ Executor can prove a token passed *every* filter and scored ≥ 0.6 before it wi
 | **Executor** | Verifies both signatures + freshness, asks Risk, re-quotes live, rejects high price impact and **honeypots / hidden taxes** (buy→sell round-trip quote), then buys. Exits always processed first. | **max 8% of current balance per trade** |
 | **Risk** | Marks positions on executable value (after exit costs) every ~2s with real Jupiter sell quotes. | **hard stop −6%**, **trail only after +12%** (6% below peak), no averaging down, no revenge trades (never re-enter a loser, no global cooldown after a loss, no pause after a losing streak (optional), −30% daily halt in live only), emergency exit on liquidity pull |
 | **Logger** | Writes every decision with its reasons to SQLite + log files; sends the **full recap every 4 hours**. | — |
-| **Controller** (Controllore) | Watches the other agents (alive, making progress, hard rules respected on every position and trade) and every 10 minutes tests other settings offline on the tokens already followed for 60 minutes. Writes a report of **proposals**; never changes the config, never trades, no API calls. | read-only |
+| **Controller** (Controllore) | Watches the other agents (alive, making progress, hard rules respected on every position and trade) and every 10 minutes tests other settings offline on the tokens already followed for 60 minutes. Applies the improvements it confirms by itself (paper by default), remembers why, re-checks them and rolls back what new data disproves. Never trades, no API calls. | hard limits always apply |
 
 The core rules are hard-coded ceilings in `desk/config.py`. `config.toml` can make them
 stricter, never looser (e.g. `max_position_pct = 20` is clamped back to 8 and flagged
@@ -84,8 +84,19 @@ The Controller (Controllore) runs inside the desk with two read-only jobs:
   report section ("Stop più larghi del -6%") and are never proposed, so changing the rule stays your call.
 
 The report is in `data/reports/controller_<mode>_latest.md`, in the dashboard (section Controllore, also
-shown in the 3D view) and on demand with `python run.py controller`. Applying a proposal is your choice:
-edit `config.toml`, restart, paper-test first. All of it uses local data only, so it costs no API budget.
+shown in the 3D view) and on demand with `python run.py controller`. All of it uses local data only, so it
+costs no API budget.
+
+**Applying by itself** (`auto_apply = "paper"`, the default: paper desk only; `"always"` also live, `"off"` proposals
+only). A SOLIDA result for all situations is applied at once, a PROMETTENTE one after `confirm_rounds` (3) rounds
+in a row; at most one change per agent per `apply_cooldown_minutes` (60); never beyond the hard limits, never all
+Scout sources off, never a change the data already disproved. Each decision is stored forever in the
+`controller_decisions` table with the values before/after, the numbers behind it and the reasoning in words.
+After `review_min_rows` (30) new tokens the change is re-checked against the old setting on those tokens: it is
+marked *confermata*, or *smentita* and rolled back automatically (the roll-back is a decision too). Applied values
+are kept in `data/controller_overrides_<mode>.json` and loaded over `config.toml` at every start; delete that file
+to return to `config.toml`. The Controller's memory (rounds, best variants, streaks, decisions, last report)
+survives restarts.
 
 ## Engine
 * Filter runs in two stages: a batched market screen, then a priority queue of deep checks

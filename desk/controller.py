@@ -566,7 +566,8 @@ def evaluate_space(sp: Space, rng: random.Random, n_random: int, previous: list[
             verdict = "promettente"
         else:
             verdict = "nessun miglioramento"
-        results.append({**entry, "variant": variants[k], "changes": sp.describe(variants[k]), "train": st,
+        results.append({**entry, "variant": variants[k], "current": sp.current,
+                        "changes": sp.describe(variants[k]), "train": st,
                         "valid": va, "changed": changed, "verdict": verdict,
                         "variant_taken": sum(1 for i in idx if vec[i] != 0)})
     return results, len(variants)
@@ -585,8 +586,12 @@ def top_variants(results: list[dict], limit: int = 5) -> list[dict]:
 
 
 def run_experiments(cfg, analyst_raw: list[dict], filter_raw: list[dict], exec_rejects: dict[str, list[str]],
-                    previous: dict[str, list[dict]], seed: int | None = None) -> dict:
-    """One round of tests. Pure CPU, no I/O: safe to run in a worker thread."""
+                    previous: dict[str, list[dict]], seed: int | None = None,
+                    reviews: list[dict] | None = None) -> dict:
+    """One round of tests. Pure CPU, no I/O: safe to run in a worker thread.
+
+    reviews: decisions the Controller applied earlier ({id, agent, since, before, after} variants): each is
+    re-checked on the tokens that arrived after it, new setting vs old one on the same tokens."""
     c = cfg.controller
     young = cfg.analyst.young_age_hours * 60
     ar = parse_rows(analyst_raw, young)
@@ -594,8 +599,22 @@ def run_experiments(cfg, analyst_raw: list[dict], filter_raw: list[dict], exec_r
     rng = random.Random(seed if seed is not None else time.time_ns())
     out = {"t": time.time(), "analyst_rows": len(ar), "with_path": sum(1 for x in ar if x["path"]),
            "filter_rows": len(fr), "since": min([x["ts"] for x in ar + fr], default=None),
-           "results": [], "tried": 0, "best": {}}
-    for sp in build_spaces(cfg, ar, fr, exec_rejects, c.min_rows):
+           "results": [], "tried": 0, "best": {}, "reviews": []}
+    spaces = build_spaces(cfg, ar, fr, exec_rejects, c.min_rows)
+    by_agent = {sp.agent: sp for sp in spaces}
+    for rv in reviews or []:
+        sp = by_agent.get(rv["agent"])
+        if sp is None:
+            continue
+        idx = [i for i, x in enumerate(sp.rows) if x["ts"] >= rv["since"]]
+        try:
+            a, b = sp.returns(rv["after"]), sp.returns(rv["before"])
+        except (KeyError, TypeError):
+            continue                       # the agent's settings space changed shape since: can't compare
+        out["reviews"].append({"id": rv["id"], **paired([a[i] - b[i] for i in idx])})
+        # what was learned keeps competing: the old and new settings stay among the candidates
+        previous = {**previous, sp.agent: list(previous.get(sp.agent, [])) + [rv["before"], rv["after"]]}
+    for sp in spaces:
         res, tried = evaluate_space(sp, rng, c.random_variants, previous.get(sp.agent, []), c.holdout_pct / 100,
                                     c.min_rows)
         out["results"] += res
@@ -647,7 +666,8 @@ def proposals(exp: dict, cfg) -> list[dict]:
             continue
         cands.append({"agent": r["agent"], "situation": r["situation"], "label": SITUATIONS[r["situation"]],
                       "changes": r["changes"], "verdict": r["verdict"], "gain": r["valid"]["mean"],
-                      "lo": r["valid"]["lo"], "hi": r["valid"]["hi"], "n": r["n"], "valid_n": r["valid"]["n"]})
+                      "lo": r["valid"]["lo"], "hi": r["valid"]["hi"], "n": r["n"], "valid_n": r["valid"]["n"],
+                      "variant": r.get("variant"), "current": r.get("current")})
     cands.sort(key=lambda p: (p["verdict"] != "solida", p["situation"] != "all", -p["gain"]))
     groups: dict[tuple, dict] = {}
     for p in cands:
@@ -684,15 +704,18 @@ def wide_stop_section(exp: dict) -> list[str]:
     return out + [""]
 
 
-def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, rounds: int) -> str:
+def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, rounds: int,
+                 decisions: list[str] | None = None) -> str:
     t = time.time()
     lines = [f"# Controllore — report del {datetime.fromtimestamp(t, timezone.utc):%Y-%m-%d %H:%M} UTC", "",
              "Il Controllore verifica gli agenti e prova configurazioni diverse sui dati reali registrati dal "
-             "Logger. Non cambia nulla da solo e non fa trade: qui sotto ci sono solo PROPOSTE.", "",
+             "Logger. Non fa trade. Con l'applicazione automatica attiva applica da solo i miglioramenti confermati "
+             "(sezione Decisioni), sempre dentro i limiti rigidi, e ricorda perché li ha scelti.", "",
              "## Comportamento degli agenti"]
     for f in health:
         lines.append(f"- [{LEVEL[f['level']]}] {f['agent']} — {f['check']}: {f['detail']}")
     lines.append("")
+    lines += decisions or []
     if not exp:
         lines.append("Primo ciclo di test non ancora eseguito.")
         return "\n".join(lines)

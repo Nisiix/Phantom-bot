@@ -141,6 +141,12 @@ class ControllerCfg:
     min_rows: int = 30                  # fewest tokens a situation needs before it is judged
     holdout_pct: float = 30.0           # newest share of the data kept aside to verify the winner
     lookback_days: float = 14           # only data from the last N days
+    # Applying improvements by itself (desk/controller_memory.py): "paper" = on the paper desk only (live: proposals
+    # only), "always" = also live, "off" = proposals only. Applied values: data/controller_overrides_<mode>.json.
+    auto_apply: str = "paper"
+    confirm_rounds: int = 3             # a PROMETTENTE result must win this many rounds in a row (SOLIDA: at once)
+    apply_cooldown_minutes: float = 60  # at most one change per agent in this time, so each effect can be measured
+    review_min_rows: int = 30           # new tokens needed before an applied change is confirmed or rolled back
 
 
 @dataclass
@@ -204,6 +210,7 @@ class Config:
     live_gate: LiveGateCfg = field(default_factory=LiveGateCfg)
     secrets: Secrets = field(default_factory=Secrets)
     warnings: list[str] = field(default_factory=list)
+    controller_overrides: dict = field(default_factory=dict)   # settings applied by the Controller (over config.toml)
 
     @property
     def is_live(self) -> bool:
@@ -291,6 +298,11 @@ def enforce_hard_limits(cfg: Config) -> None:
     clamp(c, "random_variants", lambda v: 0 <= v <= 200, 24, "controller random variants must be 0-200")
     clamp(c, "min_rows", lambda v: 10 <= v <= 5000, 30, "controller min_rows must be 10-5000")
     clamp(c, "holdout_pct", lambda v: 10 <= v <= 50, 30.0, "controller holdout must be 10-50%")
+    clamp(c, "auto_apply", lambda v: v in ("off", "paper", "always"), "paper",
+          'controller auto_apply must be "off", "paper" or "always"')
+    clamp(c, "confirm_rounds", lambda v: 1 <= v <= 50, 3, "controller confirm_rounds must be 1-50")
+    clamp(c, "apply_cooldown_minutes", lambda v: 10 <= v <= 7 * 24 * 60, 60.0, "controller cooldown must be 10 min-7 days")
+    clamp(c, "review_min_rows", lambda v: 10 <= v <= 5000, 30, "controller review_min_rows must be 10-5000")
     if cfg.mode not in ("paper", "live"):
         w.append(f"config: mode {cfg.mode!r} invalid, using 'paper'")
         cfg.mode = "paper"
@@ -338,5 +350,11 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
         cfg.dashboard.host = os.environ["DASHBOARD_HOST"]
 
     enforce_hard_limits(cfg)
+    # What the Controller learned and applied (data/controller_overrides_<mode>.json), over config.toml, still
+    # inside the hard limits. Ignored when [controller] auto_apply = "off".
+    from .controller_memory import load_overrides
+    cfg.controller_overrides = load_overrides(cfg)
+    if cfg.controller_overrides:
+        enforce_hard_limits(cfg)
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     return cfg
