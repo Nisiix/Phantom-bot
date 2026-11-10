@@ -44,7 +44,9 @@ class Logger(Agent):
         if not self.cfg.quant.shadow_tracking:
             return
         self.emit("info", f"Shadow tracker on: following every evaluated token for "
-                          f"{self.cfg.quant.horizon_minutes:g} min (desk +12/-6, model +60/-30)")
+                          f"{self.cfg.quant.horizon_minutes:g} min (desk +12/-6, model +60/-30)"
+                          + (f", resumed {self.shadow.restored} follow-ups from before the restart"
+                             if self.shadow.restored else ""))
         task = asyncio.create_task(self.shadow.loop())
         while not self.desk.stop.is_set() and not task.done():
             self.state.counters["shadowing"] = len(self.shadow.active)

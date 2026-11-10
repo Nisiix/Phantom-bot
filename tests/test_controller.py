@@ -347,3 +347,17 @@ def test_choose_needs_confirmation_and_skips_non_config(tmp_path):
     off = {"agent": "Scout", "situation": "all", "verdict": "solida",
            "changes": ["[scout] pumpportal = false", "[scout] geckoterminal = false", "[scout] dexscreener = false"]}
     assert mem.choose([off], cfg, {}, {}, set(), time.time())[0] == []
+
+
+def test_shadow_followups_survive_restart(tmp_path):
+    desk = make_desk(tmp_path)
+    st = ShadowTracker(desk, lambda *a, **k: None)
+    st.start("A", "AAA", "analyst", "approve", "x", 1.0, 50_000, score=0.7, features={"liq_usd": 50_000})
+    st.active["A:analyst"].path = [(20, 1.0)]
+    old = Shadow("B:analyst", "B", "BBB", "analyst", "approve", "x", 0.7, 1.0, 50_000, 2.0, time.time() - 7200)
+    st.active[old.key] = old
+    st.save()
+    st2 = ShadowTracker(desk, lambda *a, **k: None)        # restart
+    assert "A:analyst" in st2.active and st2.active["A:analyst"].path == [(20, 1.0)]
+    assert "B:analyst" not in st2.active                    # its 60 minutes ran out: stored, not lost
+    assert desk.store.q("SELECT mint FROM shadow")[0]["mint"] == "B"

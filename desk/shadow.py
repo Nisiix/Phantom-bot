@@ -18,6 +18,7 @@ Uses:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import statistics
 import time
@@ -106,6 +107,36 @@ class ShadowTracker:
         self.started: set[str] = set()
         self.max_active = 900
         self.completed = 0
+        self._last_save = 0.0
+        self.restore()
+
+    # ── survive restarts: tokens being followed are saved and resumed (learning data is never thrown away) ──
+    def save(self) -> None:
+        self.desk.store.kv_set("shadow_active", [dataclasses.asdict(s) for s in self.active.values()])
+        self._last_save = time.time()
+
+    def restore(self) -> None:
+        """Resume the follow-ups that were running when the desk stopped. The minutes the desk was off have no
+        price samples; a follow-up whose 60 minutes ran out meanwhile is finalised with what it had."""
+        try:
+            saved = self.desk.store.kv_get("shadow_active", []) or []
+        except Exception:  # noqa: BLE001 - a broken snapshot must never stop the desk
+            saved = []
+        names = {f.name for f in dataclasses.fields(Shadow)}
+        t = time.time()
+        for d in saved:
+            try:
+                s = Shadow(**{k: v for k, v in d.items() if k in names})
+            except TypeError:
+                continue
+            s.path = [tuple(p) for p in s.path]
+            self.started.add(s.key)
+            if t - s.start >= self.horizon:
+                finalize_shadow(s)
+                self._store(s, end_ts=s.start + self.horizon)
+            else:
+                self.active[s.key] = s
+        self.restored = len(self.active)
 
     # ── estimated round-trip cost (from real Jupiter round-trip quotes when available) ──
     def cost_estimate(self) -> float:
@@ -166,16 +197,19 @@ class ShadowTracker:
                         finalize_shadow(s)
                         self.active.pop(key, None)
                         self._store(s)
+            if time.time() - self._last_save >= 60:
+                self.save()
             try:
                 await asyncio.wait_for(self.desk.stop.wait(), timeout=20)
+                self.save()
                 return
             except asyncio.TimeoutError:
                 pass
 
-    def _store(self, s: Shadow) -> None:
+    def _store(self, s: Shadow, end_ts: float | None = None) -> None:
         self.completed += 1
         row = {
-            "start_ts": s.start, "end_ts": time.time(), "mode": self.cfg.mode, "mint": s.mint, "symbol": s.symbol,
+            "start_ts": s.start, "end_ts": end_ts or time.time(), "mode": self.cfg.mode, "mint": s.mint, "symbol": s.symbol,
             "stage": s.stage, "decision": s.decision, "reason": s.reason, "score": s.score, "source": s.source,
             "traded": int(s.traded), "ref_price": s.ref_price, "ref_liq": s.ref_liq, "cost_pct": s.cost_pct,
             "desk_label": s.desk_label, "desk_hit_s": (s.desk_hit_ts - s.start) if s.desk_hit_ts else None,
