@@ -139,8 +139,17 @@ def test_no_averaging_down_and_no_revenge(tmp_path):
     assert risk.approve_entry("OTHER")[0]
 
 
+def test_no_losing_streak_pause_by_default(tmp_path):
+    desk = make_desk(tmp_path)
+    risk = Risk(desk)
+    for i in range(3):
+        risk.record_result({"mint": f"m{i}", "pnl_sol": -0.05})
+    assert risk.approve_entry("new")[0]
+
+
 def test_losing_streak_pause(tmp_path):
     desk = make_desk(tmp_path)
+    desk.cfg.risk.streak_pause_minutes = 30
     risk = Risk(desk)
     for i in range(3):
         risk.record_result({"mint": f"m{i}", "pnl_sol": -0.05})

@@ -79,7 +79,7 @@ trail_activate_pct = 12.0     # user rule: trailing starts only after +12%
 trail_distance_pct = 6.0      # trailing stop distance below the peak
 cooldown_after_loss_minutes = 20     # unused: after a loss only that token is blocked (forever), other pairs stay open
 max_consecutive_losses = 3           # ...and a longer pause after a losing streak
-streak_pause_minutes = 30              # after 3 losses in a row: no new buys for 30 min (scanning, analysis and exits keep running)
+streak_pause_minutes = 0               # 0 = no pause after a losing streak (set e.g. 30 to pause new buys after 3 losses in a row)
 daily_loss_limit_pct = 30.0          # live only: halt new entries for the day after -30% equity (ignored in paper)
 liquidity_drop_exit_pct = 35.0       # emergency exit if pool liquidity drops this much
 max_hold_minutes = 0                 # 0 = no time stop

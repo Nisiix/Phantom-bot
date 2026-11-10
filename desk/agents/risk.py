@@ -10,7 +10,7 @@ Exits (checked every couple of seconds on executable value, i.e. after exit cost
 Entry permission (Executor must ask before every buy):
   * no averaging down: never add to a held token
   * no revenge trades: never re-enter a token we lost money on (the post-loss block is per token,
-    other pairs stay open); global pause after a losing streak; daily loss limit (live only)
+    other pairs stay open); optional pause after a losing streak (off by default); daily loss limit (live only)
   * max open positions
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ class Risk(Agent):
         s = desk.store.kv_get("risk_state", {}) or {}
         self.last_loss_ts: float = s.get("last_loss_ts", 0.0)
         self.consecutive_losses: int = s.get("consecutive_losses", 0)
-        self.pause_until: float = s.get("pause_until", 0.0)
+        self.pause_until: float = s.get("pause_until", 0.0) if self.r.streak_pause_minutes > 0 else 0.0
         self.day: str = s.get("day", "")
         self.day_start_equity: float = s.get("day_start_equity", 0.0)
         self.day_halted: bool = s.get("day_halted", False) and self.cfg.is_live
@@ -103,7 +103,8 @@ class Risk(Agent):
         if trade["pnl_sol"] < 0:
             self.last_loss_ts = t
             self.consecutive_losses += 1
-            if self.consecutive_losses >= self.r.max_consecutive_losses:
+            # streak_pause_minutes = 0 (default) disables the losing-streak pause.
+            if self.r.streak_pause_minutes > 0 and self.consecutive_losses >= self.r.max_consecutive_losses:
                 self.pause_until = t + self.r.streak_pause_minutes * 60
                 self.emit("risk", f"{self.consecutive_losses} losses in a row -> pausing entries "
                                   f"{self.r.streak_pause_minutes:.0f} min")
