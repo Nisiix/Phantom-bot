@@ -1,0 +1,130 @@
+# PHANTOM DESK — PAPER recap
+Window: 2026-11-14 11:32 UTC → 2026-11-14 15:32 UTC
+
+## Performance
+- Equity: 13.1598 → 13.0330 SOL  (-0.96%)
+- Window P&L (realized): +0.3806 SOL ($+27.91)
+- Cash: 12.5816 SOL | open positions: 1 (value 0.4514 SOL)
+- Since inception: -0.2290 SOL ($-16.79) on 13.2620 SOL start (-1.73%)
+- Max drawdown: window -3.90% | all-time -5.21%
+- Equity curve (window): ▆▆▅▅▄▂▂▂▂▂▂▃▃▂▂▂▂▂▂▃▂▂▁▂▅▅▆▇▆▄▇▆▅▄▆█▇▇▆▇▆▆▆▆▆▆▆▆
+
+## Trades this window
+- 2 closed | 2W / 0L | win rate 100% | avg win +20.23% | avg loss +0.00% | profit factor ∞
+### ZAPZEKE +22.09% (+0.2156 SOL) — held 27 min
+- mint `8azHd6ZpAdpyFzGAaNkofyKhr19RWNNquSC8bAGEpump`
+- WHY ENTERED: score 0.72 | liquidity $15,487; 1h turnover 8.3x liquidity; buys 78% (1h) / 82% (5m), 5082 txns/h; price -1.8% 5m / +58.5% 1h / +58.5% 6h; top10 6.1%, 2622 holders, insider clusters 0% | timing: wallet bravi: prezzo -4% rispetto all'acquisto dei wallet bravi (limite +30%), +0.2% in 5 min | filters: volume_1h=125595, liquidity=15539, graduation_wait=44.5, token_age=0.7, market_cap=49975, min_market_cap=49975, mint_revoked=revoked, freeze_revoked=revoked, lp_locked=100.0, top10_holders=6.08, dev_rug_link=clean, funder_rug_link=funder EmfCfh also funded DLNaFD, in rug ledger (funded a rugging dev: liquidity collapse), token2022_safe=ok, rugcheck_danger=none, dev_sold=0.0 | size 0.9761 SOL = 8.0% of 12.201 | impact 0.83% | round-trip 3.99% | pool pumpswap 2J7svW… vs SOL ($15,540); route SOL -> ZAPZEKE (Pump.fun Amm 2J7svW…) | EV -14.43% (P↑50% P↓4% P→47%, cost 4.0%, n=8 warm-up) | exec paper: checks 4860 ms + swap 0 ms
+- WHY EXITED: PROFIT_LOCK: profit lock: value back to +22.92% from peak +40.0% (keeps +23.4% net + 1.0% sale costs) (peak +40.0%)
+### WISHMAS +18.38% (+0.1650 SOL) — held 79 min
+- mint `9cmXfuC26anZtH9AUWVzpUxU1UJ7PPogYxftYTepump`
+- WHY ENTERED: score 0.75 | liquidity $30,518; 1h turnover 0.6x liquidity; buys 69% (1h) / 73% (5m), 1836 txns/h; price +3.9% 5m / +31.1% 1h / -7.9% 6h; top10 19.7%, 4341 holders, insider clusters 3% | timing: ribasso -5.6% dal prezzo di approvazione | filters: volume_1h=16371, liquidity=29940, graduation_wait=927.8, token_age=15.5, market_cap=137849, min_market_cap=137849, mint_revoked=revoked, freeze_revoked=revoked, lp_locked=100.0, top10_holders=19.72, dev_rug_link=clean, funder_rug_link=clean, token2022_safe=ok, rugcheck_danger=none, dev_sold=0.0 | size 0.8980 SOL = 8.0% of 11.225 | impact 0.43% | round-trip 3.12% | pool pumpswap FcsUyt… vs SOL ($29,003); route SOL -> WISHMAS (Pump.fun Amm FcsUyt…) | EV -13.57% (P↑50% P↓4% P→47%, cost 3.1%, n=8 warm-up) | exec paper: checks 4860 ms + swap 0 ms
+- WHY EXITED: PROFIT_LOCK: profit lock: value back to +19.10% from peak +36.3% (keeps +21.2% net + 1.0% sale costs) (peak +36.3%)
+
+## Open positions
+- Sakura: P&L -57.46% (peak +7.5%, trail not armed) — score 0.76 | liquidity $40,333; 1h turnover 1.1x liquidity; buys 51% (1h) / 62% (5m), 984 txns/h; price +13.1% 5m / +18.8% 1h / -27.4% 6h; top10 16.0%, 10142 ho
+
+## Pipeline funnel (logged decisions)
+- Filter: 35 passed, 5526 rejected, 20 killed permanently
+- Analyst: 94 scored ≥ threshold, 29 below
+- Executor: 2 buys, 2 sells, 61 declined at execution
+- Top rejection reasons: liquidity ×3891, volume_1h ×3737, min_market_cap ×3718, market ×1287, rugged_name ×873, identity not checked yet ×858, quote_currency ×586, venue ×530
+
+## Latest Analyst verdicts
+- Sakura: score 0.82 >= 0.65 -> BUY SIGNAL | liquidity $24,883; 1h turnover 1.1x liquidity; buys 59% (1h) / 58% (5m), 766 txns/h; price +2.3% 5m / -18.1% 1h / -42.8% 6h; top10 16.6%, 10050 holders, insider clusters 9%; no website 
+- Avatars: score 0.75 >= 0.65 -> BUY SIGNAL | liquidity $13,024; 1h turnover 3.7x liquidity; buys 58% (1h) / 53% (5m), 1590 txns/h; price +2.7% 5m / -66.0% 1h / +6.5% 6h; top10 19.4%, 2975 holders, insider clusters 9%; website 0.50
+- ZAPZEKE: score 0.55 < 0.65 -> no trade | liquidity $19,683; 1h turnover 6.7x liquidity; buys 82% (1h) / 85% (5m), 6974 txns/h; price +1.9% 5m / +38.1% 1h / +141.0% 6h; top10 7.0%, 3847 holders, insider clusters 0%; website 0.71 (
+- Sakura: score 0.82 >= 0.65 -> BUY SIGNAL | liquidity $25,245; 1h turnover 1.1x liquidity; buys 57% (1h) / 68% (5m), 768 txns/h; price +9.7% 5m / -19.8% 1h / -39.8% 6h; top10 17.2%, 10026 holders, insider clusters 9%; no website 
+- Sakura: score 0.84 >= 0.65 -> BUY SIGNAL | liquidity $24,819; 1h turnover 0.8x liquidity; buys 56% (1h) / 53% (5m), 629 txns/h; price -1.6% 5m / +2.5% 1h / -43.1% 6h; top10 17.2%, 10026 holders, insider clusters 9%; no website (
+- Sakura: score 0.85 >= 0.65 -> BUY SIGNAL | liquidity $25,165; 1h turnover 0.8x liquidity; buys 56% (1h) / 50% (5m), 607 txns/h; price +3.2% 5m / +6.1% 1h / -43.3% 6h; top10 17.2%, 10021 holders, insider clusters 9%; no website (
+- Sakura: score 0.78 >= 0.65 -> BUY SIGNAL | liquidity $24,935; 1h turnover 0.7x liquidity; buys 56% (1h) / 45% (5m), 568 txns/h; price +2.8% 5m / +0.9% 1h / -44.3% 6h; top10 17.2%, 10021 holders, insider clusters 9%; no website (
+- Sakura: score 0.73 >= 0.65 -> BUY SIGNAL | liquidity $24,790; 1h turnover 0.7x liquidity; buys 56% (1h) / 42% (5m), 564 txns/h; price +2.0% 5m / -0.6% 1h / -48.5% 6h; top10 17.2%, 10021 holders, insider clusters 9%; no website (
+- Sakura: score 0.76 >= 0.65 -> BUY SIGNAL | liquidity $25,064; 1h turnover 0.7x liquidity; buys 56% (1h) / 43% (5m), 536 txns/h; price -1.5% 5m / +11.1% 1h / -48.0% 6h; top10 17.2%, 10013 holders, insider clusters 9%; no website 
+- ZAPZEKE: score 0.56 < 0.65 -> no trade | liquidity $20,078; 1h turnover 6.5x liquidity; buys 82% (1h) / 85% (5m), 6902 txns/h; price +1.7% 5m / +37.6% 1h / +149.0% 6h; top10 6.6%, 3859 holders, insider clusters 0%; website 0.71 (
+- Sakura: score 0.83 >= 0.65 -> BUY SIGNAL | liquidity $24,800; 1h turnover 0.6x liquidity; buys 57% (1h) / 58% (5m), 503 txns/h; price -1.1% 5m / -1.3% 1h / -48.9% 6h; top10 17.2%, 10013 holders, insider clusters 9%; no website (
+- ZAPZEKE: score 0.55 < 0.65 -> no trade | liquidity $20,801; 1h turnover 6.0x liquidity; buys 83% (1h) / 84% (5m), 6778 txns/h; price -0.3% 5m / +36.8% 1h / +167.0% 6h; top10 6.6%, 3885 holders, insider clusters 0%; website 0.71 (
+
+## Declined at execution
+- Sakura: Risk: no averaging down: position already open
+- Sakura: Risk: no averaging down: position already open
+- Sakura: Risk: no averaging down: position already open
+- Sakura: Risk: no averaging down: position already open
+- Sakura: Risk: no averaging down: position already open
+- Sakura: Risk: no averaging down: position already open
+- Sakura: Risk: no averaging down: position already open
+- Sakura: Risk: no averaging down: position already open
+- Sakura: Risk: no averaging down: position already open
+- Sakura: Risk: no averaging down: position already open
+
+## Risk & incident log
+- 13:08 UTC [Filter] Grizzler KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window) | early release no: only 3 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 13:09 UTC [Filter] OpenAI KILLED: graduation_wait: graduated 13 min ago < 30 min wait (instant-rug window); rugged_name: same name as rugged OpenAI (EPRLLb…); no own website / X account / Telegram to tell i
+- 13:17 UTC [Filter] GIGAGO KILLED: graduation_wait: graduated 5 min ago < 30 min wait (instant-rug window); lp_locked: 0.0% locked [pump_fun_amm:0%]; dev_sold: DANGEROUS: creator DpkY7C + 0 linked wallets ho
+- 13:34 UTC [Risk] ZAPZEKE profit lock ARMED at +40.0% (target +30% net): stop now at +23.4% net (min +4%; from a +20% peak it rises with the price, 70% of the peak; 1.0% for sale costs)
+- 13:34 UTC [Risk] ZAPZEKE PROFIT_LOCK: profit lock: value back to +22.92% from peak +40.0% (keeps +23.4% net + 1.0% sale costs)
+- 13:35 UTC [Filter] FYAT KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window) | early release no: only 1 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 13:42 UTC [Filter] SHIT KILLED: graduation_wait: graduated 8 min ago < 30 min wait (instant-rug window); funder_rug_link: funder 4uLCbC in rug ledger (liquidity collapsed 17,228 -> 1,546 USD) | QUARANTINE
+- 13:44 UTC [Filter] Bella KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 28.1% (pools excluded); dev_sold: DANGEROUS: creator 8EUrMA + 0 linked wa
+- 13:46 UTC [Filter] Walwiz KILLED: graduation_wait: graduated 4 min ago < 30 min wait (instant-rug window); lp_locked: 0.0% locked [pump_fun_amm:0%]; dev_sold: DANGEROUS: creator R9eCXk + 0 linked wallets ho
+- 14:15 UTC [Filter] BLACKOUT KILLED: dev_sold: DANGEROUS: creator BTVR86 + 1 linked wallets hold 0.00% of supply, held 3.47% from the start (creator buy): sold 100.0%
+- 14:29 UTC [Filter] The Dip KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 28.1% (pools excluded); dev_sold: DANGEROUS: creator Fn8q8E + 0 linked wa
+- 14:30 UTC [Filter] CHAD KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window) | early release no: only 3 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 14:30 UTC [Risk] WISHMAS profit lock ARMED at +36.3% (target +30% net): stop now at +21.2% net (min +4%; from a +20% peak it rises with the price, 70% of the peak; 1.0% for sale costs)
+- 14:31 UTC [Risk] WISHMAS PROFIT_LOCK: profit lock: value back to +19.10% from peak +36.3% (keeps +21.2% net + 1.0% sale costs)
+- 14:41 UTC [Filter] NVDA KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); rugged_name: same name as rugged NVDA (HbZM3f…); no own website / X account / Telegram to tell it a
+- 14:43 UTC [Filter] GETAJOB KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 57.9% (pools excluded); dev_sold: DANGEROUS: creator AbnJT9 + 0 linked wa
+- 14:52 UTC [Filter] WSJH KILLED: graduation_wait: graduated 9 min ago < 30 min wait (instant-rug window); rugged_name: same name as rugged JENSEN (FYf7fA…); no own website / X account / Telegram to tell it
+- 15:07 UTC [Filter] HI KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window) | early release no: only 3 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 15:08 UTC [Filter] SOLFLY KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window); funder_rug_link: funder HN1owX in rug ledger (liquidity collapsed 23,669 -> 2,625 USD) | QUARANTINE
+- 15:10 UTC [Filter] HI KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); dev_rug_link: Creator history of rugged tokens
+- 15:13 UTC [Filter] Blub KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 27.5% (pools excluded); dev_sold: DANGEROUS: creator 87zV2o + 0 linked wa
+- 15:15 UTC [Filter] Walletx KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window); lp_locked: 0.0% locked [pump_fun_amm:0%]; rugged_name: same name as rugged OpenAI (EPRLLb…); no own
+- 15:24 UTC [Filter] GETAJOB KILLED: graduation_wait: graduated 5 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 55.8% (pools excluded); dev_sold: DANGEROUS: creator 2ibSBB + 0 linked wa
+- 15:27 UTC [Filter] MOONVALE KILLED: graduation_wait: graduated 24 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 81.2% (pools excluded); dev_sold: DANGEROUS: creator 7NNJS7 + 0 linked w
+
+## QUANT — edge after costs (calibration)
+- Status: QUANT warm-up 11/30 | signals evaluated 0, blocked for negative EV 0
+- Forecast quality (Brier, lower = better): model 0.976 vs base-rate 0.580 → model does NOT beat the naive base rate
+- Score bucket → observed outcome of '+12% first / -6% first / neither in 60m' (trades + skipped tokens) | model now | avg net
+  - 0.00-0.50: n=19 (0 real) | ↑47% ↓16% →37% | model ↑44% ↓13% | -32.7%
+  - 0.50-0.60: n=14 (0 real) | ↑21% ↓7% →71% | model ↑31% ↓8% | -22.5%
+  - 0.60-0.65: n=5 (0 real) | ↑100% ↓0% →0% | model ↑54% ↓7% | -59.8%
+  - 0.65-0.70: n=7 (2 real) | ↑57% ↓14% →29% | model ↑47% ↓7% | -23.6%
+  - 0.70-0.80: n=7 (5 real) | ↑57% ↓0% →43% | model ↑49% ↓3% | -1.9%
+  - 0.80-1.00: n=1 (0 real) | ↑0% ↓0% →100% | model ↑40% ↓4% | -10.9%
+- Learned gross payoff per scenario: ↑ +23.0% | ↓ -99.5% | → -32.4%
+
+## Shadow tracking (60 min after every decision)
+- 445 tokens followed to the end of their 60-minute window
+  - filter:reject (n=197): desk +12 first 36%, -6 first 55% | model +60 first 39%, -30 first 39% | avg simulated desk trade +19710.1%
+  - grad45:gone_at_wait_end (n=177): desk +12 first 0%, -6 first 0% | model +60 first 0%, -30 first 0% | avg simulated desk trade +0.0%
+  - grad45:buy_at_wait_end (n=61): desk +12 first 15%, -6 first 66% | model +60 first 30%, -30 first 41% | avg simulated desk trade +483000790.4%
+  - filter:kill (n=4): desk +12 first 50%, -6 first 50% | model +60 first 50%, -30 first 25% | avg simulated desk trade -17.0%
+  - analyst:reject_score (n=3): desk +12 first 0%, -6 first 100% | model +60 first 67%, -30 first 0% | avg simulated desk trade +15.5%
+  - filter:pass (n=2): desk +12 first 0%, -6 first 100% | model +60 first 0%, -30 first 50% | avg simulated desk trade -55.7%
+  - analyst:approve (n=1): desk +12 first 0%, -6 first 100% | model +60 first 0%, -30 first 0% | avg simulated desk trade -10.9%
+- By discovery source (all evaluated tokens):
+  - pumpswap:pool (n=131): desk +12 first 50%, model +60 first 52%, -30 first 36%
+  - dexscreener:profile (n=34): desk +12 first 6%, model +60 first 9%, -30 first 26%
+  - pumpfun:migration (n=32): desk +12 first 19%, model +60 first 22%, -30 first 69%
+  - pumpfun:new (n=4): desk +12 first 0%, model +60 first 0%, -30 first 0%
+  - pump-fun:pool (n=2): desk +12 first 0%, model +60 first 50%, -30 first 50%
+- Skipped tokens that hit +60% first (missed): 81 | hit -30% first (avoided): 78
+- Missed winners were rejected for: volume_1h ×60, graduation_wait ×16, quote_currency ×3, liquidity $14,456; 1h turnover 6.7x liqu ×2
+  - C𝕏: max +3883954% / min +0% — volume_1h: $4,152/h < $5,000 (young token: 3 min old, $11,688 liquidity); graduation_wait: graduated 3 min ago
+  - mihao: max +3277678% / min -99% — volume_1h: $2,026/h < $5,000 (young token: 2 min old, $10,541 liquidity); graduation_wait: graduated 2 min ago
+  - Democat: max +2859363% / min -87% — volume_1h: $2,947/h < $5,000 (young token: 1 min old, $31,106 liquidity); graduation_wait: graduated 1 min ago
+  - MORNING: max +2400277% / min +0% — volume_1h: $2,112/h < $5,000 (young token: 1 min old, $31,056 liquidity); graduation_wait: graduated 1 min ago
+  - SWJ: max +2392502% / min -99% — volume_1h: $856/h < $5,000 (young token: 1 min old, $30,415 liquidity); graduation_wait: graduated 1 min ago <
+
+## Agent health
+- Scout: working, errors 0 | archived=21, discovered=1365, dropped=921, rug_false_alarm=1, sent=17932, watching=456
+- Filter: working, errors 0 | blacklisted=13, deep_queue=0, evaluated=17923, funder_errors=107, funders_backfilled=2, onchain_lp_errors=1, passed=89, quarantine_served=1, quarantined=7, rejected=17834
+- Analyst: idle, errors 0 | approved=7, rejected=3, scored=23
+- Executor: idle, errors 0 | declined=7, sells=1, wins=1
+- Risk: working, errors 0 | false_stop_avoided=8, open=1
+- Logger: working, errors 0 | logged=2117, long_followed=117, shadow_done=198, shadowing=89
+- Controller: idle, errors 0 | alerts=1, applied=6, checks=70, model=0, proposals=4, rounds=651, trials=161161, whale_tokens=7
+- Whale checker: working, errors 0 | backfilled=0, hits=0, reports=23, rpc_errors=0, scanned=27, too_long=1, wait_checks=364, wait_hits=69, wallets=45, watching=40
+
+## All-time
+- 2 trades | win rate 100% | realized +0.3806 SOL ($+27.91)

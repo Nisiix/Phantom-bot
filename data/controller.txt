@@ -1,0 +1,178 @@
+# Controllore — report del 2026-11-14 15:22 UTC
+
+Il Controllore verifica gli agenti e prova configurazioni diverse sui dati reali registrati dal Logger. Non fa trade e non applica nulla da solo: ogni modifica che farebbe compare tra le Proposte, sempre dentro i limiti rigidi, e decidi tu se applicarla (regola base, 2026-11-11).
+
+## Comportamento degli agenti
+- [ATTENZIONE] Filter — limite API: api.mainnet-beta.solana.com: 27 risposte 429 in 9 min
+
+## Decisioni del Controllore (memoria delle scelte)
+Il Controllore propone soltanto: non applica e non annulla nulla da solo (regola base dell'utente, 2026-11-11). Le decisioni qui sotto sono state applicate prima di questa regola e vengono ancora verificate sui token arrivati dopo; se i dati le smentiscono, l'annullamento compare tra le proposte.
+- 2026-11-11 23:51 UTC [apply — attiva] Risk: risk.trail_activate_pct 30.0 -> 40.0, risk.trail_distance_pct 6.0 -> 8.0, risk.profit_lock_activate_pct 8.0 -> 12.0, risk.profit_lock_fast_activate_pct 10.0 -> 12.0, risk.profit_lock_pct 4.0 -> 3.0, risk.profit_lock_keep_pct 70.0 -> 60.0, risk.profit_lock_fee_multiple 1.0 -> 3.0, risk.profit_lock_keep_fast_pct 80.0 -> 0.0, risk.profit_lock_speed_full 60.0 -> 15.0. Scelta perché PROMETTENTE per 3 cicli di test consecutivi: sui 17 token più recenti mai usati per sceglierla ha fatto in media +2.61 punti % per token rispetto alla configurazione di prima (intervallo [-5.02, +10.25]), su 54 token valutati in totale e 276 configurazioni provate in questo ciclo; vinceva anche in: mercato normale, memecoin laterali (indice meme 1h tra -1.5% e +1.5%). | verifica su 12 token nuovi: -0.49 [-2.25, +1.27]
+- 2026-11-11 20:00 UTC [apply — attiva] Analyst: analyst.weights {'buy_pressure': 0.22, 'holders': 0.07, 'hygiene': 0.03, 'liquidity': 0.08, 'maturity': 0.04, 'momentum': 0.05, 'turnover': 0.04, 'website': 0.48} -> {'liquidity': 0.03, 'turnover': 0.03, 'buy_pressure': 0.28, 'momentum': 0.03, 'holders': 0.09, 'hygiene': 0.02, 'website': 0.51, 'maturity': 0.02}. Scelta perché PROMETTENTE per 3 cicli di test consecutivi: sui 42 token più recenti mai usati per sceglierla ha fatto in media +0.46 punti % per token rispetto alla configurazione di prima (intervallo [-0.44, +1.35]), su 137 token valutati in totale e 271 configurazioni provate in questo ciclo; vinceva anche in: memecoin laterali (indice meme 1h tra -1.5% e +1.5%), mercato normale. | verifica su 61 token nuovi: -1.56 [-4.63, +1.50]
+- 2026-11-11 19:41 UTC [apply — attiva] Risk: risk.trail_activate_pct 15.0 -> 30.0, risk.trail_distance_pct 8.0 -> 6.0, risk.profit_lock_activate_pct 8.0 -> 0.0, risk.profit_lock_fast_activate_pct 10.0 -> 5.0, risk.profit_lock_pct 4.0 -> 6.0, risk.profit_lock_keep_pct 70.0 -> 80.0, risk.profit_lock_fee_multiple 1.0 -> 2.0, risk.profit_lock_keep_from_pct 20.0 -> 40.0, risk.profit_lock_keep_fast_pct 80.0 -> 90.0. Scelta perché PROMETTENTE per 3 cicli di test consecutivi: sui 15 token più recenti mai usati per sceglierla ha fatto in media +2.75 punti % per token rispetto alla configurazione di prima (intervallo [-0.51, +6.02]), su 49 token valutati in totale e 272 configurazioni provate in questo ciclo; vinceva anche in: mercato normale, memecoin laterali (indice meme 1h tra -1.5% e +1.5%). | verifica su 16 token nuovi: -1.20 [-2.81, +0.41]
+- 2026-11-11 03:26 UTC [apply — attiva] Risk: risk.trail_activate_pct 25.0 -> 15.0, risk.max_hold_minutes 45 -> 0, risk.profit_lock_activate_pct 5.0 -> 8.0, risk.profit_lock_fast_activate_pct 6.0 -> 8.0, risk.profit_lock_pct 2.5 -> 6.0, risk.profit_lock_keep_pct 50.0 -> 0.0. Scelta perché PROMETTENTE per 3 cicli di test consecutivi: sui 14 token più recenti mai usati per sceglierla ha fatto in media +0.72 punti % per token rispetto alla configurazione di prima (intervallo [-0.52, +1.96]), su 46 token valutati in totale e 264 configurazioni provate in questo ciclo; vinceva anche in: mercato normale, memecoin laterali (indice meme 1h tra -1.5% e +1.5%). | verifica su 21 token nuovi: -1.13 [-3.87, +1.61]
+- 2026-11-10 15:02 UTC [apply — confermata] Analyst: analyst.weights {'liquidity': 0.13, 'turnover': 0.07, 'buy_pressure': 0.23, 'momentum': 0.06, 'holders': 0.07, 'hygiene': 0.02, 'website': 0.31, 'maturity': 0.1} -> {'liquidity': 0.08, 'turnover': 0.04, 'buy_pressure': 0.22, 'momentum': 0.05, 'holders': 0.07, 'hygiene': 0.03, 'website': 0.48, 'maturity': 0.04}. Scelta perché PROMETTENTE per 3 cicli di test consecutivi: sui 30 token più recenti mai usati per sceglierla ha fatto in media +2.14 punti % per token rispetto alla configurazione di prima (intervallo [-10.88, +15.15]), su 100 token valutati in totale e 153 configurazioni provate in questo ciclo; vinceva anche in: mercato normale, memecoin laterali (indice meme 1h tra -1.5% e +1.5%). | verifica su 30 token nuovi: +4.10 [-3.53, +11.74]
+- 2026-11-10 12:12 UTC [apply — smentita] Analyst: analyst.weights {'liquidity': 0.13, 'turnover': 0.07, 'buy_pressure': 0.23, 'momentum': 0.06, 'holders': 0.07, 'hygiene': 0.04, 'website': 0.31, 'maturity': 0.1} -> {'liquidity': 0.13, 'turnover': 0.07, 'buy_pressure': 0.23, 'momentum': 0.06, 'holders': 0.07, 'hygiene': 0.02, 'website': 0.31, 'maturity': 0.1}. Scelta perché PROMETTENTE per 3 cicli di test consecutivi: sui 28 token più recenti mai usati per sceglierla ha fatto in media +0.04 punti % per token rispetto alla configurazione di prima (intervallo [-0.04, +0.11]), su 93 token valutati in totale e 153 configurazioni provate in questo ciclo; vinceva anche in: token giovani, mercato normale, memecoin laterali (indice meme 1h tra -1.5% e +1.5%). | verifica su 90 token nuovi: -0.37 [-0.91, +0.18]
+
+## Prova del momento d'acquisto (scelta dell'utente)
+- regola: ribasso di 3% entro 5 min, altrimenti nessun acquisto, attiva dal 2026-11-11 02:15 UTC
+- 21 token approvati da allora (9 comprati con la regola): +2.30 punti % per token rispetto a comprare subito, intervallo 95% [-16.78, +21.39]
+- IN PROVA: servono almeno 30 token per giudicarla
+
+## Dati usati
+- 204 token valutati dall'Analyst (203 con percorso di prezzo), 2427 token valutati dal Filter, ciascuno seguito per 60 minuti, dal 2026-11-09 22:50 UTC
+- esclusi dai test: 3566 copycat (mint non creato da pump.fun, ora bloccati dal Filter), 1 con prezzo congelato (pool svuotata: DexScreener smette di aggiornarla), 2 con una lettura di prezzo assurda
+- ogni token è misurato con le regole di uscita attuali di Risk (stop, trailing, uscita a tempo e stop a profitto) rigiocate sul suo percorso di prezzo
+- 307 configurazioni provate in questo ciclo, 161161 in totale in 651 cicli
+- scelta sul 70% più vecchio dei dati, verifica sul 30% più recente
+
+## Proposte (da valutare: il Controllore non le applica)
+- Filter | tutte le situazioni | [filter] min_liquidity_usd = 40000
+    vince anche in: memecoin laterali (indice meme 1h tra -1.5% e +1.5%), mercato normale
+    guadagno stimato +19.13 punti % per token valutato, intervallo 95% [-13.81, +52.07] su 12 token di verifica — PROMETTENTE
+- Executor | tutte le situazioni | accettare i token rifiutati per 'EV negativo' ([quant] gate EV meno severo)
+    vince anche in: memecoin laterali (indice meme 1h tra -1.5% e +1.5%), mercato normale
+    guadagno stimato +3.65 punti % per token valutato, intervallo 95% [-3.79, +11.10] su 23 token di verifica — PROMETTENTE
+- Risk | tutte le situazioni | [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8; [risk] profit_lock_activate_pct = 12; [risk] profit_lock_fast_activate_pct = 12; [risk] profit_lock_pct = 3; [risk] profit_lock_keep_pct = 60; [risk] profit_lock_fee_multiple = 3; [risk] profit_lock_keep_fast_pct = 0; [risk] profit_lock_speed_full = 15
+    vince anche in: token giovani, mercato normale
+    guadagno stimato +0.65 punti % per token valutato, intervallo 95% [-0.30, +1.60] su 21 token di verifica — PROMETTENTE
+- Analyst | token giovani | [analyst] min_score = 0.7; [analyst] weights = { liquidity = 0.05, turnover = 0.01, buy_pressure = 0.35, momentum = 0.03, holders = 0.11, hygiene = 0.02, website = 0.42, maturity = 0.01 }
+    vince anche in: memecoin laterali (indice meme 1h tra -1.5% e +1.5%), mercato normale
+    guadagno stimato +2.04 punti % per token valutato, intervallo 95% [-3.22, +7.31] su 49 token di verifica — PROMETTENTE
+Per applicarne una: chiedilo a Claude o scrivi la riga in config.toml (attenzione: una chiave presente in data/controller_overrides_paper.json vince su config.toml).
+
+## Stop più larghi del -6% (solo misura, non proposte)
+Lo stop a -6% è un limite rigido: queste varianti non vengono mai proposte. Servono a capire se i token giovani e volatili renderebbero di più lasciando più spazio al prezzo. Se una risulta SOLIDA per più cicli, la scelta di cambiare la regola resta tua.
+- token giovani (49 token): attuale +9.15% per token | migliore: [risk] hard_stop_pct = -25; [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8 -> +6.28 [-5.91, +18.47] in verifica — NESSUN MIGLIORAMENTO
+- tutte le situazioni (67 token): attuale +6.10% per token | migliore: [risk] hard_stop_pct = -25; [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8 -> +4.79 [-2.25, +11.82] in verifica — NESSUN MIGLIORAMENTO
+- pool piccole (liquidità < $50k) (48 token): attuale +6.78% per token | migliore: [risk] hard_stop_pct = -25; [risk] trail_activate_pct = 30; [risk] trail_distance_pct = 6 -> +7.38 [-5.03, +19.80] in verifica — PROMETTENTE
+
+## Dettaglio per agente e situazione
+### Scout — token con punteggio sopra soglia
+- tutte le situazioni (67 token): attuale media +6.10% per token (24 presi) | migliore: [scout] dexscreener = false; [scout] geckoterminal = false -> -0.60 (scelta), +10.15 [-0.55, +20.85] (verifica), 14 presi — nessun miglioramento
+- mercato normale (67 token): attuale media +6.10% per token (24 presi) | migliore: [scout] dexscreener = false; [scout] geckoterminal = false -> -0.60 (scelta), +10.15 [-3.93, +24.24] (verifica), 14 presi — nessun miglioramento
+- memecoin laterali (indice meme 1h tra -1.5% e +1.5%) (65 token): attuale media +6.48% per token (23 presi) | migliore: [scout] dexscreener = false; [scout] geckoterminal = false -> -0.51 (scelta), +9.80 [-5.08, +24.67] (verifica), 14 presi — nessun miglioramento
+- token giovani (49 token): attuale media +9.15% per token (18 presi) | migliore: [scout] pumpportal = false -> -18.49 (scelta), +4.58 [-13.13, +22.30] (verifica), 5 presi — nessun miglioramento
+- pool piccole (liquidità < $50k) (48 token): attuale media +6.78% per token (18 presi) | migliore: [scout] pumpportal = false -> -17.89 (scelta), +4.58 [-13.13, +22.30] (verifica), 5 presi — nessun miglioramento
+
+### Filter — token promossi dal Filter (solo soglie più severe, mai più larghe)
+- tutte le situazioni (37 token): attuale media -14.90% per token (33 presi) | migliore: [filter] min_liquidity_usd = 40000 -> +15.00 (scelta), +19.13 [-13.81, +52.07] (verifica), 17 presi — promettente
+- mercato normale (35 token): attuale media -15.84% per token (31 presi) | migliore: [filter] min_liquidity_usd = 40000 -> +15.63 (scelta), +19.70 [-27.77, +67.17] (verifica), 16 presi — promettente
+- memecoin laterali (indice meme 1h tra -1.5% e +1.5%) (33 token): attuale media -16.38% per token (30 presi) | migliore: [filter] min_liquidity_usd = 40000 -> +14.20 (scelta), +26.52 [-25.66, +78.71] (verifica), 15 presi — promettente
+
+### Analyst — token valutati dall'Analyst, ri-calcolati con pesi diversi
+- tutte le situazioni (203 token): attuale media +1.97% per token (27 presi) | migliore: [analyst] min_score = 0.7; [analyst] weights = { liquidity = 0.05, turnover = 0.01, buy_pressure = 0.35, momentum = 0.03, holders = 0.11, hygiene = 0.02, website = 0.42, maturity = 0.01 } -> +1.17 (scelta), +0.00 [+0.00, +0.00] (verifica), 20 presi — nessun miglioramento
+- mercato normale (201 token): attuale media +1.99% per token (27 presi) | migliore: [analyst] min_score = 0.7; [analyst] weights = { liquidity = 0.05, turnover = 0.01, buy_pressure = 0.35, momentum = 0.03, holders = 0.11, hygiene = 0.02, website = 0.42, maturity = 0.01 } -> +0.47 (scelta), +1.64 [-2.59, +5.87] (verifica), 20 presi — promettente
+- memecoin laterali (indice meme 1h tra -1.5% e +1.5%) (196 token): attuale media +2.11% per token (26 presi) | migliore: [analyst] min_score = 0.7; [analyst] weights = { liquidity = 0.05, turnover = 0.01, buy_pressure = 0.35, momentum = 0.03, holders = 0.11, hygiene = 0.02, website = 0.42, maturity = 0.01 } -> +0.48 (scelta), +1.69 [-2.68, +6.07] (verifica), 19 presi — promettente
+- token giovani (161 token): attuale media +2.73% per token (21 presi) | migliore: [analyst] min_score = 0.7; [analyst] weights = { liquidity = 0.05, turnover = 0.01, buy_pressure = 0.35, momentum = 0.03, holders = 0.11, hygiene = 0.02, website = 0.42, maturity = 0.01 } -> +0.83 (scelta), +2.04 [-3.22, +7.31] (verifica), 16 presi — promettente
+- token maturi (42 token): attuale media -0.94% per token (6 presi) | migliore: [analyst] min_score = 0.75 -> -0.50 (scelta), +0.00 [+0.00, +0.00] (verifica), 3 presi — nessun miglioramento
+- pool piccole (liquidità < $50k) (161 token): attuale media +1.97% per token (21 presi) | migliore: [analyst] min_score = 0.7; [analyst] weights = { liquidity = 0.05, turnover = 0.01, buy_pressure = 0.35, momentum = 0.03, holders = 0.11, hygiene = 0.02, website = 0.42, maturity = 0.01 } -> +1.42 (scelta), +0.00 [+0.00, +0.00] (verifica), 15 presi — nessun miglioramento
+- pool grandi (liquidità >= $50k) (42 token): attuale media +1.99% per token (6 presi) | migliore: [analyst] min_score = 0.8; [analyst] weights = { liquidity = 0.04, turnover = 0.05, buy_pressure = 0.24, momentum = 0.03, holders = 0.08, hygiene = 0.01, website = 0.54, maturity = 0.02 } -> -2.72 (scelta), +0.96 [-1.52, +3.44] (verifica), 2 presi — nessun miglioramento
+
+### Timing — token con punteggio sopra soglia, con percorso di prezzo: quando comprare dopo l'approvazione
+- tutte le situazioni (67 token): attuale media +6.10% per token (24 presi) | migliore: [entry] mode = "bounce"; [entry] window_minutes = 10; [entry] dip_pct = 2; [entry] fallback = "buy" -> +4.04 (scelta), -8.14 [-26.16, +9.88] (verifica), 67 presi — nessun miglioramento
+- mercato normale (67 token): attuale media +6.10% per token (24 presi) | migliore: [entry] mode = "bounce"; [entry] window_minutes = 10; [entry] dip_pct = 2; [entry] fallback = "buy" -> +4.04 (scelta), -8.14 [-31.86, +15.57] (verifica), 67 presi — nessun miglioramento
+- memecoin laterali (indice meme 1h tra -1.5% e +1.5%) (65 token): attuale media +6.48% per token (23 presi) | migliore: [entry] mode = "bounce"; [entry] window_minutes = 10; [entry] dip_pct = 8; [entry] fallback = "buy" -> +4.25 (scelta), +1.55 [-40.88, +43.97] (verifica), 65 presi — promettente
+- token giovani (49 token): attuale media +9.15% per token (18 presi) | migliore: [entry] mode = "bounce"; [entry] window_minutes = 10; [entry] dip_pct = 8; [entry] fallback = "buy" -> +8.10 (scelta), -1.09 [-56.82, +54.63] (verifica), 49 presi — nessun miglioramento
+- pool piccole (liquidità < $50k) (48 token): attuale media +6.78% per token (18 presi) | migliore: [entry] window_minutes = 3 -> +2.47 (scelta), +0.00 [+0.00, +0.00] (verifica), 15 presi — nessun miglioramento
+
+### Executor — segnali di acquisto rifiutati dall'Executor, seguiti per 60 minuti
+- tutte le situazioni (74 token): attuale media +0.00% per token (0 presi) | migliore: accettare i token rifiutati per 'EV negativo' ([quant] gate EV meno severo) -> +11.36 (scelta), +3.65 [-3.79, +11.10] (verifica), 11 presi — promettente
+- mercato normale (74 token): attuale media +0.00% per token (0 presi) | migliore: accettare i token rifiutati per 'EV negativo' ([quant] gate EV meno severo) -> +11.36 (scelta), +3.65 [-6.15, +13.45] (verifica), 11 presi — promettente
+- memecoin laterali (indice meme 1h tra -1.5% e +1.5%) (73 token): attuale media +0.00% per token (0 presi) | migliore: accettare i token rifiutati per 'EV negativo' ([quant] gate EV meno severo) -> +11.61 (scelta), +3.82 [-6.43, +14.06] (verifica), 10 presi — promettente
+- token giovani (60 token): attuale media +0.00% per token (0 presi) | migliore: accettare i token rifiutati per 'max posizioni' ([executor] max_open_positions più alto) -> +10.25 (scelta), +0.00 [+0.00, +0.00] (verifica), 5 presi — nessun miglioramento
+- pool piccole (liquidità < $50k) (59 token): attuale media +0.00% per token (0 presi) | migliore: accettare i token rifiutati per 'max posizioni' ([executor] max_open_positions più alto) -> +10.37 (scelta), +0.00 [+0.00, +0.00] (verifica), 7 presi — nessun miglioramento
+
+### Risk — token con punteggio sopra soglia, con percorso di prezzo; una variante vince solo se non aumenta i trade in perdita né peggiora il 10% peggiore
+- tutte le situazioni (67 token): attuale media +6.10% per token (24 presi) | migliore: [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8; [risk] profit_lock_activate_pct = 12; [risk] profit_lock_fast_activate_pct = 12; [risk] profit_lock_pct = 3; [risk] profit_lock_keep_pct = 60; [risk] profit_lock_fee_multiple = 3; [risk] profit_lock_keep_fast_pct = 0; [risk] profit_lock_speed_full = 15 -> +0.71 (scelta), +0.65 [-0.30, +1.60] (verifica), 24 presi — promettente
+- mercato normale (67 token): attuale media +6.10% per token (24 presi) | migliore: [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8; [risk] profit_lock_activate_pct = 12; [risk] profit_lock_fast_activate_pct = 12; [risk] profit_lock_pct = 3; [risk] profit_lock_keep_pct = 60; [risk] profit_lock_fee_multiple = 3; [risk] profit_lock_keep_fast_pct = 0; [risk] profit_lock_speed_full = 15 -> +0.71 (scelta), +0.65 [-0.60, +1.90] (verifica), 24 presi — promettente
+- memecoin laterali (indice meme 1h tra -1.5% e +1.5%) (65 token): attuale media +6.48% per token (23 presi) | migliore: [risk] trail_activate_pct = 25; [risk] profit_lock_activate_pct = 10; [risk] profit_lock_pct = 6; [risk] profit_lock_keep_pct = 80; [risk] profit_lock_fee_multiple = 3; [risk] profit_lock_keep_fast_pct = 0; [risk] profit_lock_speed_full = 15 -> +0.70 (scelta), +0.00 [+0.00, +0.00] (verifica), 23 presi — nessun miglioramento
+- token giovani (49 token): attuale media +9.15% per token (18 presi) | migliore: [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8; [risk] profit_lock_activate_pct = 12; [risk] profit_lock_fast_activate_pct = 12; [risk] profit_lock_pct = 3; [risk] profit_lock_keep_pct = 60; [risk] profit_lock_fee_multiple = 3; [risk] profit_lock_keep_fast_pct = 0; [risk] profit_lock_speed_full = 15 -> +0.10 (scelta), +1.18 [-0.62, +2.99] (verifica), 18 presi — promettente
+- pool piccole (liquidità < $50k) (48 token): attuale media +6.78% per token (18 presi) | migliore: [risk] trail_activate_pct = 30; [risk] trail_distance_pct = 6; [risk] profit_lock_activate_pct = 0; [risk] profit_lock_fast_activate_pct = 5; [risk] profit_lock_pct = 6; [risk] profit_lock_keep_pct = 80; [risk] profit_lock_fee_multiple = 2; [risk] profit_lock_keep_from_pct = 40; [risk] profit_lock_keep_fast_pct = 90 -> +1.29 (scelta), +0.02 [-0.03, +0.07] (verifica), 18 presi — promettente
+
+### Risk (stop larghi) — token con punteggio sopra soglia, con percorso di prezzo; stop più larghi del limite rigido: solo misura
+- tutte le situazioni (67 token): attuale media +6.10% per token (24 presi) | migliore: [risk] hard_stop_pct = -25; [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8 -> -0.11 (scelta), +4.79 [-2.25, +11.82] (verifica), 24 presi — nessun miglioramento
+- mercato normale (67 token): attuale media +6.10% per token (24 presi) | migliore: [risk] hard_stop_pct = -25; [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8 -> -0.11 (scelta), +4.79 [-4.48, +14.05] (verifica), 24 presi — nessun miglioramento
+- memecoin laterali (indice meme 1h tra -1.5% e +1.5%) (65 token): attuale media +6.48% per token (23 presi) | migliore: [risk] hard_stop_pct = -25; [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8 -> -0.11 (scelta), +5.73 [-3.67, +15.13] (verifica), 23 presi — nessun miglioramento
+- token giovani (49 token): attuale media +9.15% per token (18 presi) | migliore: [risk] hard_stop_pct = -25; [risk] trail_activate_pct = 40; [risk] trail_distance_pct = 8 -> -0.89 (scelta), +6.28 [-5.91, +18.47] (verifica), 18 presi — nessun miglioramento
+- pool piccole (liquidità < $50k) (48 token): attuale media +6.78% per token (18 presi) | migliore: [risk] hard_stop_pct = -25; [risk] trail_activate_pct = 30; [risk] trail_distance_pct = 6 -> +1.23 (scelta), +7.38 [-5.03, +19.80] (verifica), 18 presi — promettente
+
+## Come leggere
+- 'per token valutato': differenza media di risultato netto (dopo i costi) rispetto alla configurazione attuale, contando 0 per i token non comprati.
+- SOLIDA: migliore anche sui dati di verifica, con intervallo al 95% tutto sopra zero. PROMETTENTE: migliore in media ma ancora incerta. Le proposte rispettano sempre i limiti rigidi (8%, -6%, +12%, soglia 0.6, top-10 20%, volume $50k).
+- Una proposta per una sola situazione (es. mercato in crollo) oggi si applica cambiando il valore generale: valuta se la situazione è frequente. Prova ogni modifica prima in paper.
+- Il percorso di prezzo è campionato ogni ~20 s: gli stop reali (ogni 2 s) possono uscire a prezzi leggermente diversi. Sono stime sul passato, non garanzie.
+
+## Stop a profitto (blocco del guadagno)
+Regola attuale: dopo +30% netto (+30% se raggiunto entro 3 min dall'acquisto) lo stop sale a +4% netto; da un picco di +20% lo stop sale col prezzo e tiene il 70% del picco netto (non scende mai); ogni livello è alzato dei costi di vendita (minimo 1%, o lo slittamento misurato se maggiore). Si arma solo quando il guadagno netto è almeno 1 volte le commissioni andata/ritorno del trade, se questo è più alto della soglia.
+- 22 trade registrati, stop a profitto armato su 15
+    - chiusi da PROFIT_LOCK: 13, risultato medio +10.68% (peggiore +2.77%, in perdita 0)
+    - chiusi da TRAILING_STOP: 2, risultato medio +2.88% (peggiore -2.42%, in perdita 1)
+- vendite dello stop a profitto: slittamento mediano 0.65% tra il valore che le ha fatte scattare e l'incasso reale (margine usato 1.00%)
+- le soglie alternative (armare/vendere più in alto o più in basso) sono provate sui percorsi di prezzo nella sezione Risk e compaiono tra le Proposte quando battono quelle attuali
+
+## Modello statistico (P(win) sui follow-up a 60 minuti)
+
+- Dati: 204 valutazioni dell'Analyst su 166 token (203 con percorso di prezzo, 67 sopra la soglia attuale), vincenti con le regole di uscita attuali: 20.6%.
+- In attesa di dati: servono almeno 1000 valutazioni con i valori salvati (ora 204). Fino ad allora il modello non esiste e non blocca nulla.
+
+
+## Whale checker — precisione delle informazioni
+Regola: con dati sufficienti (almeno 300 token decisi, 20 vincenti, 5 wallet bravi, prova fuori campione) un wallet bravo presente vale il 30% del punteggio dell'Analyst e l'Executor compra entro +30% dal prezzo d'acquisto dei wallet bravi (altrimenti aspetta fino a 60 min, e scarta il token se il wallet vende); senza dati sufficienti l'informazione è ignorata.
+- stato: dati sufficienti (46 smart wallets from 704 tokens (414 winners), out-of-sample 63/101 won vs base 48% (lift 1.3))
+### A. Risultato a 60 minuti (regole di uscita attuali), 7 token valutati con dati sufficienti
+- con wallet bravi presenti: 3 token, risultato medio -9.75% [-76.40, +56.91], in guadagno 33% (pochi dati: servono almeno 15 token)
+- senza wallet bravi: 4 token, risultato medio +16.17% [-12.97, +45.30], in guadagno 50% (pochi dati: servono almeno 15 token)
+### B. Token approvati solo grazie ai wallet bravi
+- approvati grazie ai wallet bravi: nessun token ancora
+### C. Precisione sul traguardo $100k
+- 27 segnalazioni su 16 token, 15 già decisi: 87% hanno raggiunto il traguardo
+- base: 34% dei 163 token valutati dall'Analyst e già decisi -> il segnale è 2.5 volte la base
+### D. Wallet con almeno 3 token decisi
+- 3vKC1m1C: 10/10 al traguardo
+- 2z2q5gk8: 7/7 al traguardo
+- AzqKTg2x: 3/3 al traguardo
+- proposta: nessuna per ora (servono dati più chiari)
+
+## Whale checker — raccolta degli indirizzi (efficienza)
+- ultime 1.13 h: 25 token letti (22.2/ora), 24 completi, 1 troppo lunghi, 0 errori
+- costo per token letto: 109 s, 72 chiamate RPC, 8.0 pagine di firme
+- chiamate spese sui token troppo lunghi: 61 su 1799
+- resa: 20.2 compratori utili per token, 3.1 transazioni lette per compratore utile, 321 acquisti polvere (sotto 0.1 SOL) scartati senza salvarli
+- canale RPC del Whale checker: 34.1 chiamate/min su 100 disponibili (34%)
+- coda: 6 token seguiti da leggere, 0 token passati da recuperare
+- rapporti all'Analyst: 23, tempo medio 5.3 s, 0 senza risposta in tempo; prezzi d'acquisto dei wallet bravi letti 0 su 7
+- raccolto (ultime 24 h, 473 token letti): 6407 compratori utili (13.5 per token); scartati: 3073 bundle del creatore, 15074 ricevuti senza firmare, 266 del creatore; 5464 vendite
+- copertura: dei 5 token valutati dall'Analyst nelle ultime 6 h, 5 già letti (4 completi)
+- wallet bravi: 44, finanziatore noto per 44, saldo letto per 44 (46 sopra $500)
+- registro delle scelte (ultime 24 h): entrati nella lista 50; quasi bravi (% successi bassa) 47; contati per un token 14; scartati: stavano vendendo 7; usciti dalla lista 5; scartati: hanno venduto durante l'attesa dell'Executor 2
+- nessun problema
+- proposta: nessuna: la raccolta va bene così per ora
+
+## Token scartati — dove sono arrivati dopo 6 e 24 ore
+Ogni token graduato, comprabile per dimensione e scartato viene seguito per 24 ore. «Arrivato» = ha toccato $100k di market cap con almeno +35% dal prezzo dello scarto. «Vivo» = market cap almeno $50k e liquidità almeno $10k. Solo misura: nessuna regola cambia da sola.
+- seguiti 111 token, 60 con almeno 6 ore di storia, 0 con 24 ore
+- tutti gli scartati: 60 token, arrivati 13 (22%), vivi a 6 ore 4 (7%)
+### Per regola (un token può essere fermato da più regole)
+- attesa dopo la graduazione: 48 token, arrivati 7 (15%), vivi a 6 ore 0 (0%)
+- volume orario basso: 51 token, arrivati 9 (18%), vivi a 6 ore 2 (4%)
+- min_market_cap: 37 token, arrivati 5 (14%), vivi a 6 ore 0 (0%)
+- liquidity: 27 token, arrivati 1 (4%), vivi a 6 ore 0 (0%)
+- top 10 troppo concentrati: 28 token, arrivati 7 (25%), vivi a 6 ore 0 (0%)
+- vendite dello sviluppatore: 21 token, arrivati 8 (38%), vivi a 6 ore 3 (14%)
+- nome di un token finito in rug: 16 token, arrivati 2 (12%), vivi a 6 ore 0 (0%)
+- finanziatore legato a un rug: 12 token, arrivati 6 (50%), vivi a 6 ore 2 (17%) (pochi dati: servono almeno 15 token)
+- liquidità non bloccata: 4 token, arrivati 0 (0%), vivi a 6 ore 0 (0%) (pochi dati: servono almeno 15 token)
+- punteggio dell'Analyst sotto soglia: 6 token, arrivati 4 (67%), vivi a 6 ore 1 (17%) (pochi dati: servono almeno 15 token)
+- sviluppatore legato a un rug: 4 token, arrivati 1 (25%), vivi a 6 ore 0 (0%) (pochi dati: servono almeno 15 token)
+### Fermati da una sola regola (oltre all'attesa)
+- volume orario basso: 1 token, arrivati 0 (0%), vivi a 6 ore 0 (0%) (pochi dati: servono almeno 15 token)
+- sviluppatore legato a un rug: 1 token, arrivati 1 (100%), vivi a 6 ore 0 (0%) (pochi dati: servono almeno 15 token)
+- vendite dello sviluppatore: 1 token, nessuno ancora giudicabile
+- lettura: una regola che ferma molti token «vivi a 24 ore» costa occasioni; una che ferma quasi solo token morti sta facendo il suo lavoro.
+
+## Whale checker — wallet bravi durante l'attesa dopo la graduazione
+Solo misura, e solo quando ci sono wallet bravi conosciuti: i token ancora in attesa (i 40 più recenti, ogni 5 min) vengono controllati. Nessun acquisto viene anticipato. Comprare durante l'attesa conviene solo sopra circa 78% di token in guadagno.
+- con un wallet bravo dentro: 105 token controllati; risultato a 60 minuti su 75: medio -25.41% [-46.24, -4.58], in guadagno 39%; arrivati a $100k 6 su 36 (17%)
+- senza: 649 token controllati; risultato a 60 minuti su 36: medio -39.90% [-59.26, -20.54], in guadagno 28%; arrivati a $100k 0 su 11 (0%)
+- i token con un wallet bravo sono in guadagno nel 39% dei casi, sotto la soglia di 78%: l'attesa resta com'è.
