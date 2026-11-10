@@ -57,6 +57,13 @@ class FilterCfg:
     deep_max_wait_seconds: float = 60   # drop queued deep checks whose market data got stale
     # Instant-rug guards (2026-11-10: 16 of 32 paper trades lost 60-100%, all bought 5-26 min after graduation).
     graduation_wait_minutes: float = 45.0   # no buy while the PumpSwap pair is younger than this (0 = off)
+    # Early release of the wait for a token steady since graduation (see Filter._early_release).
+    early_release: bool = True
+    early_release_min_minutes: float = 20.0
+    early_release_first_seen_minutes: float = 15.0
+    early_release_min_readings: int = 3
+    early_release_min_span_minutes: float = 10.0
+    early_release_max_dev_pct: float = 5.0
     spread_top10_high_pct: float = 70.0     # top10 seen above this...
     spread_window_minutes: float = 60.0     # ...within this window and now under max_top10_pct = supply spread
                                             # over fake wallets -> permanent kill

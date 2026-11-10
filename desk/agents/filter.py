@@ -168,6 +168,8 @@ class Filter(Agent):
         self.f = self.cfg.filter
         self._last_reason: dict[str, str] = {}
         self._top10_seen: dict[str, float] = {}
+        self._wait_hist: dict[str, list[tuple]] = {}   # mint -> readings during the graduation wait
+        self._released: set[str] = set()                # graduation wait lifted early (re-checked every time)
         self._last_pass_log: dict[str, float] = {}
         self._deep: asyncio.PriorityQueue = asyncio.PriorityQueue()
         self._deep_pending: set[str] = set()
@@ -274,7 +276,8 @@ class Filter(Agent):
             if not ok:   # out of scope for good: the Scout drops it, no more re-screens (quietly, not a "kill")
                 self.desk.blacklist[cand.mint] = "not a pump.fun token"
         failed = [c for c in checks if not c.passed]
-        if failed and [c.name for c in failed] == ["graduation_wait"] and not self._recent_top10(cand.mint):
+        if failed and [c.name for c in failed] == ["graduation_wait"] and (
+                not self._recent_top10(cand.mint) or cand.mint in self._released):
             # Only the graduation wait fails: still run the deep checks every few minutes, so the holder-spread
             # guard sees the top10 while the supply is still concentrated (it moves to fake wallets later).
             return None
@@ -437,6 +440,11 @@ class Filter(Agent):
             checks.append(Check("rugcheck_danger", not danger, ", ".join(danger) or "none", "none",
                                 ", ".join(danger) or "no danger-level risks"))
 
+        self._early_release(cand.mint, snap, checks, t10, float(rc.get("totalHolders") or n_holders or 0),
+                            (float(rc.get("creatorBalance") or 0) / float(token.get("supply") or 0) * 100
+                             if rc.get("creatorBalance") is not None and float(token.get("supply") or 0) > 0
+                             else None))
+
         gm = None
         if self.desk.gmgn is not None and all(c.passed for c in checks):
             gm = await self.gmgn_checks(cand.mint, sym, creator, checks)
@@ -457,6 +465,57 @@ class Filter(Agent):
         }
         return FilterReport(cand.mint, sym, passed, checks, market=snap, rug=rug_facts, creator=creator,
                             source=cand.source)
+
+    def _early_release(self, mint: str, snap: MarketSnapshot, checks: list[Check], t10: float | None,
+                       holders: float, dev_pct: float | None) -> None:
+        """Lift the graduation wait early when the token has proven steady since graduation (user request).
+
+        Every deep check during the wait is recorded. The wait is lifted only if ALL hold:
+          * at least early_release_min_minutes since graduation (instant rugs hit 5-26 min after it);
+          * we watched it from the start: first reading within early_release_first_seen_minutes of graduation,
+            at least early_release_min_readings readings spanning early_release_min_span_minutes;
+          * top10 never above max_top10_pct in ANY reading (the rugs were 74-99% before spreading to fake wallets);
+          * holders grew and liquidity held (>= 90% of the first reading); dev holds <= early_release_max_dev_pct;
+          * every other check passes now."""
+        f = self.f
+        wait = next((c for c in checks if c.name == "graduation_wait"), None)
+        grad = self.graduation_age(snap)
+        if grad is None or wait is None:
+            return
+        hist = self._wait_hist.setdefault(mint, [])
+        hist.append((time.time(), grad, t10, holders, snap.liquidity_usd))
+        if len(self._wait_hist) > 5000:
+            cutoff = time.time() - 2 * 3600
+            self._wait_hist = {k: v for k, v in self._wait_hist.items() if v[-1][0] > cutoff}
+        if wait.passed or not f.early_release:
+            return
+        if any(not c.passed for c in checks if c.name != "graduation_wait"):
+            return
+        first, last = hist[0], hist[-1]
+        why = []
+        if grad < f.early_release_min_minutes:
+            why.append(f"only {grad:.0f} min since graduation")
+        if first[1] > f.early_release_first_seen_minutes:
+            why.append(f"first seen {first[1]:.0f} min after graduation")
+        if len(hist) < f.early_release_min_readings or (last[0] - first[0]) / 60 < f.early_release_min_span_minutes:
+            why.append(f"{len(hist)} readings over {(last[0] - first[0]) / 60:.0f} min")
+        if any(h[2] is None or h[2] > f.max_top10_pct for h in hist):
+            why.append("top10 was concentrated")
+        if last[3] <= first[3]:
+            why.append("holders not growing")
+        if last[4] < 0.9 * first[4]:
+            why.append("liquidity dropping")
+        if dev_pct is not None and dev_pct > f.early_release_max_dev_pct:
+            why.append(f"dev holds {dev_pct:.1f}%")
+        if why:
+            wait.detail += " | early release no: " + ", ".join(why)
+            return
+        wait.passed = True
+        self._released.add(mint)
+        wait.detail = (f"graduated {grad:.0f} min ago: EARLY RELEASE (steady since graduation: {len(hist)} readings, "
+                       f"top10 <= {max(h[2] for h in hist):.1f}%, holders {first[3]:.0f} -> {last[3]:.0f}, "
+                       f"liquidity ${first[4]:,.0f} -> ${last[4]:,.0f})")
+        self.state.bump("early_release")
 
     def _holder_spread(self, mint: str, t10: float | None) -> str | None:
         """Remember high top10 readings; flag a token whose top10 went from > spread_top10_high_pct to under

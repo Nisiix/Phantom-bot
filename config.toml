@@ -48,6 +48,12 @@ deep_workers = 3                   # deep checks in parallel (RugCheck keeps its
 deep_max_wait_seconds = 60         # drop queued deep checks whose market data got stale
 # ── instant-rug guards (2026-11-10) ──
 graduation_wait_minutes = 45       # no buy in the first N min after pump.fun -> PumpSwap graduation (0 = off)
+early_release = true               # lift the wait early for a token steady since graduation, only if ALL hold:
+early_release_min_minutes = 20     #   at least N min since graduation (instant rugs hit 5-26 min after it)
+early_release_first_seen_minutes = 15  # watched from the start (first holder reading within N min of graduation)
+early_release_min_readings = 3     #   at least N holder readings...
+early_release_min_span_minutes = 10    # ...spanning N min; top10 never above max_top10_pct in any of them
+early_release_max_dev_pct = 5.0    #   holders growing, liquidity >= 90% of first reading, dev holds <= N%
 spread_top10_high_pct = 70.0       # top10 above this in the last spread_window_minutes and now under max_top10_pct
 spread_window_minutes = 60         #   = supply spread across fake wallets -> token killed
 rugged_name_days = 7               # relaunches of a name/symbol that rugged in the last N days are killed

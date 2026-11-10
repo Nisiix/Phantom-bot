@@ -634,3 +634,60 @@ def test_quant_caps_glitched_returns():
     q.load([{"ts": i, "score": 0.7, "label": "up", "gross_pct": 2_032_056.0, "weight": 1.0} for i in range(5)])
     _, r, _ = q.probabilities(0.7)
     assert r["up"] <= 300
+
+
+def test_graduation_wait_early_release_only_for_steady_tokens(tmp_path):
+    from desk.models import Candidate
+    desk, f = _filter_with_rugcheck(tmp_path, 1.0)           # top10 = 10%
+    t0 = time.time()
+    holders = iter([800, 1100, 1500, 1900, 2300])
+
+    async def report(mint, base=desk.rug.report):
+        r = await base(mint)
+        r["totalHolders"] = next(holders)
+        return r
+    desk.rug.report = report
+    clock = [t0]
+    import desk.agents.filter as fmod
+
+    class FakeTime:
+        @staticmethod
+        def time():
+            return clock[0]
+    fmod.time = FakeTime
+    try:
+        def check(grad_min):
+            clock[0] = t0 + grad_min * 60
+            s = snap(pair_created_at=clock[0] - grad_min * 60, liquidity_usd=30_000, volume_h1=40_000)
+            import desk.models as m
+            old = m.now
+            m.now = lambda: clock[0]
+            try:
+                rep = asyncio.run(f.deep(Candidate("M"), s))
+            finally:
+                m.now = old
+            return rep, next(c for c in rep.checks if c.name == "graduation_wait")
+        _, w = check(8)                  # first reading 8 min after graduation
+        assert not w.passed
+        _, w = check(13)
+        assert not w.passed
+        _, w = check(18)                 # 3 readings over 10 min, but < 20 min since graduation
+        assert not w.passed and "only 18 min" in w.detail
+        rep, w = check(22)
+        assert w.passed and "EARLY RELEASE" in w.detail and rep.passed
+    finally:
+        fmod.time = time
+
+
+def test_no_early_release_if_first_seen_late_or_concentrated(tmp_path):
+    from desk.models import Candidate
+    desk, f = _filter_with_rugcheck(tmp_path, 1.0)
+    f._wait_hist["M"] = [(time.time() - 900, 25, 5.0, 500, 30_000), (time.time() - 600, 30, 5.0, 900, 30_000),
+                         (time.time() - 300, 35, 5.0, 1200, 30_000)]
+    s = snap(pair_created_at=time.time() - 40 * 60, liquidity_usd=30_000, volume_h1=40_000)
+    w = next(c for c in asyncio.run(f.deep(Candidate("M"), s)).checks if c.name == "graduation_wait")
+    assert not w.passed and "first seen 25 min" in w.detail
+    f._wait_hist["M"] = [(time.time() - 900, 10, 60.0, 500, 30_000), (time.time() - 600, 15, 5.0, 900, 30_000),
+                         (time.time() - 300, 20, 5.0, 1200, 30_000)]
+    w = next(c for c in asyncio.run(f.deep(Candidate("M"), s)).checks if c.name == "graduation_wait")
+    assert not w.passed and "top10 was concentrated" in w.detail
