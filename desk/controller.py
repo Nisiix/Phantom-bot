@@ -54,6 +54,15 @@ SITUATIONS = {
 }
 WIDE_STOPS = "Risk (stop larghi)"     # measure-only experiment: stops wider than the -6% hard limit
 AGENT_NAMES = {"Scout": "Scout", "Filter": "Filter", "Analyst": "Analyst", "Risk": "Risk", "Executor": "Executor"}
+# One token's result is capped to this range in every test: a single price glitch (or one +50,000% runner)
+# must not decide the average for 80 others. A real exit beyond +300% in an hour is rare and still counts as +300%.
+RET_MIN, RET_MAX = -100.0, 300.0
+
+
+def clip_ret(x: float) -> float:
+    return max(RET_MIN, min(RET_MAX, x))
+
+
 BASE_WEIGHTS = {
     "liquidity": 0.14, "turnover": 0.10, "buy_pressure": 0.16, "momentum": 0.12,
     "holders": 0.14, "hygiene": 0.08, "website": 0.16, "maturity": 0.10,
@@ -253,7 +262,7 @@ def parse_rows(raw: list[dict], young_minutes: float) -> list[dict]:
                 path = None
         if r.get("score") is not None:
             f.setdefault("score", r["score"])
-        rows.append({"ts": r["start_ts"], "mint": r.get("mint", ""), "ret": float(r["sim_net_pct"]),
+        rows.append({"ts": r["start_ts"], "mint": r.get("mint", ""), "ret": clip_ret(float(r["sim_net_pct"])),
                      "cost": float(r.get("cost_pct") or 2.5), "decision": r.get("decision", ""), "f": f,
                      "path": path, "sit": row_situations(f, young_minutes)})
     rows.sort(key=lambda x: x["ts"])
@@ -269,15 +278,15 @@ def simulate_exit(path: list[tuple[float, float]], cost: float, stop: float, tra
         net = raw - cost
         last = net
         if max_hold_min and sec >= max_hold_min * 60:
-            return net
+            return clip_ret(net)
         if net <= stop:
-            return net
+            return clip_ret(net)
         peak = max(peak, net)
         if peak >= trail_on:
             trail = True
         if trail and 1 + net / 100 <= (1 + peak / 100) * (1 - trail_dist / 100):
-            return net
-    return last
+            return clip_ret(net)
+    return clip_ret(last)
 
 
 def analyst_score(f: dict, weights: dict) -> float | None:
@@ -326,7 +335,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
                  min_rows: int) -> list[Space]:
     a, r, f = cfg.analyst, cfg.risk, cfg.filter
     spaces: list[Space] = []
-    cur_w = dict(BASE_WEIGHTS)
+    cur_w = _norm({**BASE_WEIGHTS, **(getattr(a, "weights", None) or {})})
 
     # Tokens the current Analyst would buy (when there are enough of them), else every scored token.
     def bought(rows):
@@ -365,9 +374,8 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         parts = []
         if abs(v["min_score"] - a.min_score) > 1e-9:
             parts.append(f"[analyst] min_score = {v['min_score']:g}")
-        ch = [f"{k} {cur_w[k]:.2f}->{v['weights'][k]:.2f}" for k in cur_w if abs(v["weights"][k] - cur_w[k]) > 0.005]
-        if ch:
-            parts.append("pesi del punteggio (desk/agents/analyst.py WEIGHTS): " + ", ".join(ch))
+        if any(abs(v["weights"][k] - cur_w[k]) > 0.005 for k in cur_w):
+            parts.append("[analyst] weights = { " + ", ".join(f"{k} = {v['weights'][k]:.2f}" for k in cur_w) + " }")
         return parts
     spaces.append(Space("Analyst", rows, {"min_score": a.min_score, "weights": cur_w}, a_ret, grid, a_sample,
                         a_desc, note))
@@ -609,6 +617,8 @@ def within_hard_limits(cfg, changes: list[str]) -> bool:
             continue
         sec, rest = ch[1:].split("] ", 1)
         key, val = rest.split(" = ", 1)
+        if (sec, key) == ("analyst", "weights"):
+            continue                        # score weights: no hard limit (validated when config.toml is loaded)
         obj = getattr(test, sec, None)
         if obj is None or not hasattr(obj, key):
             return False

@@ -230,3 +230,20 @@ def test_reset_keeps_live_gate_record(tmp_path):
     assert "paper trades 21/30" in msgs[0]          # pre-reset trades still count, 12 -> 10 jump is no drawdown
     assert not any("drawdown" in m for m in msgs)
     assert len(st.all_trades()) == 1                # but the account's own stats start from zero
+
+
+def test_outlier_capped_and_weights_configurable(tmp_path):
+    assert simulate_exit([(20, 900000.0)], 2.0, -6, 12, 6) == 300.0
+    p = tmp_path / "c.toml"
+    p.write_text('[analyst]\nweights = { holders = 0.30, buy_pressure = 0.05 }\n', encoding="utf-8")
+    from desk.config import load_config
+    cfg = load_config(p)
+    assert cfg.analyst.weights == {"holders": 0.30, "buy_pressure": 0.05}
+    m, rug = snap(), {"top10_pct": 6.0, "holders_total": 4000, "insider_pct": 0, "risks": []}
+    base, _, _ = score_token(m, rug, {}, None)
+    tuned, _, _ = score_token(m, rug, {}, cfg.analyst)
+    assert tuned != base
+    p.write_text('[analyst]\nweights = { nonsense = 1 }\n', encoding="utf-8")
+    bad = load_config(p)
+    assert bad.analyst.weights == {} and any("weights" in w for w in bad.warnings)
+    assert within_hard_limits(cfg, ["[analyst] weights = { holders = 0.30 }", "[analyst] min_score = 0.65"])

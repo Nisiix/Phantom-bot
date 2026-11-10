@@ -119,7 +119,9 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None,
     why.append(f"age {age:.0f} min")
 
     gm = rug.get("gmgn") or None
-    weights = dict(WEIGHTS)
+    weights = {**WEIGHTS, **{k: float(v) for k, v in (getattr(cfg, "weights", None) or {}).items() if k in WEIGHTS}}
+    tot = sum(weights.values())
+    weights = {k: v / tot for k, v in weights.items()}
     if young:
         # Traction: for a young token, age alone says little. These free signals say whether real buyers keep
         # coming in: holders gained per minute, volume accelerating (last 5 min vs the hour), an organic average

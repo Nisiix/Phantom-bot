@@ -63,6 +63,9 @@ class AnalystCfg:
     website_check: bool = True
     claude_website_review: bool = True
     claude_model: str = "claude-opus-5-5"
+    # Score weights (keys of desk/agents/analyst.py WEIGHTS). Missing keys keep the built-in weight; the set is
+    # renormalised to sum 1. Empty = built-in weights. The Controller proposes changes here.
+    weights: dict = field(default_factory=dict)
     workers: int = 3                    # tokens scored in parallel (a slow website no longer blocks the rest)
     # Age-aware caution. For a token younger than young_age_hours DexScreener's "6h" change is its whole life
     # (since launch / graduation), so it is not a sign of a late entry: only the parabolic cap applies.
@@ -265,6 +268,12 @@ def enforce_hard_limits(cfg: Config) -> None:
     clamp(e, "exit_slippage_ladder_bps",
           lambda v: isinstance(v, list) and 0 < len(v) <= 6 and all(isinstance(b, int) and 0 < b <= 5000 for b in v),
           [800, 1500, 3000], "exit slippage ladder must be 1-6 values of 1-5000 bps")
+    from .agents.analyst import WEIGHTS as _W
+    aw = a.weights
+    if not isinstance(aw, dict) or any(k not in _W or not isinstance(v, (int, float)) or v < 0 for k, v in aw.items()) \
+            or (aw and sum({**_W, **aw}.values()) <= 0):
+        w.append(f"config: bad [analyst] weights {aw!r}, using the built-in weights")
+        a.weights = {}
     c = cfg.controller
     clamp(c, "interval_minutes", lambda v: 1 <= v <= 24 * 60, 10.0, "controller interval must be 1-1440 min")
     clamp(c, "health_seconds", lambda v: 10 <= v <= 3600, 60.0, "controller health checks every 10-3600 s")
