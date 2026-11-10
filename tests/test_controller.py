@@ -206,3 +206,27 @@ def test_reset_paper(tmp_path):
     assert pf.cash_sol == 10.0 and pf.starting_cash == 10.0 and not pf.positions and pf.total_pnl_sol == 0
     assert st.q("SELECT COUNT(*) AS n FROM equity")[0]["n"] == 0
     assert st.q("SELECT COUNT(*) AS n FROM shadow")[0]["n"] == 1      # learning data kept
+
+
+def test_reset_keeps_live_gate_record(tmp_path):
+    from run import reset_paper
+    from desk.recap import live_gate_status
+    from desk.store import Store
+    cfg = Config()
+    cfg.data_dir = tmp_path
+    st = Store(tmp_path / "paper.db")
+    for i in range(20):
+        st.add_trade({"mint": f"M{i}", "symbol": "T", "mode": "paper", "entry_ts": i, "exit_ts": i + 1,
+                      "cost_sol": 0.5, "proceeds_sol": 0.55, "pnl_sol": 0.05, "pnl_pct": 10.0,
+                      "peak_pnl_pct": 12.0, "score": 0.7, "entry_reason": "", "exit_reason": ""})
+    st.add_equity(1.0, 10.0, 12.0, 150.0)
+    reset_paper(cfg)
+    st = Store(tmp_path / "paper.db")
+    st.add_trade({"mint": "N", "symbol": "T", "mode": "paper", "entry_ts": 50, "exit_ts": 51, "cost_sol": 0.5,
+                  "proceeds_sol": 0.6, "pnl_sol": 0.1, "pnl_pct": 20.0, "peak_pnl_pct": 22.0, "score": 0.7,
+                  "entry_reason": "", "exit_reason": ""})
+    st.add_equity(60.0, 10.0, 10.1, 150.0)
+    ok, msgs = live_gate_status(st, cfg.live_gate)
+    assert "paper trades 21/30" in msgs[0]          # pre-reset trades still count, 12 -> 10 jump is no drawdown
+    assert not any("drawdown" in m for m in msgs)
+    assert len(st.all_trades()) == 1                # but the account's own stats start from zero

@@ -208,10 +208,11 @@ def build_recap(store: Store, portfolio, mode: str, t0: float, t1: float, agents
 
 
 def live_gate_status(paper_store: Store, gate) -> tuple[bool, list[str]]:
-    trades = paper_store.all_trades()
-    eq = [e["equity_sol"] for e in paper_store.equity_series(0)]
+    # A paper reset (run.py reset-paper) zeroes the balance and the profit stats, NOT the live-gate record:
+    # trades from before a reset are archived and still counted here, and the drawdown is the worst of each period.
+    trades = paper_store.archived_trades() + paper_store.all_trades()
     pnl = sum(t["pnl_sol"] for t in trades)
-    mdd = max_drawdown(eq)
+    mdd = min((max_drawdown(seg) for seg in paper_store.equity_segments() if seg), default=0.0)
     msgs, ok = [], True
     if len(trades) < gate.min_paper_trades:
         ok = False

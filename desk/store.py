@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS shadow (
   desk_label TEXT, desk_hit_s REAL, model_label TEXT, model_hit_s REAL, ret_end_pct REAL, max_pct REAL,
   min_pct REAL, sim_net_pct REAL, p_up REAL, p_down REAL, p_neither REAL);
 CREATE INDEX IF NOT EXISTS ix_shadow_end ON shadow(end_ts);
+CREATE TABLE IF NOT EXISTS trades_archive (
+  id INTEGER PRIMARY KEY, reset_ts REAL, mint TEXT, symbol TEXT, mode TEXT,
+  entry_ts REAL, exit_ts REAL, cost_sol REAL, proceeds_sol REAL, pnl_sol REAL, pnl_pct REAL,
+  peak_pnl_pct REAL, score REAL, entry_reason TEXT, exit_reason TEXT, tx_in TEXT, tx_out TEXT, data TEXT);
+CREATE TABLE IF NOT EXISTS equity_archive (reset_ts REAL, ts REAL, cash_sol REAL, equity_sol REAL, sol_usd REAL);
 CREATE TABLE IF NOT EXISTS controller_runs (
   id INTEGER PRIMARY KEY, ts REAL, trials INTEGER, health TEXT, proposals TEXT, report TEXT);
 CREATE TABLE IF NOT EXISTS rug_ledger (wallet TEXT PRIMARY KEY, mint TEXT, reason TEXT, ts REAL);
@@ -135,6 +140,26 @@ class Store:
     def shadow_research_rows(self, stage: str = "analyst", since: float = 0) -> list[dict]:
         return self.q("SELECT * FROM shadow WHERE stage=? AND end_ts>=? AND features IS NOT NULL ORDER BY end_ts",
                       (stage, since))
+
+    # ── paper resets: the record before a reset still counts for the live gate ──
+    def archive_and_clear_trades(self, reset_ts: float) -> None:
+        cols = ("mint,symbol,mode,entry_ts,exit_ts,cost_sol,proceeds_sol,pnl_sol,pnl_pct,peak_pnl_pct,score,"
+                "entry_reason,exit_reason,tx_in,tx_out,data")
+        self.db.execute(f"INSERT INTO trades_archive(reset_ts,{cols}) SELECT ?,{cols} FROM trades", (reset_ts,))
+        self.db.execute("INSERT INTO equity_archive(reset_ts,ts,cash_sol,equity_sol,sol_usd) "
+                        "SELECT ?,ts,cash_sol,equity_sol,sol_usd FROM equity", (reset_ts,))
+        for table in ("trades", "positions", "equity"):
+            self.db.execute(f"DELETE FROM {table}")
+
+    def archived_trades(self) -> list[dict]:
+        return self.q("SELECT * FROM trades_archive ORDER BY exit_ts")
+
+    def equity_segments(self) -> list[list[float]]:
+        """Equity curve per account period (one per paper reset, then the current one)."""
+        segs: dict[float, list[float]] = {}
+        for r in self.q("SELECT reset_ts,equity_sol FROM equity_archive ORDER BY reset_ts,ts"):
+            segs.setdefault(r["reset_ts"], []).append(r["equity_sol"])
+        return list(segs.values()) + [[e["equity_sol"] for e in self.equity_series(0)]]
 
     # ── reads ──
     def trades_between(self, t0: float, t1: float) -> list[dict]:

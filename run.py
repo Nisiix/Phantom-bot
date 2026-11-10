@@ -85,7 +85,9 @@ def controller_report(cfg) -> str:
 def reset_paper(cfg) -> str:
     """Paper account back to paper_starting_balance_sol with zeroed profit statistics.
 
-    Removes paper trades, open paper positions, the equity curve and the balance/streak state. Keeps what the desk
+    Removes paper trades, open paper positions, the equity curve and the balance/streak state from the account
+    (trades and equity are moved to archive tables: the live gate keeps counting them, so a reset never
+    restarts or shortcuts the paper record needed for live). Keeps what the desk
     learns from (60-min shadow follow-ups, QUANT outcomes, decisions/events log, rug ledger, Controller state).
     A copy of the database is saved first. Stop the bot before running it."""
     import shutil
@@ -99,8 +101,7 @@ def reset_paper(cfg) -> str:
     shutil.copy2(path, backup)
     n_trades = store.q("SELECT COUNT(*) AS n FROM trades")[0]["n"]
     n_pos = store.q("SELECT COUNT(*) AS n FROM positions")[0]["n"]
-    for table in ("trades", "positions", "equity"):
-        store.db.execute(f"DELETE FROM {table}")
+    store.archive_and_clear_trades(time.time())     # archived trades keep counting for the live gate
     for key in ("cash_sol", "starting_cash", "realized_sol", "risk_state", "last_recap_ts"):
         store.db.execute("DELETE FROM kv WHERE key=?", (key,))
     store.kv_set("starting_cash", cfg.paper_starting_balance_sol)
@@ -109,7 +110,7 @@ def reset_paper(cfg) -> str:
     store.kv_set("paper_reset_ts", time.time())
     return (f"Paper account reset to {cfg.paper_starting_balance_sol:g} SOL: removed {n_trades} trades, "
             f"{n_pos} open positions and the equity curve. Backup: {backup.name}. "
-            "Learning data (60-min follow-ups, QUANT outcomes) kept.")
+            "Learning data (60-min follow-ups, QUANT outcomes) kept; the live-gate record keeps every trade.")
 
 
 def main() -> int:
