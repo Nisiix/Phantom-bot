@@ -6,7 +6,8 @@ Mandatory kills (user rules):
                                                     DLMM/CLMM pools have no LP token and are capped instead;
                                                     LP locks and pool owners re-read on-chain, desk/onchain_lp.py)
   3. top-10 holders > 20%                          (pools / bonding curve excluded)
-  4. last-hour volume < $50k                       (all pairs; a token younger than 1h needs the same pace)
+  4. last-hour volume < $50k                       (all pairs; tokens younger than 4h: in proportion to
+                                                    their liquidity and age, see volume_floor)
   5. dev wallet connected to previous rugs         (RugCheck creator history, our own
                                                     rug ledger, serial dead-launch pattern)
 Extra capital-preservation kills (config): freeze authority, dangerous Token-2022
@@ -257,20 +258,24 @@ class Filter(Agent):
         return None
 
     def volume_floor(self, snap: MarketSnapshot) -> float:
-        """$50k/h for a token at least an hour old; the same PACE for a younger one (it can't have a full hour
-        of volume yet, and waiting for it means buying after the pump), never under volume_min_fraction."""
+        """$50k/h for a token older than [analyst] young_age_hours (it may have pumped already: full bar).
+        A younger token is judged against its own pool: young_volume_liquidity_ratio x liquidity (at most $50k),
+        at the same pace in its first hour (it can't have a full hour of volume yet), never under
+        young_min_volume_usd. Waiting for $50k/h on a fresh token means buying after the pump."""
         f = self.f
         age = snap.age_minutes if snap.pair_created_at else None
-        if age is None or age >= f.volume_full_after_minutes:
+        if age is None or age >= self.cfg.analyst.young_age_hours * 60:
             return f.min_volume_h1_usd
-        return f.min_volume_h1_usd * max(f.volume_min_fraction, age / f.volume_full_after_minutes)
+        base = min(f.min_volume_h1_usd, f.young_volume_liquidity_ratio * snap.liquidity_usd)
+        pace = min(1.0, max(0.25, age / 60))
+        return max(f.young_min_volume_usd, base * pace)
 
     def _market_checks(self, snap: MarketSnapshot) -> list[Check]:
         f = self.f
         floor = self.volume_floor(snap)
         young = floor < f.min_volume_h1_usd
-        label = f"${floor:,.0f}" + (f" (age {snap.age_minutes:.0f} min, pace of ${f.min_volume_h1_usd:,.0f}/h)"
-                                    if young else "")
+        label = f"${floor:,.0f}" + (f" (young token: {snap.age_minutes:.0f} min old, ${snap.liquidity_usd:,.0f} "
+                                    f"liquidity)" if young else "")
         return [
             Check("volume_1h", snap.volume_h1 >= floor, round(snap.volume_h1), round(floor),
                   f"${snap.volume_h1:,.0f}/h < {label}" if snap.volume_h1 < floor

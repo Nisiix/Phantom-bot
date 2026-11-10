@@ -41,10 +41,11 @@ class FilterCfg:
     onchain_lp_check: bool = True       # read LP locks / concentrated-pool owners from the chain (desk/onchain_lp.py)
     max_top10_pct: float = 20.0
     min_volume_h1_usd: float = 50_000.0
-    # A token younger than volume_full_after_minutes can't have a full hour of volume yet: it must show the same
-    # pace instead ($50k/h -> $12.5k after 15 min), never less than volume_min_fraction of the floor.
-    volume_full_after_minutes: float = 60.0
-    volume_min_fraction: float = 0.2
+    # Tokens younger than [analyst] young_age_hours: the volume floor follows the pool instead of a fixed $50k/h.
+    # floor = young_volume_liquidity_ratio x liquidity (capped at min_volume_h1_usd), scaled by the pace in the
+    # first hour (a 15-minute-old token can't have an hour of volume), never under young_min_volume_usd.
+    young_volume_liquidity_ratio: float = 0.5
+    young_min_volume_usd: float = 5_000.0
     reject_rug_linked_dev: bool = True
     require_freeze_revoked: bool = True
     reject_dangerous_token2022: bool = True
@@ -227,10 +228,9 @@ def enforce_hard_limits(cfg: Config) -> None:
           "trail distance must be between 0 and 12%")
     clamp(f, "max_top10_pct", lambda v: 0 < v <= HARD_MAX_TOP10_PCT, HARD_MAX_TOP10_PCT,
           "top-10 holder ceiling can never exceed 20%")
-    clamp(f, "volume_full_after_minutes", lambda v: 15.0 <= v <= 60.0, 60.0,
-          "the young-token volume pace must reach the full floor within 15-60 minutes")
-    clamp(f, "volume_min_fraction", lambda v: 0.1 <= v <= 1.0, 0.2,
-          "a young token needs at least 10% of the volume floor")
+    clamp(f, "young_volume_liquidity_ratio", lambda v: 0.25 <= v <= 5.0, 0.5,
+          "young-token volume floor must be 0.25-5x its liquidity")
+    clamp(f, "young_min_volume_usd", lambda v: v >= 2_000.0, 5_000.0, "young-token volume floor can't be below $2k/h")
     clamp(a, "old_late_entry_h6_pct", lambda v: 0 < v <= 500.0, 300.0, "late-entry cap can never exceed +500% in 6h")
     clamp(a, "old_parabolic_h1_pct", lambda v: 0 < v <= 400.0, 200.0, "parabolic cap can never exceed +400% in 1h")
     clamp(a, "young_age_hours", lambda v: 0 <= v <= 6.0, 4.0, "a token counts as young for at most 6 hours")

@@ -112,7 +112,7 @@ class Scout(Agent):
                     pools += [p for p in await gecko_active_pools(
                         self.desk.http, venue_dexes(self.c.venues) if self.c.venues == "pumpfun" else None)
                               if p.get("created") and _iso(p["created"]) > cutoff
-                              and p.get("volume_h1", 0) >= self.cfg.filter.volume_min_fraction * self.cfg.filter.min_volume_h1_usd]
+                              and p.get("volume_h1", 0) >= self.cfg.filter.young_min_volume_usd]
                 except Exception:  # noqa: BLE001
                     failed += 1
             for p in pools:

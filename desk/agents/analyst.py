@@ -54,6 +54,11 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[floa
     cfg = cfg or AnalystCfg()
     b: dict[str, float] = {}
     why: list[str] = []
+    age = m.age_minutes
+    # Young token (< young_age_hours): its 1h/6h change counts from launch/graduation, a big number there is how
+    # every pump.fun runner starts, not a late entry. What matters for it is a safe contract (Filter) and a
+    # healthy market now (buys, last 5 minutes, holders). Older tokens may have pumped already: stricter caps.
+    young = 0 < age < cfg.young_age_hours * 60
 
     b["liquidity"] = _lerp(math.log10(max(m.liquidity_usd, 1)), math.log10(20_000), math.log10(400_000))
     why.append(f"liquidity ${m.liquidity_usd:,.0f}")
@@ -69,7 +74,10 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[floa
     b["buy_pressure"] = 0.5 * _band(br_h1, 0.42, 0.53, 0.72, 0.9) + 0.5 * _band(br_m5, 0.38, 0.5, 0.75, 0.92)
     why.append(f"buys {br_h1:.0%} (1h) / {br_m5:.0%} (5m), {tot_h1} txns/h")
 
-    mom = _band(m.change_h1, -15, 5, 80, 300)
+    if young:
+        mom = 0.5 * _band(m.change_h1, -15, 5, 400, 2000) + 0.5 * _band(m.change_m5, -8, 0, 15, 60)
+    else:
+        mom = _band(m.change_h1, -15, 5, 80, 300)
     if m.change_m5 < -8:
         mom *= 0.4
         why.append(f"dumping now ({m.change_m5:+.1f}% 5m)")
@@ -104,7 +112,6 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[floa
         b["website"] = social_pts
         why.append(f"no website (ignored in score), socials: {', '.join(soc) or 'none'}")
 
-    age = m.age_minutes
     b["maturity"] = _band(age, 4, 25, 12 * 60, 7 * 24 * 60) * 0.85 + 0.15
     why.append(f"age {age:.0f} min")
 
@@ -137,13 +144,13 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[floa
         caps.append(("wash-trading pattern (turnover > 15x)", 0.45))
     if ins > 40:
         caps.append((f"insider clusters hold {ins:.0f}%", 0.4))
-    # Age-aware: for a young token the 1h/6h change counts from its launch/graduation, so only a true blow-off
-    # is capped; a token older than young_age_hours may have pumped already and gets stricter caps.
-    old_token = age >= cfg.young_age_hours * 60
-    h1_cap = cfg.old_parabolic_h1_pct if old_token else 400.0
-    if m.change_h1 > h1_cap or m.change_m5 > 60:
-        caps.append((f"parabolic blow-off, chasing risk ({m.change_h1:+.0f}% 1h / {m.change_m5:+.0f}% 5m)", 0.5))
-    if old_token and m.change_h6 > cfg.old_late_entry_h6_pct:
+    # Age-aware: a young token is capped only for buying the candle itself (+60% in 5 min); an older one may
+    # have pumped already and is capped from +200% in 1h or +300% in 6h.
+    if m.change_m5 > 60:
+        caps.append((f"parabolic blow-off: {m.change_m5:+.0f}% in 5 min", 0.5))
+    elif not young and m.change_h1 > cfg.old_parabolic_h1_pct:
+        caps.append((f"parabolic: {age / 60:.1f}h old and {m.change_h1:+.0f}% in 1h", 0.5))
+    if not young and m.change_h6 > cfg.old_late_entry_h6_pct:
         caps.append((f"late entry: {age / 60:.1f}h old and already {m.change_h6:+.0f}% in 6h", 0.5))
     if m.change_m5 <= -5:
         caps.append((f"falling knife: {m.change_m5:+.1f}% in the last 5 min", 0.55))

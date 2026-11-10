@@ -184,7 +184,7 @@ class Risk(Agent):
                     pos.last_price_ts = t
         # Executable truth: a real Jupiter sell quote every ~12s (or ~6s when near a stop),
         # fetched for all due positions at once instead of one after the other.
-        due = []
+        due, quoted = [], set()
         for mint, pos in items:
             near = pos.pnl_pct <= self.r.hard_stop_pct + 2 or pos.trailing_active
             if mint not in self.exiting and t - self._last_quote.get(mint, 0) >= (6 if near else 12):
@@ -195,6 +195,7 @@ class Risk(Agent):
                 if v is not None:
                     pos.mark_value_sol = v
                     pos.last_price_ts = t
+                    quoted.add(pos.mint)
         for mint, pos in items:
             if pf.positions.get(mint) is not pos:
                 continue                     # closed by the Executor while we were quoting
@@ -210,6 +211,18 @@ class Risk(Agent):
             if mint in self.exiting:
                 continue
             reason, detail = exit_decision(pos, self.r, t, liq)
+            if reason in ("HARD_STOP", "TRAILING_STOP") and mint not in quoted:
+                # The mark came from DexScreener, whose price lags / jumps between pairs (seen in paper: a
+                # "-7.98%" stop sold at -2.42% three seconds after entry). Confirm on a real Jupiter sell
+                # quote before selling; if Jupiter can't quote, the DexScreener stop stands (safety first).
+                v = await self.quote_value(pos)
+                if v is not None:
+                    self._last_quote[mint] = t
+                    pos.mark_value_sol = v
+                    pos.last_price_ts = t
+                    reason, detail = exit_decision(pos, self.r, t, liq)
+                    if reason is None:
+                        self.state.bump("false_stop_avoided")
             if reason == "LIQUIDITY_PULL":
                 # The batched feed can return a wrong/thin pair: confirm on the full pair list before dumping.
                 try:

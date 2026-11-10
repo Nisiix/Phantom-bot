@@ -282,7 +282,7 @@ def test_score_bounds_and_caps():
     rug = {"top10_pct": 9, "holders_total": 2500, "insider_pct": 3, "risks": []}
     good, _, _ = score_token(snap(), rug, web)
     assert 0.6 <= good <= 1.0
-    parabolic, _, why = score_token(snap(change_h1=600), rug, web)
+    parabolic, _, why = score_token(snap(change_h1=600, pair_created_at=time.time() - 7 * 3600), rug, web)
     assert parabolic <= 0.5 and any("CAP" in w for w in why)
     insiders, _, _ = score_token(snap(), {**rug, "insider_pct": 55}, web)
     assert insiders <= 0.4
@@ -306,39 +306,44 @@ def test_no_falling_knife_or_late_entry():
 
 
 def test_young_token_change_since_launch_is_not_a_late_entry():
-    """For a token younger than 4h the 6h change is its whole life: no late-entry cap, only a real blow-off."""
+    """Under 4h the 1h/6h change counts from launch: no late-entry / 1h parabolic cap, only buying the candle."""
     web = {"url": "https://example.org", "score": 0.8, "legit": 0.8, "tasty": 0.7, "flags": []}
     rug = {"top10_pct": 9, "holders_total": 2500, "insider_pct": 3, "risks": []}
     young = time.time() - 100 * 60
     s, _, why = score_token(snap(change_h6=624, change_h1=40, pair_created_at=young), rug, web)
     assert s >= 0.6 and not any("CAP" in w for w in why)
     s, _, why = score_token(snap(change_h1=1226, change_h6=1226, pair_created_at=young), rug, web)
-    assert s < 0.6 and any("parabolic" in w for w in why)
+    assert s >= 0.6 and not any("CAP" in w for w in why)
+    s, _, why = score_token(snap(change_m5=75, change_h1=300, pair_created_at=young), rug, web)
+    assert s < 0.6 and any("blow-off" in w for w in why)
 
 
-def test_volume_floor_follows_token_age(tmp_path):
+def test_volume_floor_follows_token_age_and_liquidity(tmp_path):
     from desk.agents.filter import Filter
     f = Filter(make_desk(tmp_path))
     t = time.time()
-    assert f.volume_floor(snap(pair_created_at=t - 2 * 3600)) == 50_000          # >= 1h: full floor
-    assert f.volume_floor(snap(pair_created_at=t - 30 * 60)) == pytest.approx(25_000, rel=0.01)   # same pace
-    assert f.volume_floor(snap(pair_created_at=t - 3 * 60)) == pytest.approx(10_000)  # never below 20%
-    assert f.volume_floor(snap(pair_created_at=0)) == 50_000                    # unknown age: full floor
-    young = snap(pair_created_at=t - 20 * 60, volume_h1=20_000)
+    h = 3600
+    assert f.volume_floor(snap(pair_created_at=t - 5 * h, liquidity_usd=40_000)) == 50_000   # >= 4h: full bar
+    assert f.volume_floor(snap(pair_created_at=t - 2 * h, liquidity_usd=40_000)) == 20_000   # young: 0.5 x liq
+    assert f.volume_floor(snap(pair_created_at=t - 2 * h, liquidity_usd=400_000)) == 50_000  # never above $50k
+    assert f.volume_floor(snap(pair_created_at=t - 30 * 60, liquidity_usd=40_000)) == pytest.approx(10_000, rel=0.01)
+    assert f.volume_floor(snap(pair_created_at=t - 3 * 60, liquidity_usd=20_000)) == 5_000   # minimum
+    assert f.volume_floor(snap(pair_created_at=0)) == 50_000                                 # unknown age
+    young = snap(pair_created_at=t - 2 * h, liquidity_usd=40_000, volume_h1=25_000)
     vol = next(c for c in f._market_checks(young) if c.name == "volume_1h")
-    assert vol.passed and "pace" in vol.detail
-    assert not next(c for c in f._market_checks(snap(pair_created_at=t - 2 * 3600, volume_h1=20_000))
+    assert vol.passed and "young token" in vol.detail
+    assert not next(c for c in f._market_checks(snap(pair_created_at=t - 5 * h, volume_h1=25_000))
                     if c.name == "volume_1h").passed
 
 
 def test_age_rules_cannot_be_loosened():
     cfg = Config()
-    cfg.filter.volume_min_fraction = 0.01
-    cfg.filter.volume_full_after_minutes = 5
+    cfg.filter.young_volume_liquidity_ratio = 0.01
+    cfg.filter.young_min_volume_usd = 100
     cfg.analyst.old_late_entry_h6_pct = 2000
     cfg.analyst.young_age_hours = 48
     enforce_hard_limits(cfg)
-    assert cfg.filter.volume_min_fraction == 0.2 and cfg.filter.volume_full_after_minutes == 60
+    assert cfg.filter.young_volume_liquidity_ratio == 0.5 and cfg.filter.young_min_volume_usd == 5_000
     assert cfg.analyst.old_late_entry_h6_pct == 300 and cfg.analyst.young_age_hours == 4
 
 
@@ -472,3 +477,30 @@ def test_onchain_lp_classic_and_dlmm_owners():
     res = asyncio.run(OnchainLP(Down(), False).analyze(rc, {}))
     assert "locked_pct" not in res["AMM"] and res["DLMM"]["status"] == "unverified"
     assert lp_lock_breakdown(rc, res)["locked_pct"] == 100
+
+
+def test_stop_on_dexscreener_mark_is_confirmed_by_jupiter(tmp_path):
+    """A lagging DexScreener price must not sell a position Jupiter still values above the stop."""
+    desk = make_desk(tmp_path)
+    risk = Risk(desk)
+    pos = position(cost=1.0, value=0.98, peak=0.98)
+    desk.portfolio.positions["M"] = pos
+    risk._last_quote["M"] = time.time()          # Jupiter quoted a moment ago: not due this tick
+
+    class Dex:
+        async def snapshots(self, mints, **kw):   # DexScreener says -8% after costs
+            return {"M": snap(price_native=0.00092, liquidity_usd=80_000)}
+
+    class Jup:
+        value = 0.975
+
+        async def quote(self, i, o, amount, bps, lane=""):
+            return {"outAmount": str(int(self.value * 1e9))}
+
+    desk.dex, desk.jup = Dex(), Jup()
+    asyncio.run(risk.mark_positions(time.time()))
+    assert desk.exits.empty() and pos.pnl_pct == pytest.approx(-2.5)
+    risk._last_quote["M"] = time.time()
+    desk.jup.value = 0.93                          # Jupiter confirms -7%: sell
+    asyncio.run(risk.mark_positions(time.time()))
+    assert not desk.exits.empty()
