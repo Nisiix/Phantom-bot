@@ -56,7 +56,7 @@ class FilterCfg:
     deep_workers: int = 3               # parallel deep checks (RugCheck keeps its own rate limit)
     deep_max_wait_seconds: float = 60   # drop queued deep checks whose market data got stale
     # Instant-rug guards (2026-11-10: 16 of 32 paper trades lost 60-100%, all bought 5-26 min after graduation).
-    graduation_wait_minutes: float = 30.0   # no buy while the PumpSwap pair is younger than this (0 = off)
+    graduation_wait_minutes: float = 45.0   # no buy while the PumpSwap pair is younger than this (0 = off)
     spread_top10_high_pct: float = 70.0     # top10 seen above this...
     spread_window_minutes: float = 60.0     # ...within this window and now under max_top10_pct = supply spread
                                             # over fake wallets -> permanent kill
