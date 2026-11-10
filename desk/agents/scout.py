@@ -9,6 +9,12 @@ Sources
 The Scout never judges quality. It keeps a watchlist and keeps re-submitting
 tokens to the Filter (young tokens rarely have $50k/h volume on minute one),
 and it drops tokens that are dead, blacklisted, too old or already traded.
+
+Second look: a dropped token is not forgotten. Unless it was killed for good (blacklist), it goes to an
+archive that is re-read every [scout] revisit_seconds for revisit_hours after discovery. When it trades again
+(last-hour volume and liquidity above the revisit bars) it goes back on the watchlist and through the whole
+Filter -> Analyst -> Risk chain, so a token excluded at launch can still be bought later in its life.
+A graduation also restarts the watch window: the 45-minute post-graduation wait must not eat it.
 It also feeds the rug ledger: if a watched token's liquidity collapses, its
 creator is recorded as a rugger so the Filter can kill their future launches.
 """
@@ -34,6 +40,18 @@ class Watch:
     last_sent: float = 0.0
     max_liq: float = 0.0
     rug_flagged: bool = False
+    first_seen: float = 0.0       # first discovery (the archive window counts from here)
+    revived: int = 0              # times brought back by the second look
+
+
+@dataclass
+class Archived:
+    cand: Candidate
+    first_seen: float
+    dropped: float
+    why: str
+    max_liq: float = 0.0
+    revived: int = 0
 
 
 class Scout(Agent):
@@ -42,6 +60,7 @@ class Scout(Agent):
     def __init__(self, desk) -> None:
         super().__init__(desk)
         self.watch: dict[str, Watch] = {}
+        self.archive: dict[str, Archived] = {}     # second look: dropped tokens, re-read every revisit_seconds
         self.c = self.cfg.scout
 
     # ── intake ──
@@ -60,13 +79,24 @@ class Scout(Agent):
             if urgent:  # e.g. migration to an AMM -> re-check immediately
                 w.last_sent = 0.0
                 w.cand.source = source
+                if "migration" in source:
+                    # A graduation is a new life for the token: give it a full watch window from here, or the
+                    # post-graduation wait would run out the window of a token discovered hours before.
+                    w.added = time.time()
             return
+        arch = self.archive.pop(mint, None)
         if len(self.watch) >= self.c.max_watchlist:
             self._prune(force=True)
             if len(self.watch) >= self.c.max_watchlist:
                 return
+        if arch is not None:     # a feed brought back a token we had archived: keep its history
+            arch.cand.source = source
+            self.watch[mint] = Watch(arch.cand, added=time.time(), max_liq=arch.max_liq,
+                                     first_seen=arch.first_seen, revived=arch.revived)
+            return
+        t = time.time()
         self.watch[mint] = Watch(Candidate(mint, symbol or "?", name, source, creator=creator, pair_address=pair),
-                                 added=time.time())
+                                 added=t, first_seen=t)
         self.state.bump("discovered")
         self.state.bump(f"src:{source.split(':')[0]}")
 
@@ -74,6 +104,9 @@ class Scout(Agent):
     async def run(self) -> None:
         self.status("working")
         tasks = [self.supervised("recheck", self.recheck_loop)]
+        if self.c.revisit:
+            self._seed_archive()
+            tasks.append(self.supervised("second-look", self.revisit_loop))
         if self.c.pumpportal:
             tasks.append(self.supervised("pumpportal", self.pumpportal_loop))
         if self.c.geckoterminal:
@@ -166,20 +199,108 @@ class Scout(Agent):
         for mint, w in list(self.watch.items()):
             seen = self.desk.market_seen.get(mint)
             age_min = (t - w.added) / 60
-            dead = False
+            why = ""
             if mint in self.desk.blacklist or mint in held:
-                dead = True
+                why = "gone"                    # killed for good / bought: never archived
             elif age_min > self.c.watch_minutes:
-                dead = True
+                why = "window over"
             elif seen is None and age_min > 15:
-                dead = True                     # never got a market
+                why = "no market"               # never got a market
             elif seen and seen[1] < 1_000 and age_min > 20:
-                dead = True                     # dormant, <$1k/h after 20 min
+                why = "dormant"                 # dormant, <$1k/h after 20 min
             elif force and seen and seen[1] < 10_000:
-                dead = True
-            if dead:
+                why = "watchlist full"
+            if why:
                 self.watch.pop(mint, None)
                 self.state.bump("dropped")
+                if why != "gone":
+                    self._archive(mint, w, why, t)
+
+    # ── second look ──
+    def _archive(self, mint: str, w: Watch, why: str, t: float) -> None:
+        """Keep a dropped token for the second look, if it ever had a real market (or graduated): the thousands of
+        pump.fun launches that never got past dust are not worth a DexScreener call every few minutes."""
+        if not self.c.revisit or mint in self.desk.blacklist:
+            return
+        first = w.first_seen or w.added
+        if t - first > self.c.revisit_hours * 3600:
+            return
+        seen = self.desk.market_seen.get(mint)
+        peak = max(w.max_liq, seen[2] if seen else 0.0)
+        if peak < 5_000 and "migration" not in (w.cand.source or ""):
+            return
+        self.archive[mint] = Archived(w.cand, first, t, why, peak, w.revived)
+        if len(self.archive) > self.c.revisit_max:
+            oldest = min(self.archive, key=lambda k: self.archive[k].dropped)
+            self.archive.pop(oldest, None)
+        self.state.counters["archived"] = len(self.archive)
+
+    def _seed_archive(self) -> None:
+        """After a restart the archive is empty: refill it with the tokens that reached the Filter's deep checks or
+        the Analyst in the last revisit_hours and were never killed. Permanent kills are re-applied by the Filter
+        anyway (rugged names, rug ledger, authorities, holder-spread record)."""
+        try:
+            since = time.time() - self.c.revisit_hours * 3600
+            rows = self.desk.store.q(
+                "SELECT mint, MAX(symbol) AS symbol, MIN(ts) AS first FROM decisions WHERE ts>=? "
+                "AND (stage!='filter' OR outcome='pass') AND mint NOT IN "
+                "(SELECT mint FROM decisions WHERE outcome='kill' AND ts>=?) GROUP BY mint "
+                "ORDER BY first DESC LIMIT ?", (since, since, self.c.revisit_max))
+        except Exception:  # noqa: BLE001 - a fresh database, or a store without decisions: start empty
+            return
+        t = time.time()
+        for r in rows:
+            mint = r["mint"]
+            if not mint or mint in self.watch or mint in self.desk.blacklist:
+                continue
+            self.archive[mint] = Archived(Candidate(mint, r["symbol"] or "?", "", "revisit:seed"),
+                                          first_seen=float(r["first"]), dropped=t, why="restart", max_liq=0.0)
+        self.state.counters["archived"] = len(self.archive)
+
+    def revive_due(self, snaps: dict, t: float | None = None) -> list[str]:
+        """Put back on the watchlist every archived token that trades again. Returns the revived mints."""
+        t = t or time.time()
+        out = []
+        for mint, a in list(self.archive.items()):
+            if mint in self.desk.blacklist or mint in self.desk.portfolio.positions \
+                    or t - a.first_seen > self.c.revisit_hours * 3600:
+                self.archive.pop(mint, None)
+                continue
+            s = snaps.get(mint)
+            if s is None:
+                continue
+            self.desk.market_seen[mint] = (t, s.volume_h1, s.liquidity_usd)
+            if s.volume_h1 < self.c.revisit_min_volume_usd or s.liquidity_usd < self.c.revisit_min_liquidity_usd:
+                continue
+            if mint in self.watch or len(self.watch) >= self.c.max_watchlist:
+                continue
+            self.archive.pop(mint, None)
+            a.cand.symbol = s.symbol or a.cand.symbol
+            if not a.cand.source.startswith("revisit"):
+                a.cand.source = "revisit:" + (a.cand.source or "?")
+            self.watch[mint] = Watch(a.cand, added=t, max_liq=max(a.max_liq, s.liquidity_usd),
+                                     first_seen=a.first_seen, revived=a.revived + 1)
+            out.append(mint)
+            self.state.bump("revived")
+            self.emit("info", f"second look: back on the watchlist ({a.why} {((t - a.dropped) / 60):.0f} min ago, "
+                              f"now ${s.volume_h1:,.0f}/h volume, ${s.liquidity_usd:,.0f} liquidity, "
+                              f"{(t - a.first_seen) / 3600:.1f} h after discovery)", mint, a.cand.symbol)
+        self.state.counters["archived"] = len(self.archive)
+        return out
+
+    async def revisit_loop(self) -> None:
+        """Every revisit_seconds: one batched DexScreener read of the archive (30 mints per call, own small rate lane)."""
+        while not self.desk.stop.is_set():
+            if not await self.sleep(self.c.revisit_seconds):
+                return
+            if not self.archive:
+                continue
+            try:
+                snaps = await self.desk.dex.snapshots(list(self.archive), lane="revisit")
+            except Exception:  # noqa: BLE001 - try again on the next sweep
+                self.state.bump("feed_errors")
+                continue
+            self.revive_due(snaps)
 
     async def _check_rug(self, mint: str, w: Watch) -> None:
         seen = self.desk.market_seen.get(mint)

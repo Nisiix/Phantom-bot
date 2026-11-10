@@ -691,3 +691,44 @@ def test_no_early_release_if_first_seen_late_or_concentrated(tmp_path):
                          (time.time() - 300, 20, 5.0, 1200, 30_000)]
     w = next(c for c in asyncio.run(f.deep(Candidate("M"), s)).checks if c.name == "graduation_wait")
     assert not w.passed and "top10 was concentrated" in w.detail
+
+
+def test_scout_second_look_revives_dropped_tokens(tmp_path):
+    """A token dropped from the watchlist (window over / quiet) comes back when it trades again;
+    a killed token never does, and dust is not archived at all."""
+    from desk.agents.scout import Scout, Watch
+    from desk.models import Candidate
+
+    desk = make_desk(tmp_path)
+    sc = Scout(desk)
+    t = time.time()
+    old = t - (sc.c.watch_minutes + 5) * 60
+    sc.watch["A"] = Watch(Candidate("A", "AAA", source="pumpfun:new"), added=old, max_liq=40_000, first_seen=old)
+    sc.watch["K"] = Watch(Candidate("K", "KKK", source="pumpfun:new"), added=old, max_liq=40_000, first_seen=old)
+    sc.watch["D"] = Watch(Candidate("D", "DST", source="pumpfun:new"), added=old, max_liq=800, first_seen=old)
+    desk.blacklist["K"] = "rugged"
+    sc._prune()
+    assert not sc.watch and set(sc.archive) == {"A"}
+
+    quiet = {"A": snap(mint="A", volume_h1=3_000, liquidity_usd=30_000)}
+    assert sc.revive_due(quiet) == [] and "A" in sc.archive
+    live = {"A": snap(mint="A", volume_h1=60_000, liquidity_usd=30_000)}
+    assert sc.revive_due(live) == ["A"]
+    w = sc.watch["A"]
+    assert w.cand.source == "revisit:pumpfun:new" and w.revived == 1 and w.first_seen == old
+    # killed after the revival: dropped and never archived again
+    desk.blacklist["A"] = "holder spread"
+    sc._prune()
+    assert "A" not in sc.watch and "A" not in sc.archive
+
+
+def test_scout_graduation_restarts_watch_window(tmp_path):
+    from desk.agents.scout import Scout, Watch
+    from desk.models import Candidate
+
+    desk = make_desk(tmp_path)
+    sc = Scout(desk)
+    old = time.time() - 170 * 60
+    sc.watch["G"] = Watch(Candidate("G", "GRD", source="pumpfun:new"), added=old, first_seen=old)
+    sc.discover("G", "GRD", "", "pumpfun:migration", urgent=True)
+    assert time.time() - sc.watch["G"].added < 5 and sc.watch["G"].first_seen == old

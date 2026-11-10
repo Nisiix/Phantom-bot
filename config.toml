@@ -28,6 +28,15 @@ venues = "pumpfun"           # "pumpfun" = only pump.fun tokens (bonding curve +
 watch_minutes = 180          # how long a discovered token stays on the watchlist
 recheck_seconds = 45         # how often watchlist tokens are re-sent to Filter
 max_watchlist = 4000
+# Second look: tokens dropped from the watchlist (window over or gone quiet) are re-read every
+# revisit_seconds for revisit_hours; if they trade again they go back through Filter -> Analyst -> Risk.
+# Permanent kills (rug, mint/freeze authority, holder spread, rugged names...) never come back.
+revisit = true
+revisit_hours = 24
+revisit_seconds = 300
+revisit_min_volume_usd = 10000
+revisit_min_liquidity_usd = 10000
+revisit_max = 5000
 
 [filter]
 # ── the five mandatory kills (user rules) ──

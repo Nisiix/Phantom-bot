@@ -31,6 +31,16 @@ class ScoutCfg:
     watch_minutes: float = 180
     recheck_seconds: float = 45
     max_watchlist: int = 4000
+    # Second look ("rianalisi"): a token dropped from the watchlist (watch window over, or gone quiet) is not
+    # forgotten. It goes to an archive that is re-read every revisit_seconds for revisit_hours after discovery;
+    # if it trades again (volume and liquidity above the bars below) it goes back on the watchlist and through
+    # the whole Filter -> Analyst -> Risk chain again. Permanent kills (blacklist) never come back.
+    revisit: bool = True
+    revisit_hours: float = 24.0
+    revisit_seconds: float = 300.0
+    revisit_min_volume_usd: float = 10_000.0     # last-hour volume needed to bring a token back
+    revisit_min_liquidity_usd: float = 10_000.0
+    revisit_max: int = 5000                      # archive size cap (oldest dropped first)
 
 
 @dataclass
@@ -289,6 +299,9 @@ def enforce_hard_limits(cfg: Config) -> None:
           "top-10 holder ceiling can never exceed 20%")
     clamp(f, "young_volume_liquidity_ratio", lambda v: 0.25 <= v <= 5.0, 0.5,
           "young-token volume floor must be 0.25-5x its liquidity")
+    sc = cfg.scout
+    clamp(sc, "revisit_seconds", lambda v: v >= 60.0, 300.0, "second-look sweep can't run more than once a minute")
+    clamp(sc, "revisit_min_volume_usd", lambda v: v >= 2_000.0, 10_000.0, "second-look volume bar can't be below $2k/h")
     clamp(f, "young_min_volume_usd", lambda v: v >= 2_000.0, 5_000.0, "young-token volume floor can't be below $2k/h")
     clamp(a, "old_late_entry_h6_pct", lambda v: 0 < v <= 500.0, 300.0, "late-entry cap can never exceed +500% in 6h")
     clamp(a, "old_parabolic_h1_pct", lambda v: 0 < v <= 400.0, 200.0, "parabolic cap can never exceed +400% in 1h")
