@@ -8,6 +8,8 @@
   python run.py wallet          check the wallet key in .env (shows address + balance, never the key)
   python run.py research        which signals separated winners from losers (from the 60-min shadow data)
   python run.py controller      Controller report now: tests other settings on the logged data (proposals only)
+  python run.py reset-paper     paper account back to the starting balance, profit stats zeroed (backup kept;
+                                the 60-min follow-up data the Controller and QUANT learn from is kept)
 """
 from __future__ import annotations
 
@@ -80,6 +82,36 @@ def controller_report(cfg) -> str:
     return build_report(health, exp, cfg, st.get("trials", 0) + exp["tried"], st.get("rounds", 0) + 1)
 
 
+def reset_paper(cfg) -> str:
+    """Paper account back to paper_starting_balance_sol with zeroed profit statistics.
+
+    Removes paper trades, open paper positions, the equity curve and the balance/streak state. Keeps what the desk
+    learns from (60-min shadow follow-ups, QUANT outcomes, decisions/events log, rug ledger, Controller state).
+    A copy of the database is saved first. Stop the bot before running it."""
+    import shutil
+    path = cfg.data_dir / "paper.db"
+    if not path.exists():
+        return f"No paper database at {path}: nothing to reset."
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    backup = cfg.data_dir / f"paper_backup_{stamp}.db"
+    store = Store(path)
+    store.db.execute("PRAGMA wal_checkpoint(FULL)")
+    shutil.copy2(path, backup)
+    n_trades = store.q("SELECT COUNT(*) AS n FROM trades")[0]["n"]
+    n_pos = store.q("SELECT COUNT(*) AS n FROM positions")[0]["n"]
+    for table in ("trades", "positions", "equity"):
+        store.db.execute(f"DELETE FROM {table}")
+    for key in ("cash_sol", "starting_cash", "realized_sol", "risk_state", "last_recap_ts"):
+        store.db.execute("DELETE FROM kv WHERE key=?", (key,))
+    store.kv_set("starting_cash", cfg.paper_starting_balance_sol)
+    store.kv_set("cash_sol", cfg.paper_starting_balance_sol)
+    store.kv_set("realized_sol", 0.0)
+    store.kv_set("paper_reset_ts", time.time())
+    return (f"Paper account reset to {cfg.paper_starting_balance_sol:g} SOL: removed {n_trades} trades, "
+            f"{n_pos} open positions and the equity curve. Backup: {backup.name}. "
+            "Learning data (60-min follow-ups, QUANT outcomes) kept.")
+
+
 def main() -> int:
     # Windows consoles/pipes may default to cp1252: never crash on token names or chart glyphs.
     for stream in (sys.stdout, sys.stderr):
@@ -88,7 +120,7 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description="Phantom Desk")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper"])
     ap.add_argument("--mode", choices=["paper", "live"], help="override mode from config.toml")
     ap.add_argument("--headless", action="store_true", help="plain log output instead of the live terminal")
     ap.add_argument("--config", help="path to config.toml")
@@ -111,6 +143,10 @@ def main() -> int:
         since = time.time() - args.days * 86400 if args.days else 0
         print(build_research(store.shadow_research_rows(args.stage, since), args.stage,
                              trades=[t for t in store.all_trades() if (t["entry_ts"] or 0) >= since]))
+        return 0
+
+    if args.command == "reset-paper":
+        print(reset_paper(cfg))
         return 0
 
     if args.command == "controller":

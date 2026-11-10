@@ -186,3 +186,23 @@ def test_wider_stops_are_measured_but_never_proposed():
         assert within_hard_limits(cfg, p["changes"])
     text = build_report(health_checks(_snapshot(time.time())), exp, cfg, exp["tried"], 1)
     assert "Stop più larghi del -6% (solo misura" in text and "hard_stop_pct = -" in text
+
+
+def test_reset_paper(tmp_path):
+    from run import reset_paper
+    from desk.portfolio import Portfolio
+    from desk.store import Store
+    cfg = Config()
+    cfg.data_dir = tmp_path
+    desk = make_desk(tmp_path)
+    desk.portfolio.open(position())
+    desk.portfolio.set_cash(3.0)
+    desk.store.add_equity(time.time(), 3.0, 4.0, 150.0)
+    desk.store.add_shadow({"start_ts": 1.0, "end_ts": 2.0, "mode": "paper", "mint": "X", "stage": "analyst"})
+    msg = reset_paper(cfg)
+    assert "reset to 10" in msg and list(tmp_path.glob("paper_backup_*.db"))
+    st = Store(tmp_path / "paper.db")
+    pf = Portfolio(st, "paper", 10.0)
+    assert pf.cash_sol == 10.0 and pf.starting_cash == 10.0 and not pf.positions and pf.total_pnl_sol == 0
+    assert st.q("SELECT COUNT(*) AS n FROM equity")[0]["n"] == 0
+    assert st.q("SELECT COUNT(*) AS n FROM shadow")[0]["n"] == 1      # learning data kept
