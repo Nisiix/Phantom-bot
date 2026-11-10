@@ -92,6 +92,38 @@ async def build(cfg: Config) -> tuple[Desk, object]:
     return desk, broker
 
 
+def _loop_exception_handler(desk: Desk):
+    """Keep harmless socket noise off the console; route everything else to desk.log.
+
+    On Windows the proactor event loop prints a full traceback
+    ("Exception in callback _ProactorBasePipeTransport._call_connection_lost ... ConnectionResetError:
+    [WinError 10054]") whenever the other side drops a socket: a dashboard tab closed or reloaded, an API or
+    websocket server resetting the connection. The callback runs AFTER the connection is already closed and
+    nothing depends on it: the bot keeps running and the feeds reconnect by themselves. Printed on top of the
+    terminal UI it looks like a crash, so it is counted quietly instead.
+    Any other unhandled loop error is still shown (default handler) AND written to desk.log as an error."""
+    from .models import Event
+    quiet = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+    seen = {"n": 0}
+
+    def handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+        exc = context.get("exception")
+        if isinstance(exc, quiet):
+            seen["n"] += 1
+            if seen["n"] in (1, 10, 100) or seen["n"] % 1000 == 0:
+                desk.hub.emit(Event("Desk", "info", f"connection dropped by the remote side "
+                                    f"({exc.__class__.__name__}, {seen['n']} so far): harmless, bot still running"))
+            return
+        loop.default_exception_handler(context)
+        try:
+            what = f"{exc.__class__.__name__}: {exc}" if exc else ""
+            desk.hub.emit(Event("Desk", "error", f"event loop error: {context.get('message', '')} {what}".strip()))
+        except Exception:  # noqa: BLE001 - the handler must never raise
+            pass
+
+    return handler
+
+
 async def run_desk(cfg: Config, use_tui: bool = True) -> None:
     desk, broker = await build(cfg)
     risk = Risk(desk)
@@ -100,6 +132,7 @@ async def run_desk(cfg: Config, use_tui: bool = True) -> None:
               Controller(desk, risk)]
 
     loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_loop_exception_handler(desk))
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, desk.stop.set)

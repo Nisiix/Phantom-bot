@@ -194,7 +194,19 @@ def main() -> int:
         print(f"\n{e}\n", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        pass
+        print("Desk stopped (Ctrl+C).", file=sys.stderr)
+    except Exception:
+        # A real crash: keep the traceback on disk, the console window may be closed before anyone reads it.
+        import traceback
+        crash = cfg.data_dir / cfg.mode / "crash.log"
+        try:
+            crash.parent.mkdir(parents=True, exist_ok=True)
+            with crash.open("a", encoding="utf-8") as f:
+                f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} desk crashed ===\n{traceback.format_exc()}")
+            print(f"\nDesk crashed: the error is saved in {crash}", file=sys.stderr)
+        except OSError:
+            pass
+        raise
     return 0
 
 
