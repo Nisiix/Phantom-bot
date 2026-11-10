@@ -21,7 +21,7 @@ def test_filter_screen_and_priority(tmp_path):
     f = Filter(make_desk(tmp_path))
     low = f.screen(Candidate("A"), snap(mint="A", volume_h1=10_000))
     assert low is not None and not low.passed and low.failed[0].name == "volume_1h"
-    assert f.screen(Candidate("B"), snap(mint="B")) is None          # goes on to deep checks
+    assert f.screen(Candidate("Bpump"), snap(mint="Bpump")) is None         # goes on to deep checks
     assert not f.screen(Candidate("C"), None).passed                  # no market at all
     grad = deep_priority(Candidate("G", source="pumpfun:migration"), snap(volume_h1=60_000))
     busy = deep_priority(Candidate("H", source="pumpfun:new"), snap(volume_h1=900_000))
@@ -232,12 +232,36 @@ def test_shadow_rows_carry_market_regime(tmp_path):
 def test_pump_fun_only_venue_scope(tmp_path):
     from desk.clients.feeds import TRACKED_DEXES, is_pump_token, venue_dexes
     assert venue_dexes("pumpfun") == ("pump-fun", "pumpswap") and venue_dexes("all") == TRACKED_DEXES
-    assert is_pump_token("Abcpump", "raydium") and is_pump_token("Xyz", "pumpswap")
+    assert is_pump_token("Abcpump", "raydium") and not is_pump_token("Xyz", "pumpswap")
     assert not is_pump_token("Xyzbonk", "raydium")
     desk = make_desk(tmp_path)
     f = Filter(desk)
     assert f.screen(Candidate("Okpump"), snap(mint="Okpump", dex_id="raydium")) is None
     out = f.screen(Candidate("Ray"), snap(mint="Ray", dex_id="raydium"))
     assert out is not None and [c.name for c in out.failed] == ["venue"] and "Ray" in desk.blacklist
+    cc = f.screen(Candidate("Copy"), snap(mint="Copy", dex_id="pumpswap"))     # copycat pooled on PumpSwap
+    assert cc is not None and [c.name for c in cc.failed] == ["venue"] and "copycat" in desk.blacklist["Copy"]
     desk.cfg.scout.venues = "all"
     assert f.screen(Candidate("Ray2"), snap(mint="Ray2", dex_id="raydium")) is None
+
+
+def test_graduation_wait_audit_follows_tokens_from_wait_end(tmp_path):
+    from desk.shadow import ShadowTracker
+    desk = make_desk(tmp_path)
+    st = ShadowTracker(desk, lambda *a, **k: None)
+    t = time.time()
+    st.defer_graduation("Alivepump", "ALIVE", t - 50 * 60, 45, "graduation_wait: graduated 2 min ago")
+    st.defer_graduation("Deadpump", "DEAD", t - 50 * 60, 45, "graduation_wait")
+    st.defer_graduation("Laterpump", "LATER", t - 10 * 60, 45, "graduation_wait")
+    st.defer_graduation("Alivepump", "ALIVE", t - 50 * 60, 45, "dup")          # no duplicates
+    assert len(st.deferred) == 3
+    alive = snap(mint="Alivepump", liquidity_usd=80_000)
+    for _ in range(3):                                   # dead token: no price on 3 ticks in a row
+        st.start_due({"Alivepump": alive}, t)
+    assert "Alivepump:grad45" in st.active and st.active["Alivepump:grad45"].decision == "buy_at_wait_end"
+    assert "Laterpump" in st.deferred and "Deadpump" not in st.deferred
+    gone = desk.store.q("SELECT decision, stage FROM shadow WHERE mint='Deadpump'")
+    assert gone == [{"decision": "gone_at_wait_end", "stage": "grad45"}]
+    st.save()                                            # pending audits survive a restart
+    st2 = ShadowTracker(desk, lambda *a, **k: None)
+    assert "Laterpump" in st2.deferred

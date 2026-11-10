@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from ..clients.feeds import is_pump_token
+from ..clients.feeds import is_pump_copycat, is_pump_token
 from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
 from ..onchain_lp import OnchainLP
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
@@ -271,10 +271,16 @@ class Filter(Agent):
             # pump.fun-only desk: tokens born elsewhere (Raydium LaunchLab, Meteora, ...) that reach us through
             # DexScreener profiles never get RugCheck / RPC time. Not permanent: it is a scope choice, not a risk.
             ok = is_pump_token(cand.mint, snap.dex_id)
-            checks.append(Check("venue", ok, snap.dex_id or "?", "pump.fun / PumpSwap",
-                                "pump.fun token" if ok else f"not a pump.fun token (main pair on {snap.dex_id or '?'})"))
+            if ok:
+                detail = "pump.fun token"
+            elif is_pump_copycat(cand.mint, snap.dex_id):
+                # Pool opened straight on PumpSwap for a mint pump.fun never created: copycat / honeypot pattern.
+                detail = f"copycat: mint not created by pump.fun (no 'pump' suffix) but pooled on {snap.dex_id}"
+            else:
+                detail = f"not a pump.fun token (main pair on {snap.dex_id or '?'})"
+            checks.append(Check("venue", ok, snap.dex_id or "?", "pump.fun / PumpSwap", detail))
             if not ok:   # out of scope for good: the Scout drops it, no more re-screens (quietly, not a "kill")
-                self.desk.blacklist[cand.mint] = "not a pump.fun token"
+                self.desk.blacklist[cand.mint] = detail
         failed = [c for c in checks if not c.passed]
         if failed and [c.name for c in failed] == ["graduation_wait"] and (
                 not self._recent_top10(cand.mint) or cand.mint in self._released):
@@ -623,6 +629,12 @@ class Filter(Agent):
                                    report.market.price_usd, report.market.liquidity_usd, source=cand.source,
                                    features={**market_features(report.market, cand.source),
                                              **rug_features(report.rug)})
+            # Held back only for now by the graduation wait: also follow it from the moment the wait ends,
+            # to measure what the wait costs or saves (stage "grad45" in the shadow table).
+            if not report.passed and not report.permanent_fail and any(
+                    c.name == "graduation_wait" and not c.passed for c in report.checks):
+                self.desk.shadow.defer_graduation(report.mint, report.symbol, report.market.pair_created_at,
+                                                  self.f.graduation_wait_minutes, report.reason_text())
         report.source = report.source or cand.source
         if report.passed:
             self.state.bump("passed")

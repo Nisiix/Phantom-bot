@@ -14,6 +14,11 @@ Uses:
   * QUANT calibration: Analyst-scored tokens (above AND below 0.6) become labelled samples,
     so the model learns from skipped trades too (weighted lower than real fills).
   * "Filter regret" in the recap: did rejected tokens pump (missed) or dump (saved)?
+  * Graduation-wait audit (stage "grad45"): a token held back by the graduation wait gets a second follow-up
+    that starts when the wait ends (graduation + graduation_wait_minutes), i.e. "what if we had bought at
+    minute 45". decision "buy_at_wait_end" = it was still tradeable then (normal 60-min follow-up);
+    decision "gone_at_wait_end" = no price / liquidity under shadow_min_liquidity_usd by then (rugged or
+    dead: the wait avoided it). Measurement only, nothing is traded.
 """
 from __future__ import annotations
 
@@ -108,11 +113,13 @@ class ShadowTracker:
         self.max_active = 900
         self.completed = 0
         self._last_save = 0.0
+        self.deferred: dict[str, dict] = {}   # mint -> graduation-wait audit due at the end of the wait
         self.restore()
 
     # ── survive restarts: tokens being followed are saved and resumed (learning data is never thrown away) ──
     def save(self) -> None:
         self.desk.store.kv_set("shadow_active", [dataclasses.asdict(s) for s in self.active.values()])
+        self.desk.store.kv_set("shadow_deferred", list(self.deferred.values()))
         self._last_save = time.time()
 
     def restore(self) -> None:
@@ -137,6 +144,12 @@ class ShadowTracker:
             else:
                 self.active[s.key] = s
         self.restored = len(self.active)
+        try:
+            for d in self.desk.store.kv_get("shadow_deferred", []) or []:
+                if isinstance(d, dict) and d.get("mint") and d.get("due"):
+                    self.deferred[d["mint"]] = d
+        except Exception:  # noqa: BLE001
+            pass
 
     # ── estimated round-trip cost (from real Jupiter round-trip quotes when available) ──
     def cost_estimate(self) -> float:
@@ -171,6 +184,55 @@ class ShadowTracker:
         self.active[key] = Shadow(key, mint, symbol, stage, decision, reason[:200], score, price_usd, liq_usd,
                                   self.cost_estimate(), time.time(), p, source, features)
 
+    # ── graduation-wait audit ──
+    def defer_graduation(self, mint: str, symbol: str, pair_created_at: float, wait_minutes: float,
+                         reason: str = "") -> None:
+        """Schedule a "bought at the end of the graduation wait" follow-up for a token the wait held back."""
+        if not self.cfg.quant.shadow_tracking or wait_minutes <= 0 or not pair_created_at:
+            return
+        if mint in self.deferred or f"{mint}:grad45" in self.started:
+            return
+        if len(self.deferred) >= 5000:
+            return
+        self.deferred[mint] = {"mint": mint, "symbol": symbol, "grad": float(pair_created_at),
+                               "due": float(pair_created_at) + wait_minutes * 60, "wait": wait_minutes,
+                               "reason": reason[:120]}
+
+    def start_due(self, snaps: dict, t: float | None = None) -> int:
+        """Start the graduation-wait audits that are due. A token without a price (3 ticks in a row) or with dust
+        liquidity by then is stored straight away as gone_at_wait_end. Returns how many were handled."""
+        t = t or time.time()
+        n = 0
+        for mint, d in list(self.deferred.items()):
+            if t < d["due"]:
+                continue
+            snap = snaps.get(mint)
+            if snap is None and d.get("tries", 0) < 2:
+                d["tries"] = d.get("tries", 0) + 1      # a missing price can be a failed request: retry next tick
+                continue
+            self.deferred.pop(mint, None)
+            key = f"{mint}:grad45"
+            if key in self.started:
+                continue
+            self.started.add(key)
+            mins = (t - d["grad"]) / 60
+            why = f"graduation wait over ({mins:.0f} min after graduation); held back for: {d.get('reason', '')}"
+            ok = snap is not None and snap.price_usd > 0 and snap.liquidity_usd >= self.cfg.quant.shadow_min_liquidity_usd
+            if ok:
+                self.active[key] = Shadow(key, mint, d["symbol"], "grad45", "buy_at_wait_end", why[:200], None,
+                                          snap.price_usd, snap.liquidity_usd, self.cost_estimate(), t)
+            else:
+                liq = snap.liquidity_usd if snap else 0.0
+                s = Shadow(key, mint, d["symbol"], "grad45", "gone_at_wait_end",
+                           f"no tradeable market at the end of the wait (liquidity ${liq:,.0f}); {why}"[:200],
+                           None, snap.price_usd if snap else 0.0, liq, self.cost_estimate(), t)
+                s.desk_label = s.model_label = "gone"
+                s.last = s.max_ret = s.min_ret = 0.0
+                s.sim_ret = None
+                self._store(s, end_ts=t)
+            n += 1
+        return n
+
     def mark_traded(self, mint: str) -> None:
         s = self.active.get(f"{mint}:analyst")
         if s:
@@ -179,6 +241,14 @@ class ShadowTracker:
     async def loop(self) -> None:
         r = self.cfg.risk
         while not self.desk.stop.is_set():
+            t = time.time()
+            due = {m for m, d in self.deferred.items() if t >= d["due"]}
+            if due:
+                try:
+                    dsnaps = await self.desk.dex.snapshots(due, fresh=True, lane="shadow")
+                    self.start_due(dsnaps or {}, t)
+                except Exception:  # noqa: BLE001 - next tick retries
+                    pass
             if self.active:
                 t = time.time()
                 try:

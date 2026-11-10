@@ -570,10 +570,10 @@ def test_graduation_wait_blocks_fresh_pumpswap_pairs(tmp_path):
     # bonding-curve pair: not graduated, no wait check
     assert not any(c.name == "graduation_wait" for c in f._market_checks(snap(dex_id="pumpfun")))
     # Only the wait fails and no recent top10 reading: deep checks still run (screen returns None)...
-    assert f.screen(Candidate("M"), fresh) is None
-    f._top10_seen["M"] = time.time()
+    assert f.screen(Candidate("Mpump"), fresh) is None
+    f._top10_seen["Mpump"] = time.time()
     # ...but once a reading exists the cheap screen rejects it without RugCheck.
-    rep = f.screen(Candidate("M"), fresh)
+    rep = f.screen(Candidate("Mpump"), fresh)
     assert rep is not None and not rep.passed
     f.f.graduation_wait_minutes = 0
     assert not any(c.name == "graduation_wait" for c in f._market_checks(fresh))
@@ -606,7 +606,7 @@ def test_rugged_name_relaunch_is_killed(tmp_path):
         rep = f.screen(Candidate("NEW"), snap(mint="NEW", symbol=sym, name=name))
         hit = next(c for c in rep.checks if c.name == "rugged_name")
         assert not hit.passed and hit.permanent
-    assert f.screen(Candidate("NEW"), snap(mint="NEW", symbol="DOGE", name="Doge")) is None
+    assert f.screen(Candidate("NEWpump"), snap(mint="NEWpump", symbol="DOGE", name="Doge")) is None
     # old entries stop matching after rugged_name_days
     desk.store.db.execute("UPDATE rugged_names SET ts=?", (time.time() - 8 * 86400,))
     f.rugged.invalidate()

@@ -22,9 +22,17 @@ def venue_dexes(venues: str) -> tuple[str, ...]:
     return PUMP_DEXES if venues == "pumpfun" else TRACKED_DEXES
 
 
-def is_pump_token(mint: str, dex_id: str) -> bool:
-    """pump.fun mints end in "pump"; a token whose main pair is on pump.fun / PumpSwap counts too."""
-    return mint.endswith("pump") or (dex_id or "").lower() in PUMP_DEX_IDS
+def is_pump_token(mint: str, dex_id: str = "") -> bool:
+    """pump.fun mints end in "pump". A pair on pump.fun / PumpSwap does NOT make a token a pump.fun token:
+    PumpSwap pools are permissionless, and copycats (vanity-less mints with a famous name, pool opened straight
+    on PumpSwap) rug within minutes - 39 of the 40 such mints that passed the Filter up to 2026-11-10 did, and
+    their buy quotes showed a ~96-99% price impact (honeypot-style pool)."""
+    return mint.endswith("pump")
+
+
+def is_pump_copycat(mint: str, dex_id: str) -> bool:
+    """A non-pump.fun mint trading on a pump.fun venue (see is_pump_token)."""
+    return not mint.endswith("pump") and (dex_id or "").lower() in PUMP_DEX_IDS
 
 
 async def pumpportal_stream(stop: asyncio.Event) -> AsyncIterator[dict]:
