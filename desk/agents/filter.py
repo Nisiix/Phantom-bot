@@ -400,6 +400,8 @@ class Filter(Agent):
             "insider_pct": insider_pct(rc), "insider_networks": len(rc.get("insiderNetworks") or []),
             "lp_locked_pct": lp_pct, "lp_unlockable_pct": lpb["unlockable_pct"], "risks": [(r.get("name"), r.get("level")) for r in rc.get("risks") or []],
             "creator": creator, "creator_prior_launches": len(prior),
+            "creator_pct": (float(rc.get("creatorBalance") or 0) / float(token.get("supply") or 0) * 100
+                            if rc.get("creatorBalance") is not None and float(token.get("supply") or 0) > 0 else None),
             "mutable_metadata": bool((rc.get("tokenMeta") or {}).get("mutable")),
             "launchpad": (rc.get("launchpad") or {}).get("name"),
             "metadata_uri": (rc.get("tokenMeta") or {}).get("uri"),

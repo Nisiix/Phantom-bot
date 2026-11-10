@@ -117,6 +117,31 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[floa
 
     gm = rug.get("gmgn") or None
     weights = dict(WEIGHTS)
+    if young:
+        # Traction: for a young token, age alone says little. These free signals say whether real buyers keep
+        # coming in: holders gained per minute, volume accelerating (last 5 min vs the hour), an organic average
+        # trade size (not dust bots, not one whale) and how much the dev still holds.
+        parts, notes = [], []
+        if holders and age > 0:
+            hpm = holders / max(age, 1.0)
+            parts.append(_lerp(hpm, 1.0, 15.0))
+            notes.append(f"{hpm:.1f} new holders/min")
+        if m.volume_h1 > 0:
+            accel = m.volume_m5 * min(12.0, 60.0 / max(min(age, 60.0), 5.0)) / m.volume_h1
+            parts.append(_band(accel, 0.2, 0.7, 3.0, 8.0))
+            notes.append(f"volume pace now {accel:.1f}x the hour")
+        if tot_h1:
+            avg = m.volume_h1 / tot_h1
+            parts.append(_band(avg, 8, 30, 1500, 6000))
+            notes.append(f"avg trade ${avg:,.0f}")
+        dev = rug.get("creator_pct")
+        if dev is not None:
+            parts.append(1.0 if dev <= 3 else 1 - _lerp(dev, 3, 15))
+            notes.append(f"dev holds {dev:.1f}%")
+        if parts:
+            b["traction"] = sum(parts) / len(parts)
+            weights["traction"] = 0.14
+            why.append("traction: " + ", ".join(notes))
     if gm:
         smart = (gm.get("smart_wallets") or 0) + 0.5 * (gm.get("renowned_wallets") or 0)
         sm = _lerp(smart, 0, 8)
@@ -127,7 +152,7 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[floa
         if (gm.get("rat_rate") or 0) > 0.1:
             sm *= 0.8
         b["smart_money"] = sm
-        weights = {k: v * 0.9 for k, v in WEIGHTS.items()}
+        weights = {k: v * 0.9 for k, v in weights.items()}
         weights["smart_money"] = 0.10
         why.append(f"smart wallets {int(gm.get('smart_wallets') or 0)}, KOL/renowned "
                    f"{int(gm.get('renowned_wallets') or 0)}, fresh {100 * (gm.get('fresh_wallet_rate') or 0):.0f}%")

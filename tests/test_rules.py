@@ -365,6 +365,8 @@ def test_missing_website_is_ignored_not_penalised():
     from desk.agents.analyst import WEIGHTS
     w = dict(WEIGHTS); w["website"] *= 0.3
     _, b2, _ = score_token(snap(), rug, no_site)
+    if "traction" in b2:                      # snap() is a 3h-old token: young, so traction counts too
+        w["traction"] = 0.14
     assert none_s == pytest.approx(sum(w[k] * b2[k] for k in w) / sum(w.values()), abs=1e-3)
 
 
@@ -504,3 +506,19 @@ def test_stop_on_dexscreener_mark_is_confirmed_by_jupiter(tmp_path):
     desk.jup.value = 0.93                          # Jupiter confirms -7%: sell
     asyncio.run(risk.mark_positions(time.time()))
     assert not desk.exits.empty()
+
+
+def test_young_token_traction_signals():
+    """Young tokens are also judged on traction: holder growth, volume pace, organic trade size, dev share."""
+    web = {"url": None, "score": 0.3, "legit": 0.35, "tasty": 0.2, "flags": []}
+    t = time.time()
+    young = dict(pair_created_at=t - 40 * 60, volume_h1=60_000, volume_m5=9_000, buys_h1=900, sells_h1=600)
+    strong = {"top10_pct": 9, "holders_total": 500, "insider_pct": 3, "risks": [], "creator_pct": 1.0}
+    weak = {**strong, "holders_total": 30, "creator_pct": 14.0}
+    s1, b1, why = score_token(snap(**young), strong, web)
+    s2, b2, _ = score_token(snap(**young), weak, web)
+    assert b1["traction"] > b2["traction"] and s1 > s2
+    assert any(w.startswith("traction:") for w in why)
+    # older tokens are not scored on traction
+    _, b3, _ = score_token(snap(pair_created_at=t - 6 * 3600), strong, web)
+    assert "traction" not in b3
