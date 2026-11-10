@@ -141,7 +141,7 @@ random_variants = 24      # new random combinations tried per agent each round (
 min_rows = 30             # fewest tokens a situation needs before it is judged
 holdout_pct = 30          # newest share of the data kept aside to verify the winner
 lookback_days = 14
-auto_apply = "paper"      # "paper" = applies by itself on the paper desk (live: proposals only) | "always" | "off"
+auto_apply = "always"     # applies by itself in paper AND live (user choice 2026-11-10) | "paper" = paper only | "off"
 confirm_rounds = 3        # a PROMETTENTE result must win 3 rounds in a row before it is applied (SOLIDA: at once)
 apply_cooldown_minutes = 60   # at most one change per agent per hour, so each effect can be measured
 review_min_rows = 30      # new tokens needed to confirm an applied change or roll it back
