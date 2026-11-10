@@ -152,6 +152,16 @@ class DashboardCfg:
 
 
 @dataclass
+class PagesCfg:
+    """Public read-only copy of the dashboard on GitHub Pages (see desk/pages.py)."""
+    enabled: bool = False
+    interval_minutes: float = 10        # GitHub Pages rebuilds at most ~10 times/hour: never below 6
+    remote: str = ""                    # git remote to push to; empty = the "origin" of this checkout
+    branch: str = "gh-pages"
+    publish_live: bool = False          # in live mode nothing is published unless this is true
+
+
+@dataclass
 class RecapCfg:
     interval_hours: float = 4
 
@@ -189,6 +199,7 @@ class Config:
     quant: QuantCfg = field(default_factory=QuantCfg)
     gmgn: GmgnCfg = field(default_factory=GmgnCfg)
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
+    pages: PagesCfg = field(default_factory=PagesCfg)
     controller: ControllerCfg = field(default_factory=ControllerCfg)
     live_gate: LiveGateCfg = field(default_factory=LiveGateCfg)
     secrets: Secrets = field(default_factory=Secrets)
@@ -309,7 +320,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "dashboard", "controller", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "dashboard", "pages", "controller", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()

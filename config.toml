@@ -131,3 +131,13 @@ serial_max_graduation = 0.05     # ...<= 5% graduated -> permanent kill (and add
 enabled = true
 port = 8080          # if busy, the next free port up to 8089 is used
 open_browser = true
+
+[pages]
+# Public, read-only copy of the dashboard on GitHub Pages (https://<user>.github.io/<repo>/).
+# The desk pushes a snapshot to the "gh-pages" branch every N minutes, in the background: if git or the
+# network fail, the trading loop is not affected. ATTENTION: the page is PUBLIC (balances, trades, tokens).
+enabled = false
+interval_minutes = 10   # GitHub Pages accepts ~10 updates/hour: values below 6 are raised to 6
+remote = ""             # empty = the "origin" remote of this folder (must be a git clone with push rights)
+branch = "gh-pages"
+publish_live = false    # in live mode publish only if true (trades are traceable to your wallet on-chain)

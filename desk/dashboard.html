@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Phantom Desk</title>
+<!--PAGES-->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -75,6 +76,7 @@ button { font: inherit; }
 .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .pill.ok .dot { background: var(--good); box-shadow: 0 0 0 0 var(--good); animation: ping 2s infinite; }
 .pill.bad .dot { background: var(--critical); }
+.pill.warn .dot { background: var(--warning); }
 .mode-live { background: var(--critical); color: #fff; border-color: transparent; }
 .mode-paper { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent);
   background: color-mix(in srgb, var(--accent) 12%, transparent); }
@@ -501,7 +503,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
       <pre class="recap" id="recap" hidden></pre>
     </div>
   </section>
-  <footer>Dashboard in sola lettura · in ascolto solo su questo computer</footer>
+  <footer id="foot">Dashboard in sola lettura · in ascolto solo su questo computer</footer>
 </main>
 </div>
 <div class="tip" id="tip" role="tooltip"></div>
@@ -509,6 +511,10 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+// GitHub Pages copy: desk/pages.py sets PHANTOM_STATIC and publishes the API answers as files under data/
+const STATIC = window.PHANTOM_STATIC || null;
+const API_FILES = { state: "state.json", activity: "activity.json", controller: "controller.txt", recap: "recap.txt" };
+const api = (k) => (STATIC ? "data/" + API_FILES[k] + "?t=" + Math.floor(Date.now() / 30000) : "/api/" + k);
 const NS = "http://www.w3.org/2000/svg";
 let S = null, agentFilter = "Tutti", tradesOnly = false, query = "", seenTs = 0, showAllTrades = false;
 
@@ -775,7 +781,7 @@ function renderController(s) {
   const pre = el("pre", "recap"); pre.hidden = !ctlOpen;
   b.onclick = async () => { ctlOpen = !ctlOpen; renderController(S); };
   box.append(b, pre);
-  if (ctlOpen) { pre.textContent = "Carico il report…"; fetch("/api/controller", { cache: "no-store" }).then((r) => r.text()).then((t) => { pre.textContent = t; }).catch(() => { pre.textContent = "Bot non raggiungibile."; }); }
+  if (ctlOpen) { pre.textContent = "Carico il report…"; fetch(api("controller"), { cache: "no-store" }).then((r) => r.text()).then((t) => { pre.textContent = t; }).catch(() => { pre.textContent = "Bot non raggiungibile."; }); }
 }
 
 // ── positions & trades ──
@@ -903,19 +909,29 @@ function render(s) {
 async function tick() {
   const conn = $("conn");
   try {
-    const r = await fetch("/api/state", { cache: "no-store" }); if (!r.ok) throw new Error(r.status);
+    const r = await fetch(api("state"), { cache: "no-store" }); if (!r.ok) throw new Error(r.status);
     S = await r.json(); render(S); $("app").classList.remove("stale");
+    if (STATIC) {   // a snapshot: say how old it is, and flag it when the bot stopped publishing
+      const at = new Date(S.now * 1000).toLocaleTimeString("it-IT", { hour12: false, hour: "2-digit", minute: "2-digit" });
+      const old = Date.now() / 1000 - S.now > STATIC.interval * 3 + 120;
+      conn.className = "pill " + (old ? "bad" : "warn");
+      conn.replaceChildren(el("span", "dot"), el("span", null, (old ? "bot fermo? " : "copia pubblica · ") + "dati delle " + at + " (" + ago(S.now) + ")"));
+      conn.title = "Copia aggiornata dal bot ogni " + Math.round(STATIC.interval / 60) + " min";
+      if (old) $("app").classList.add("stale");
+      return;
+    }
     conn.className = "pill ok"; conn.replaceChildren(el("span", "dot"), el("span", null, "live · " + new Date().toLocaleTimeString("it-IT", { hour12: false })));
   } catch (e) {
     $("app").classList.add("stale");
-    conn.className = "pill bad"; conn.replaceChildren(el("span", "dot"), el("span", null, "bot non raggiungibile"));
-    conn.title = "Il bot è in esecuzione?";
+    conn.className = "pill bad"; conn.replaceChildren(el("span", "dot"), el("span", null, STATIC ? "copia non disponibile" : "bot non raggiungibile"));
+    conn.title = STATIC ? "Il bot non ha ancora pubblicato dati" : "Il bot è in esecuzione?";
   }
 }
 $("recapBtn").onclick = async () => { const p = $("recap"); p.hidden = false; p.textContent = "Genero il recap…";
-  try { const r = await fetch("/api/recap", { cache: "no-store" }); p.textContent = await r.text(); } catch (e) { p.textContent = "Bot non raggiungibile."; } };
+  try { const r = await fetch(api("recap"), { cache: "no-store" }); p.textContent = await r.text(); } catch (e) { p.textContent = "Bot non raggiungibile."; } };
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => S && render(S), 150); });
-renderChips(); tick(); setInterval(tick, 2000);
+if (STATIC) $("foot").textContent = "Copia pubblica in sola lettura · aggiornata dal bot ogni " + Math.round(STATIC.interval / 60) + " min · nessun comando possibile da qui";
+renderChips(); tick(); setInterval(tick, STATIC ? 60000 : 2000);
 </script>
 <script type="module">
 // ── 3D view of the agents' work, embedded in the overview ──
@@ -1046,7 +1062,7 @@ function pushTicker(e) {
 async function poll() {
   if (!visible && A) return;
   try {
-    const r = await fetch("/api/activity", { cache: "no-store" }); if (!r.ok) throw new Error(r.status);
+    const r = await fetch(api("activity"), { cache: "no-store" }); if (!r.ok) throw new Error(r.status);
     A = await r.json();
     const first = !events.length, fresh = [];
     for (const e of A.events) { const k = keyOf(e); if (keys.has(k)) continue; keys.add(k); events.push(e); if (!first && e.ts >= lastTs - 0.001) fresh.push(e); }
@@ -1301,7 +1317,7 @@ function fail(msg) { $("v3loading").classList.add("done"); $("v3noticeText").tex
 new IntersectionObserver((ents) => { for (const e of ents) { visible = e.isIntersecting;
   if (visible && !booted) { booted = true; boot3D(); poll(); } } }, { rootMargin: "200px 0px" }).observe($("v3"));
 addEventListener("keydown", (e) => { if (e.key === "Escape" && $("v3drawer").classList.contains("open")) closeDrawer(); });
-setInterval(poll, 2500);
+setInterval(poll, STATIC ? 60000 : 2500);
 </script>
 </body>
 </html>

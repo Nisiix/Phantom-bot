@@ -182,6 +182,22 @@ crashes or reboots. Then:
    loads from a CDN, so that section needs internet; the rest of the dashboard doesn't.
 5. The desk only runs while the PC is on and awake (disable sleep, or use the VPS setup for 24/7).
 
+### See the dashboard from anywhere (GitHub Pages, read-only)
+The desk can publish a **public, read-only copy** of the dashboard on GitHub Pages while it keeps running on
+your PC. Every 10 minutes it writes a snapshot (balance, positions, trades, agents, 3D activity, Controller
+report, recap) and force-pushes it as a single commit to the `gh-pages` branch; the page reads those files
+instead of the local API. It runs in the background: git runs in a separate thread with a timeout and every
+error is only logged, so publishing can't slow or stop trading. Nothing on the page can send commands.
+1. The folder must be a **git clone** with push rights (Download ZIP won't work), e.g. the one you already `git pull`.
+2. Publish once: start the desk, then in a second terminal `start.bat pages` (or `python run.py pages`).
+3. On GitHub: **Settings → Pages → Build and deployment → Deploy from a branch → `gh-pages` / `(root)`**, Save.
+   After ~1 minute the page is at `https://<user>.github.io/<repo>/`.
+4. To keep it updated automatically, set `enabled = true` under `[pages]` in `config.toml` and restart the desk.
+
+**The page is public** (anyone with the link; search engines are asked not to index it): balances, trades and
+token names are visible. In live mode nothing is published unless `publish_live = true`, because live trades can
+be traced to your wallet on-chain. The page shows how old the data is and turns red if the desk stops updating it.
+
 Linux/macOS: `./start.sh` (same commands: `./start.sh recap`, `gate`, `wallet`, `--headless`).
 
 ## Connecting a Phantom wallet (live only — paper needs no wallet)

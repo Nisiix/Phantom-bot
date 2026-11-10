@@ -107,9 +107,14 @@ async def run_desk(cfg: Config, use_tui: bool = True) -> None:
             pass
 
     tasks = [asyncio.create_task(a.run(), name=a.name) for a in agents]
-    if cfg.dashboard.enabled:
+    if cfg.dashboard.enabled or cfg.pages.enabled:
         from .web import Dashboard
-        tasks.append(asyncio.create_task(Dashboard(desk, risk, logger).run(), name="dashboard"))
+        dash = Dashboard(desk, risk, logger)
+        if cfg.dashboard.enabled:
+            tasks.append(asyncio.create_task(dash.run(), name="dashboard"))
+        if cfg.pages.enabled:  # public read-only copy on GitHub Pages; isolated from the trading loop
+            from .pages import PagesPublisher
+            tasks.append(asyncio.create_task(PagesPublisher(desk, dash).run(), name="pages"))
     ui = Terminal(desk, risk, logger)
     tasks.append(asyncio.create_task(ui.run() if use_tui and sys.stdout.isatty() else headless(desk), name="ui"))
     await desk.stop.wait()

@@ -10,6 +10,8 @@
   python run.py controller      Controller report now: tests other settings on the logged data (proposals only)
   python run.py reset-paper     paper account back to the starting balance, profit stats zeroed (backup kept;
                                 the 60-min follow-up data the Controller and QUANT learn from is kept)
+  python run.py pages           publish the dashboard to GitHub Pages now (the desk must be running;
+                                with [pages] enabled = true the desk does it by itself every 10 min)
 """
 from __future__ import annotations
 
@@ -127,7 +129,7 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description="Phantom Desk")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper", "pages"])
     ap.add_argument("--mode", choices=["paper", "live"], help="override mode from config.toml")
     ap.add_argument("--headless", action="store_true", help="plain log output instead of the live terminal")
     ap.add_argument("--config", help="path to config.toml")
@@ -155,6 +157,15 @@ def main() -> int:
 
     if args.command == "reset-paper":
         print(reset_paper(cfg))
+        return 0
+
+    if args.command == "pages":
+        from desk.pages import publish_from_running_desk
+        try:
+            print(publish_from_running_desk(cfg))
+        except (RuntimeError, OSError, ValueError) as e:
+            print("GitHub Pages: not published:", e, file=sys.stderr)
+            return 1
         return 0
 
     if args.command == "controller":
