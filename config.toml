@@ -48,7 +48,9 @@ deep_workers = 3                   # deep checks in parallel (RugCheck keeps its
 deep_max_wait_seconds = 60         # drop queued deep checks whose market data got stale
 
 [analyst]
-min_score = 0.6              # user rule: under 0.6 = no trade (can only be raised)
+min_score = 0.65             # user rule: under 0.6 = no trade (can only be raised). 0.65: Controller proposal 2026-11-10
+# Score weights (Controller proposal 2026-11-10, "promettente" on 82 tokens; remove the line to go back to the built-in ones)
+weights = { liquidity = 0.13, turnover = 0.07, buy_pressure = 0.23, momentum = 0.06, holders = 0.07, hygiene = 0.04, website = 0.31, maturity = 0.10 }
 website_check = true
 # Claude reads the website and judges if it looks legit & "tasty".
 # Used only when ANTHROPIC_API_KEY is set in .env.
@@ -74,15 +76,15 @@ execution = "jupiter_v2"
 exit_slippage_ladder_bps = [800, 1500, 3000]
 
 [risk]
-hard_stop_pct = -6.0          # user rule: hard stop at -6% (can only be tightened)
-trail_activate_pct = 12.0     # user rule: trailing starts only after +12%
-trail_distance_pct = 6.0      # trailing stop distance below the peak
+hard_stop_pct = -4.0          # user rule: hard stop at -6% (can only be tightened). -4: Controller proposal 2026-11-10
+trail_activate_pct = 25.0     # user rule: trailing starts only after +12% (25: Controller proposal 2026-11-10)
+trail_distance_pct = 8.0      # trailing stop distance below the peak (8: Controller proposal 2026-11-10)
 cooldown_after_loss_minutes = 20     # unused: after a loss only that token is blocked (forever), other pairs stay open
 max_consecutive_losses = 3           # ...and a longer pause after a losing streak
 streak_pause_minutes = 0               # 0 = no pause after a losing streak (set e.g. 30 to pause new buys after 3 losses in a row)
 daily_loss_limit_pct = 30.0          # live only: halt new entries for the day after -30% equity (ignored in paper)
 liquidity_drop_exit_pct = 35.0       # emergency exit if pool liquidity drops this much
-max_hold_minutes = 0                 # 0 = no time stop
+max_hold_minutes = 45                # 0 = no time stop (45: Controller proposal 2026-11-10)
 price_poll_seconds = 2.0
 
 [recap]
