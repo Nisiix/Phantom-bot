@@ -203,7 +203,7 @@ error is only logged, so publishing can't slow or stop trading. Nothing on the p
 2. Publish once: start the desk, then in a second terminal `start.bat pages` (or `python run.py pages`).
 3. On GitHub: **Settings → Pages → Build and deployment → Deploy from a branch → `gh-pages` / `(root)`**, Save.
    After ~1 minute the page is at `https://<user>.github.io/<repo>/`.
-4. To keep it updated automatically, set `enabled = true` under `[pages]` in `config.toml` and restart the desk.
+4. It stays updated automatically: `[pages] enabled = true` is the default in `config.toml` (set it to `false` to stop publishing).
 
 **The page is public** (anyone with the link; search engines are asked not to index it): balances, trades and
 token names are visible. In live mode nothing is published unless `publish_live = true`, because live trades can
