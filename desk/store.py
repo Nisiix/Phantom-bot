@@ -171,6 +171,18 @@ class Store:
     def equity_series(self, since: float = 0) -> list[dict]:
         return self.q("SELECT ts,cash_sol,equity_sol,sol_usd FROM equity WHERE ts>=? ORDER BY ts", (since,))
 
+    def funnel_since(self, since: float) -> dict:
+        """Distinct tokens per pipeline stage from the decision log (survives restarts, unlike agent counters)."""
+        rows = self.q("SELECT stage, outcome, COUNT(DISTINCT mint) AS tokens, COUNT(*) AS n FROM decisions "
+                      "WHERE ts>=? GROUP BY stage, outcome", (since,))
+        by = {(r["stage"], r["outcome"]): r for r in rows}
+        seen = self.q("SELECT COUNT(DISTINCT mint) AS n FROM decisions WHERE ts>=? AND stage='filter'", (since,))
+        return {"seen": seen[0]["n"] if seen else 0,
+                "passed": by.get(("filter", "pass"), {}).get("tokens", 0),
+                "approved": by.get(("analyst", "approve"), {}).get("tokens", 0),
+                "bought": by.get(("executor", "buy"), {}).get("n", 0),
+                "filter_checks": sum(r["n"] for r in rows if r["stage"] == "filter")}
+
     def decisions_between(self, t0: float, t1: float) -> list[dict]:
         return self.q("SELECT * FROM decisions WHERE ts>=? AND ts<? ORDER BY ts", (t0, t1))
 

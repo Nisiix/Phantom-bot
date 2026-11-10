@@ -57,3 +57,18 @@ def test_activity_view(tmp_path):
     assert page.startswith(b"HTTP/1.1 200") and b'id="vista3d"' in page and b"three@" in page
     api = _request(dash, b"GET /api/activity HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n")
     assert api.startswith(b"HTTP/1.1 200") and b'"events"' in api
+
+
+def test_funnel_survives_restart(tmp_path):
+    dash = make_dash(tmp_path)
+    st = dash.desk.store
+    st.kv_set("paper_reset_ts", 100.0)
+    st.add_decision(50.0, "executor", "buy", "OLD", "OLD", "before reset", {})        # before the reset: ignored
+    for mint in ("A", "B", "C"):
+        st.add_decision(200.0, "filter", "reject", mint, mint, "low volume", {})
+    st.add_decision(201.0, "filter", "pass", "A", "A", "ok", {})
+    st.add_decision(202.0, "analyst", "approve", "A", "A", "0.7", {})
+    st.add_decision(203.0, "executor", "buy", "A", "A", "bought", {})
+    s = json.loads(dash.state_json())       # agent counters are all zero (fresh start), the log isn't
+    assert [f["n"] for f in s["funnel"]] == [3, 1, 1, 1]
+    assert s["funnel_since"] == 100.0 and s["filter_evals"] == 4

@@ -60,6 +60,7 @@ class Dashboard:
         self.cfg = desk.cfg.dashboard
         self.port = self.cfg.port
         self._cache: tuple[float, bytes] = (0.0, b"")
+        self._funnel: tuple[float, dict, float] = (0.0, {}, 0.0)
 
     # ── state snapshot ──
     def state(self) -> dict:
@@ -82,12 +83,12 @@ class Dashboard:
                            "entry_reason,exit_reason FROM trades ORDER BY exit_ts DESC LIMIT 40")
         equity = _downsample(d.store.equity_series(t - 7 * 86400), 500)
         eq = [{"ts": e["ts"], "v": e["equity_sol"]} for e in equity] + [{"ts": t, "v": pf.equity_sol}]
-        c = {n: s.counters for n, s in d.hub.agents.items()}
+        fu, since = self.funnel()
         funnel = [
-            {"stage": "Token scoperti", "n": c["Scout"].get("discovered", 0)},
-            {"stage": "Promossi dai filtri", "n": c["Filter"].get("passed", 0)},
-            {"stage": "Punteggio ≥ soglia", "n": c["Analyst"].get("approved", 0)},
-            {"stage": "Acquistati", "n": c["Executor"].get("buys", 0)},
+            {"stage": "Token esaminati", "n": fu["seen"]},
+            {"stage": "Promossi dai filtri", "n": fu["passed"]},
+            {"stage": "Punteggio ≥ soglia", "n": fu["approved"]},
+            {"stage": "Acquistati", "n": fu["bought"]},
         ]
         q = d.quant
         try:
@@ -115,9 +116,22 @@ class Dashboard:
             "live_gate": {"ok": gate_ok, "msgs": gate_msgs},
             "next_recap": self.logger.next_recap, "banner": list(d.hub.banner[-3:]),
             "agents": agents, "feed": feed, "positions": positions, "trades": trades,
-            "equity": eq, "funnel": funnel, "filter_evals": c["Filter"].get("evaluated", 0),
+            "equity": eq, "funnel": funnel, "funnel_since": since, "filter_evals": fu["filter_checks"],
             "controller": d.controller.summary() if d.controller is not None else None,
         }
+
+    def funnel(self) -> tuple[dict, float]:
+        """Pipeline counts since the last paper reset (all history if never reset), from the decision log,
+        so a restart doesn't zero them. Cached for 15 s: it's a COUNT over the log."""
+        t = time.time()
+        if t - self._funnel[0] > 15.0:
+            st = self.desk.store
+            since = float(st.kv_get("paper_reset_ts", 0) or 0) if self.desk.cfg.mode == "paper" else 0.0
+            try:
+                self._funnel = (t, st.funnel_since(since), since)
+            except Exception:  # noqa: BLE001
+                self._funnel = (t, {"seen": 0, "passed": 0, "approved": 0, "bought": 0, "filter_checks": 0}, since)
+        return self._funnel[1], self._funnel[2]
 
     def state_json(self) -> bytes:
         t = time.time()

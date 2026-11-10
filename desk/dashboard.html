@@ -404,7 +404,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
         <div class="tiles" id="kpis"></div>
         <div class="card">
           <h3>Pipeline</h3>
-          <p class="sub">Quanti token superano ogni stadio dall'avvio</p>
+          <p class="sub" id="funnelSub">Quanti token superano ogni stadio dall'ultimo reset del conto</p>
           <div id="funnel"></div>
         </div>
       </div>
@@ -709,6 +709,7 @@ function renderFunnel(s) {
       if (prev) t.append(el("div", "r", fx(f.n / prev * 100, 1) + "% dello stadio precedente")); }));
     row.addEventListener("pointerleave", hideTip); box.append(row);
   });
+  $("funnelSub").textContent = "Quanti token superano ogni stadio " + (s.funnel_since ? "dal reset del conto (" + new Date(s.funnel_since * 1000).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) + ")" : "da sempre") + " · non si azzera ai riavvii";
   box.append(el("p", "sub", "Il Filter ha fatto " + int(s.filter_evals) + " controlli: i token giovani vengono ricontrollati finché il volume non basta."));
 }
 
