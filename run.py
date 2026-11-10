@@ -131,7 +131,7 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description="Phantom Desk")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper", "pages"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper", "pages", "model"])
     ap.add_argument("--mode", choices=["paper", "live"], help="override mode from config.toml")
     ap.add_argument("--headless", action="store_true", help="plain log output instead of the live terminal")
     ap.add_argument("--config", help="path to config.toml")
@@ -168,6 +168,11 @@ def main() -> int:
         except (RuntimeError, OSError, ValueError) as e:
             print("GitHub Pages: not published:", e, file=sys.stderr)
             return 1
+        return 0
+
+    if args.command == "model":
+        from desk.model import describe_data
+        print(describe_data(Store(cfg.data_dir / f"{cfg.mode}.db"), cfg))
         return 0
 
     if args.command == "controller":

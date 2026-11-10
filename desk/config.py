@@ -164,6 +164,17 @@ class ControllerCfg:
 
 
 @dataclass
+class ModelCfg:
+    # MODELLO (desk/model.py): boosted trees trained by the Controller every round on the 60-min follow-ups.
+    enabled: bool = True                # train it and log P(win) for every buy
+    enforce: bool = True                # may BLOCK buys once verified (SOLIDA, or PROMETTENTE confirm_rounds times)
+    min_rows: int = 1000                # fewest Analyst follow-ups with stored values before the first training
+    min_leaf: int = 40                  # fewest tokens in a tree leaf (bigger = smoother, less overfitting)
+    min_eval_rows: int = 30             # fewest tradeable tokens in the verification part to judge on them alone
+    max_block_pct: float = 40.0         # never pick a threshold that would block more than this share of buys
+
+
+@dataclass
 class DashboardCfg:
     enabled: bool = True
     host: str = "127.0.0.1"          # localhost only; Docker sets DASHBOARD_HOST=0.0.0.0 inside the container
@@ -221,6 +232,7 @@ class Config:
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
     pages: PagesCfg = field(default_factory=PagesCfg)
     controller: ControllerCfg = field(default_factory=ControllerCfg)
+    model: ModelCfg = field(default_factory=ModelCfg)
     live_gate: LiveGateCfg = field(default_factory=LiveGateCfg)
     secrets: Secrets = field(default_factory=Secrets)
     warnings: list[str] = field(default_factory=list)
@@ -346,7 +358,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "dashboard", "pages", "controller", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "dashboard", "pages", "controller", "model", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()

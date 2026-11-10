@@ -165,6 +165,7 @@ class Verdict:
     issued_at: float
     signature: str
     trade: bool
+    features: dict = field(default_factory=dict)   # numbers seen at decision time (for the Controller's model)
 
     @staticmethod
     def payload(mint: str, score: float, trade: bool, filter_sig: str, issued_at: float) -> str:

@@ -158,6 +158,20 @@ confirm_rounds = 3        # a PROMETTENTE result must win 3 rounds in a row befo
 apply_cooldown_minutes = 60   # at most one change per agent per hour, so each effect can be measured
 review_min_rows = 30      # new tokens needed to confirm an applied change or roll it back
 
+[model]
+# MODELLO: small statistical model (boosted trees, CPU, numpy) the Controller retrains every round on the 60-minute
+# follow-ups. It estimates P(win) = chance that the current exit rules close a token in profit, from the numbers
+# seen at decision time. Trained on the oldest 70%, judged on the newest 30% it never saw. It starts "in prova"
+# (logs P(win), blocks nothing) and BLOCKS buys under its threshold only after a SOLIDA verdict (or PROMETTENTE for
+# [controller] confirm_rounds rounds in a row) where auto_apply allows; it switches itself off when the advantage
+# disappears. It can only block, never force a buy or loosen a rule. Data check: `python run.py model`.
+enabled = true
+enforce = true
+min_rows = 1000           # Analyst follow-ups with stored values needed before the first training
+min_leaf = 40
+min_eval_rows = 30
+max_block_pct = 40        # never block more than this share of the buys
+
 [dashboard]
 # Web dashboard (read-only) — opens in your browser at http://127.0.0.1:8080
 enabled = true

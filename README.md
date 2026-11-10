@@ -98,6 +98,20 @@ are kept in `data/controller_overrides_<mode>.json` and loaded over `config.toml
 to return to `config.toml`. The Controller's memory (rounds, best variants, streaks, decisions, last report)
 survives restarts.
 
+
+## Model — P(win) learned from the 60-minute follow-ups (`python run.py model`)
+
+Every Controller round also retrains a small statistical model (`desk/model.py`: boosted depth-2 trees on
+quantile bins, numpy, CPU, a few seconds) on the Analyst follow-ups. It estimates P(win), the chance that the
+current exit rules close a token in profit after costs, from the ~35 numbers seen at decision time. It learns
+on the oldest 70% of the data and is judged on the newest 30% it never saw; a block threshold is picked on the
+training part only. It starts "in prova" (P(win) is logged in every buy reason, nothing is blocked) and blocks
+buys under the threshold only after a SOLIDA verdict, or PROMETTENTE for `confirm_rounds` rounds in a row, where
+`[controller] auto_apply` allows it. When the advantage disappears it switches the block off by itself. It can
+only block, never force a buy or loosen a rule. Settings: `[model]` in `config.toml` (`min_rows` = follow-ups
+needed before the first training). `python run.py model` (or `start.bat model`) counts the learning data and
+runs one training round on it, read-only, with the bot running or not.
+
 ## Engine
 * Filter runs in two stages: a batched market screen, then a priority queue of deep checks
   (graduations and smart-money signals first, then by volume) with `deep_workers` in parallel.

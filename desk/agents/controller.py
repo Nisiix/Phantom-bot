@@ -14,6 +14,7 @@ import time
 from collections import Counter, deque
 
 from .. import controller_memory as mem
+from .. import model as ml
 from ..controller import build_report, health_checks, proposals, reason_category, run_experiments
 from .base import Agent
 
@@ -49,6 +50,8 @@ class Controller(Agent):
         self.streaks: dict = st.get("streaks", {})
         self.last_applied: dict = st.get("last_applied", {})
         self._announced: set[str] = set()
+        self.model_new: dict | None = None
+        self.model_res: dict | None = (desk.store.kv_get("ml_model", {}) or {}).get("last") or None
         # Survive restarts: last report, last test round and last checks are shown again right away.
         last = desk.store.kv_get("controller_last", {}) or {}
         self.report, self.report_ts = last.get("report", ""), last.get("report_ts", 0.0)
@@ -168,8 +171,18 @@ class Controller(Agent):
         return an, fi, rej
 
     def _round(self, reviews: list[dict] | None = None) -> dict:
+        """One round in a worker thread: the experiments, then the model retrained on the same rows
+        (its result is left in self.model_new for the event loop)."""
         an, fi, rej = self._load()
-        return run_experiments(self.cfg, an, fi, rej, self.best, reviews=reviews)
+        exp = run_experiments(self.cfg, an, fi, rej, self.best, reviews=reviews)
+        self.model_new = None
+        if self.cfg.model.enabled:
+            try:
+                self.model_new = ml.train_round(an, self.cfg)
+            except Exception as e:  # noqa: BLE001 - a model failure must never stop the Controller's other work
+                self.model_new = {"t": time.time(), "rows": len(an), "min_rows": self.cfg.model.min_rows,
+                                  "verdict": "errore", "why": f"errore di addestramento: {e.__class__.__name__}: {e}"}
+        return exp
 
     def _save_state(self) -> None:
         self.desk.store.kv_set("controller_state", {"rounds": self.rounds, "trials": self.trials, "best": self.best,
@@ -238,6 +251,15 @@ class Controller(Agent):
             t0 = time.time()
             reviews = mem.pending_reviews(self.desk.store)
             exp = await asyncio.to_thread(self._round, reviews)
+            res = self.model_new
+            if res is not None:
+                self.model_res = res
+                gate = self.desk.model
+                if gate is not None:
+                    msg = gate.update(res, mem.auto_apply_on(self.cfg))
+                    if msg:
+                        self.emit("risk", msg)
+                    self.state.counters["model"] = 1 if gate.active else 0
             self.exp = exp
             self.rounds += 1
             self.trials += exp["tried"]
@@ -264,7 +286,8 @@ class Controller(Agent):
 
     def write_report(self) -> str:
         self.report = build_report(self.health, self.exp, self.cfg, self.trials, self.rounds,
-                                   mem.report_section(self.desk.store, self.cfg))
+                                   mem.report_section(self.desk.store, self.cfg)) \
+            + ml.report_section(self.model_res, self.desk.model, self.cfg)
         self.report_ts = time.time()
         self.desk.store.kv_set("controller_last", {"report": self.report, "report_ts": self.report_ts,
                                                    "exp": self.exp, "health": self.health})
@@ -280,6 +303,7 @@ class Controller(Agent):
                 "proposals": proposals(self.exp, self.cfg) if self.exp else [],
                 "auto_apply": self.c.auto_apply, "auto_on": mem.auto_apply_on(self.cfg),
                 "overrides": self.cfg.controller_overrides,
+                "model": self.desk.model.summary() if self.desk.model is not None else None,
                 "decisions": [{k: d[k] for k in ("id", "ts", "agent", "kind", "changes", "status", "reasoning",
                                                  "review")} for d in mem.decisions(self.desk.store, 12)],
                 "data": {k: self.exp.get(k) for k in ("analyst_rows", "with_path", "filter_rows", "tried")}

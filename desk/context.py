@@ -42,6 +42,7 @@ class Desk:
     market_seen: dict[str, tuple] = field(default_factory=dict)  # Filter: mint -> (ts, vol_h1, liq_usd)
     creators: dict[str, str] = field(default_factory=dict)       # Scout/Filter: mint -> creator wallet
     in_flight: set[str] = field(default_factory=set)             # Executor: mints being bought/sold
+    model: object = None                                          # Controller: ModelGate (desk/model.py)
     shadow: object = None                                         # Logger: ShadowTracker (60-min follow-up)
     market: object = None                                         # Risk: MarketRegime (BTC/SOL/memes, measurement only)
     controller: object = None                                     # Controller: read-only checks + proposals

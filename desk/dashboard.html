@@ -787,6 +787,15 @@ function renderController(s) {
     const k = el("span", "kind"); k.style.setProperty("--kc", col); k.append(el("i"), document.createTextNode(d.kind === "revert" ? "annullata" : d.status));
     const ag = el("span", "a"); ag.style.setProperty("--ac", agc(d.agent)); ag.append(el("i"), document.createTextNode(d.agent));
     const m = el("div", "msg"); m.append(el("span", "sym", new Date(d.ts * 1000).toLocaleString("it-IT", { hour12: false })), document.createTextNode(d.reasoning)); r.append(k, ag, m); box.append(r); }
+  if (ct.model) { const md = ct.model; box.append(el("h3", null, "Modello statistico (P(win))"));
+    const st = { "attivo": "ATTIVO: blocca gli acquisti con P(win) sotto " + (md.threshold != null ? md.threshold.toFixed(2) : "soglia"),
+      "in prova": "in prova: calcola P(win) per ogni acquisto senza bloccare", "in attesa di dati": "in attesa di dati", "spento": "spento" }[md.status] || md.status;
+    let t = "Stato: " + st + ".";
+    if (md.rows != null) t += " Dati: " + int(md.rows) + " valutazioni" + (md.status === "in attesa di dati" ? " su " + int(md.min_rows) + " necessarie" : "") + ".";
+    if (md.verdict && md.verdict !== "dati insufficienti") t += " Ultimo verdetto: " + md.verdict + (md.auc != null ? ", AUC su dati mai visti " + md.auc.toFixed(3) : "") + ".";
+    if (md.valid) t += " Guadagno stimato " + sgn(md.valid.mean, 2) + " punti %/token [" + sgn(md.valid.lo, 1) + ", " + sgn(md.valid.hi, 1) + "].";
+    if (md.calls) t += " Da avvio: " + int(md.calls) + " acquisti valutati, " + int(md.blocks) + " bloccati.";
+    box.append(el("p", "sub", t)); }
   const b = el("button", "btn", ctlOpen ? "Nascondi report completo" : "Report completo"); b.type = "button"; b.style.marginTop = "10px";
   const pre = el("pre", "recap"); pre.hidden = !ctlOpen;
   b.onclick = async () => { ctlOpen = !ctlOpen; renderController(S); };

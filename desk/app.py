@@ -79,6 +79,9 @@ async def build(cfg: Config) -> tuple[Desk, object]:
         rows += [shadow_to_outcome(r, q.shadow_weight) for r in st.shadow_samples()]
         desk.quant.cost_samples += [o["rt_cost_pct"] for o in st.outcomes() if o["rt_cost_pct"]]
     desk.quant.load(rows)
+    if cfg.model.enabled:
+        from .model import ModelGate
+        desk.model = ModelGate(store, cfg)
     if q.market_regime:
         from .market import MarketRegime
         desk.market = MarketRegime(jup, store)

@@ -224,6 +224,14 @@ class Executor(Agent):
         if self.cfg.quant.enabled and not qv.passes:
             self.state.bump("ev_block")
             return self.reject(v, qv.reason)
+        # MODELLO: the Controller's statistical model (desk/model.py). Blocks only once verified on unseen data.
+        mv = None
+        if self.desk.model is not None:
+            regime = self.desk.market.snapshot() if self.desk.market is not None else {}
+            mv = self.desk.model.evaluate({**regime, **v.features})
+            if mv is not None and mv.block:
+                self.state.bump("model_block")
+                return self.reject(v, mv.reason)
 
         # Exits run concurrently: a loss may have landed while we were quoting. Ask Risk again right
         # before the swap (cooldown / streak pause / daily halt / max positions). No await in between.
@@ -243,7 +251,7 @@ class Executor(Agent):
         reason = (f"score {v.score:.2f} | {'; '.join(v.rationale[:5])} | filters: "
                   + ", ".join(f"{c.name}={c.value}" for c in rep.checks)
                   + f" | size {size:.4f} SOL = {self.e.max_position_pct}% of {cash:.3f} | impact {impact:.2f}% "
-                    f"| round-trip {rt_loss:.2f}% | {qv.short()} | exec {fill.route}: checks "
+                    f"| round-trip {rt_loss:.2f}% | {qv.short()}{' | ' + mv.short() if mv else ''} | exec {fill.route}: checks "
                     f"{speed['checks_ms']} ms + swap {speed['swap_ms']} ms")
         pos = Position(
             mint=v.mint, symbol=v.symbol, tokens=fill.tokens, decimals=decimals, cost_sol=fill.sol,
