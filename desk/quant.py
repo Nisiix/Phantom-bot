@@ -117,7 +117,9 @@ class QuantModel:
         for r in rows:
             w = r.get("weight", 1.0)
             n[r["label"]] += w
-            s[r["label"]] += w * r["gross_pct"]
+            # Capped like the Controller (-100..+300%): shadow rows with glitched price paths (+2,000,000% in
+            # 22 s) once pushed EV to +16,000% and let instant rugs through the EV gate.
+            s[r["label"]] += w * max(-100.0, min(300.0, r["gross_pct"] or 0.0))
         total = sum(n.values())
         p = {lb: (k * prior_p[lb] + n[lb]) / (k + total) for lb in LABELS}
         # Mean gross return per scenario, shrunk toward the prior with 3 pseudo-observations.

@@ -46,6 +46,12 @@ serial_dev_dead_ratio = 0.8        # ...of which >= 80% died (< $10k mcap) = rug
 # ── engine ──
 deep_workers = 3                   # deep checks in parallel (RugCheck keeps its own rate limit)
 deep_max_wait_seconds = 60         # drop queued deep checks whose market data got stale
+# ── instant-rug guards (2026-11-10) ──
+graduation_wait_minutes = 30       # no buy in the first N min after pump.fun -> PumpSwap graduation (0 = off)
+spread_top10_high_pct = 70.0       # top10 above this in the last spread_window_minutes and now under max_top10_pct
+spread_window_minutes = 60         #   = supply spread across fake wallets -> token killed
+rugged_name_days = 7               # relaunches of a name/symbol that rugged in the last N days are killed
+rugged_name_loss_pct = 60.0        # our trade losing >= this within an hour marks its name as rugged
 
 [analyst]
 min_score = 0.65             # user rule: under 0.6 = no trade (can only be raised). 0.65: Controller proposal 2026-11-10

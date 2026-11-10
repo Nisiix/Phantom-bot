@@ -531,3 +531,106 @@ def test_young_token_traction_signals():
     # older tokens are not scored on traction
     _, b3, _ = score_token(snap(pair_created_at=t - 6 * 3600), strong, web)
     assert "traction" not in b3
+
+
+# ── instant-rug guards (2026-11-10) ──
+def _filter_with_rugcheck(tmp_path, top10_each: float):
+    from desk.agents.filter import Filter
+
+    class Rug:
+        def __init__(self):
+            self.each = top10_each
+
+        async def report(self, mint):
+            return {"token": {"supply": 1e9, "decimals": 6}, "creator": "DEV",
+                    "markets": [{"marketType": "pump_fun_amm", "pubkey": "POOL",
+                                 "lp": {"quoteUSD": 40_000, "baseUSD": 40_000, "lpLockedPct": 100}}],
+                    "topHolders": [{"owner": f"W{i}", "pct": self.each} for i in range(10)]}
+
+    class Rpc:
+        async def mint_info(self, mint):
+            return {"mintAuthority": None, "freezeAuthority": None, "decimals": 6}
+
+    desk = make_desk(tmp_path)
+    desk.rug, desk.rpc = Rug(), Rpc()
+    f = Filter(desk)
+    f.f.onchain_lp_check = False
+    return desk, f
+
+
+def test_graduation_wait_blocks_fresh_pumpswap_pairs(tmp_path):
+    from desk.agents.filter import Filter
+    from desk.models import Candidate
+    f = Filter(make_desk(tmp_path))
+    t = time.time()
+    fresh = snap(pair_created_at=t - 12 * 60, liquidity_usd=30_000, volume_h1=40_000)
+    wait = next(c for c in f._market_checks(fresh) if c.name == "graduation_wait")
+    assert not wait.passed and not wait.permanent
+    assert next(c for c in f._market_checks(snap(pair_created_at=t - 45 * 60)) if c.name == "graduation_wait").passed
+    # bonding-curve pair: not graduated, no wait check
+    assert not any(c.name == "graduation_wait" for c in f._market_checks(snap(dex_id="pumpfun")))
+    # Only the wait fails and no recent top10 reading: deep checks still run (screen returns None)...
+    assert f.screen(Candidate("M"), fresh) is None
+    f._top10_seen["M"] = time.time()
+    # ...but once a reading exists the cheap screen rejects it without RugCheck.
+    rep = f.screen(Candidate("M"), fresh)
+    assert rep is not None and not rep.passed
+    f.f.graduation_wait_minutes = 0
+    assert not any(c.name == "graduation_wait" for c in f._market_checks(fresh))
+
+
+def test_holder_spread_kills_after_top10_collapse(tmp_path):
+    from desk.models import Candidate
+    desk, f = _filter_with_rugcheck(tmp_path, 9.0)          # top10 = 90%
+    rep = asyncio.run(f.deep(Candidate("M"), snap()))
+    assert not rep.passed and not rep.permanent_fail       # plain top10 reject
+    desk.rug.each = 0.5                                     # 10 minutes later: 5%
+    rep = asyncio.run(f.deep(Candidate("M"), snap()))
+    spread = next(c for c in rep.checks if c.name == "holder_spread")
+    assert not spread.passed and rep.permanent_fail
+    # a token that was never concentrated passes
+    (tmp_path / "b").mkdir()
+    _, f2 = _filter_with_rugcheck(tmp_path / "b", 0.5)
+    rep2 = asyncio.run(f2.deep(Candidate("N"), snap(mint="N")))
+    assert not any(c.name == "holder_spread" for c in rep2.checks) and rep2.passed
+
+
+def test_rugged_name_relaunch_is_killed(tmp_path):
+    from desk import rugnames
+    from desk.agents.filter import Filter
+    from desk.models import Candidate
+    desk = make_desk(tmp_path)
+    rugnames.record(desk.store, "OLDMINT", "GTA6", "GTA 6", "our trade lost -97%")
+    f = Filter(desk)
+    for sym, name in (("GTA6", "Grand Theft"), ("GTA 6", "x"), ("GTA6COIN", "GTA 6 Coin")):
+        rep = f.screen(Candidate("NEW"), snap(mint="NEW", symbol=sym, name=name))
+        hit = next(c for c in rep.checks if c.name == "rugged_name")
+        assert not hit.passed and hit.permanent
+    assert f.screen(Candidate("NEW"), snap(mint="NEW", symbol="DOGE", name="Doge")) is None
+    # old entries stop matching after rugged_name_days
+    desk.store.db.execute("UPDATE rugged_names SET ts=?", (time.time() - 8 * 86400,))
+    f.rugged.invalidate()
+    assert f.rugged.match("NEW", "GTA6", "GTA 6") is None
+
+
+def test_rugged_names_seeded_from_past_trades(tmp_path):
+    from desk import rugnames
+    desk = make_desk(tmp_path)
+    t = time.time()
+    desk.store.add_trade({"mint": "R1", "symbol": "Rockstar", "mode": "paper", "entry_ts": t - 100, "exit_ts": t - 52,
+                          "cost_sol": 1, "proceeds_sol": 0.02, "pnl_sol": -0.98, "pnl_pct": -98, "peak_pnl_pct": 0,
+                          "score": 0.7, "entry_reason": "", "exit_reason": "", "tx_in": "", "tx_out": "", "data": {}})
+    desk.store.add_trade({"mint": "W1", "symbol": "WIN", "mode": "paper", "entry_ts": t - 100, "exit_ts": t - 50,
+                          "cost_sol": 1, "proceeds_sol": 0.9, "pnl_sol": -0.1, "pnl_pct": -10, "peak_pnl_pct": 0,
+                          "score": 0.7, "entry_reason": "", "exit_reason": "", "tx_in": "", "tx_out": "", "data": {}})
+    assert rugnames.seed_from_trades(desk.store, 60) == 1
+    led = desk.store.rugged_names(0)
+    assert "rockstar" in led and "win" not in led
+
+
+def test_quant_caps_glitched_returns():
+    from desk.quant import QuantModel
+    q = QuantModel(min_samples_to_enforce=1)
+    q.load([{"ts": i, "score": 0.7, "label": "up", "gross_pct": 2_032_056.0, "weight": 1.0} for i in range(5)])
+    _, r, _ = q.probabilities(0.7)
+    assert r["up"] <= 300

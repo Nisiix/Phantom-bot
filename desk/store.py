@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS controller_decisions (
 CREATE TABLE IF NOT EXISTS controller_runs (
   id INTEGER PRIMARY KEY, ts REAL, trials INTEGER, health TEXT, proposals TEXT, report TEXT);
 CREATE TABLE IF NOT EXISTS rug_ledger (wallet TEXT PRIMARY KEY, mint TEXT, reason TEXT, ts REAL);
+CREATE TABLE IF NOT EXISTS rugged_names (key TEXT PRIMARY KEY, mint TEXT, symbol TEXT, reason TEXT, ts REAL);
 """
 
 
@@ -140,6 +141,16 @@ class Store:
             return None
         rows = self.q("SELECT * FROM rug_ledger WHERE wallet=?", (wallet,))
         return rows[0] if rows else None
+
+    def add_rugged_name(self, key: str, mint: str, symbol: str, reason: str, ts: float | None = None) -> None:
+        """Name/symbol of a token that rugged (never deleted; the Filter only matches recent ones)."""
+        self.db.execute("INSERT INTO rugged_names(key,mint,symbol,reason,ts) VALUES(?,?,?,?,?) "
+                        "ON CONFLICT(key) DO UPDATE SET mint=excluded.mint, symbol=excluded.symbol, "
+                        "reason=excluded.reason, ts=MAX(rugged_names.ts, excluded.ts)",
+                        (key, mint, symbol, reason, ts or time.time()))
+
+    def rugged_names(self, since: float) -> dict[str, dict]:
+        return {r["key"]: r for r in self.q("SELECT * FROM rugged_names WHERE ts>=?", (since,))}
 
     def shadow_research_rows(self, stage: str = "analyst", since: float = 0) -> list[dict]:
         return self.q("SELECT * FROM shadow WHERE stage=? AND end_ts>=? AND features IS NOT NULL ORDER BY end_ts",

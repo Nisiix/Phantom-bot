@@ -22,6 +22,7 @@ import time
 from ..clients.jupiter import SOL_MINT
 from ..config import HARD_MAX_POSITION_PCT, HARD_MIN_SCORE
 from ..models import ExitOrder, FilterPass, Position, Verdict, now
+from .. import rugnames
 from ..portfolio import AveragingDownError
 from ..quant import label_outcome, outcome_row
 from .analyst import ANALYSIS_MAX_SECONDS
@@ -342,6 +343,11 @@ class Executor(Agent):
     def _finish(self, trade: dict, order: ExitOrder, pos: Position, speed: dict | None = None) -> None:
         self.risk.exit_done(order.mint)
         self.risk.record_result(trade)
+        f = self.cfg.filter
+        if trade["pnl_pct"] <= -f.rugged_name_loss_pct and trade["exit_ts"] - trade["entry_ts"] <= 3600:
+            # Instant rug: the same hype name comes back on a new mint with a fresh dev wallet.
+            rugnames.record(self.desk.store, trade["mint"], trade["symbol"], None,
+                            f"our trade lost {trade['pnl_pct']:.0f}% ({order.reason})")
         # QUANT learning sample: which barrier did this trade touch first within the horizon?
         label = label_outcome(pos.entry_ts, trade["exit_ts"], pos.hit_up_ts, pos.hit_down_ts, trade["pnl_pct"],
                               self.cfg.quant.horizon_minutes * 60, self.cfg.risk.hard_stop_pct)

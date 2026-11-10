@@ -13,6 +13,13 @@ Mandatory kills (user rules):
 Extra capital-preservation kills (config): freeze authority, dangerous Token-2022
 extensions, danger-level RugCheck risks, minimum liquidity.
 
+Instant-rug guards (2026-11-10, after 16 of 32 paper trades lost 60-100% within seconds):
+  * graduation wait: no buy while the PumpSwap pair is younger than graduation_wait_minutes
+    (rug rate measured: 52% under 30 min after graduation, 0 of 9 after 60 min);
+  * holder spread: top10 seen above spread_top10_high_pct in the last hour and now under max_top10_pct means the
+    supply was moved to fake wallets right before the dump -> permanent kill;
+  * rugged names: relaunches of a name/symbol that rugged recently (fresh dev wallet each time) -> permanent kill.
+
 Optional GMGN layer (GMGN_API_KEY): honeypot flag, GMGN rug label, insider / bundler / sniper
 shares, wash trading, serial-launcher dev, dev's SOL funder in our rug ledger, and holder
 funding clusters (wallets funded by the same wallet = one hidden whale). GMGN outages never
@@ -33,6 +40,7 @@ from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
 from ..onchain_lp import OnchainLP
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
 from ..research import market_features, rug_features
+from ..rugnames import RuggedNames, seed_from_trades
 from .base import Agent
 
 OVERLAP_RISK_WORDS = ("lp", "liquidity", "holder", "mint authority", "freeze authority", "rug",
@@ -159,11 +167,19 @@ class Filter(Agent):
         self.signer = desk.authority.signer("filter")
         self.f = self.cfg.filter
         self._last_reason: dict[str, str] = {}
+        self._top10_seen: dict[str, float] = {}
         self._last_pass_log: dict[str, float] = {}
         self._deep: asyncio.PriorityQueue = asyncio.PriorityQueue()
         self._deep_pending: set[str] = set()
         self._seq = 0
         rpc_url = self.cfg.secrets.rpc_url or ""
+        self.rugged = RuggedNames(desk.store, self.f.rugged_name_days)
+        try:
+            seed_from_trades(desk.store, self.f.rugged_name_loss_pct)
+        except Exception:  # noqa: BLE001 - the ledger also fills from live observations
+            pass
+        # mint -> [ts, top10 %] of the last reading above spread_top10_high_pct (survives restarts)
+        self._top10_high: dict[str, list] = desk.store.kv_get("filter_top10_high", {}) or {}
         self.onchain = OnchainLP(desk.rpc, private_rpc="api.mainnet-beta.solana.com" not in rpc_url)
 
     async def run(self) -> None:
@@ -244,6 +260,11 @@ class Filter(Agent):
                                                                "no DEX pair indexed yet")])
         self.desk.market_seen[cand.mint] = (time.time(), snap.volume_h1, snap.liquidity_usd)
         checks = self._market_checks(snap)
+        hit = self.rugged.match(cand.mint, snap.symbol or cand.symbol, snap.name or cand.name)
+        if hit:
+            checks.append(Check("rugged_name", False, hit["symbol"] or hit["key"], "new name",
+                                f"relaunch of a name that rugged: {hit['symbol'] or hit['key']} "
+                                f"({str(hit['mint'])[:6]}…, {hit['reason'][:60]})", permanent=True))
         if self.cfg.scout.venues == "pumpfun":
             # pump.fun-only desk: tokens born elsewhere (Raydium LaunchLab, Meteora, ...) that reach us through
             # DexScreener profiles never get RugCheck / RPC time. Not permanent: it is a scope choice, not a risk.
@@ -252,10 +273,25 @@ class Filter(Agent):
                                 "pump.fun token" if ok else f"not a pump.fun token (main pair on {snap.dex_id or '?'})"))
             if not ok:   # out of scope for good: the Scout drops it, no more re-screens (quietly, not a "kill")
                 self.desk.blacklist[cand.mint] = "not a pump.fun token"
-        if not all(c.passed for c in checks):
+        failed = [c for c in checks if not c.passed]
+        if failed and [c.name for c in failed] == ["graduation_wait"] and not self._recent_top10(cand.mint):
+            # Only the graduation wait fails: still run the deep checks every few minutes, so the holder-spread
+            # guard sees the top10 while the supply is still concentrated (it moves to fake wallets later).
+            return None
+        if failed:
             # Cheap market checks failed: stop here, don't burn RugCheck quota.
             return FilterReport(cand.mint, sym, False, checks, market=snap)
         return None
+
+    def _recent_top10(self, mint: str) -> bool:
+        """A deep check (with a top10 reading) ran for this token in the last 5 minutes."""
+        return time.time() - self._top10_seen.get(mint, 0) < 300
+
+    def graduation_age(self, snap: MarketSnapshot) -> float | None:
+        """Minutes since the pump.fun -> PumpSwap graduation (the PumpSwap pair's creation), None if unknown."""
+        if (snap.dex_id or "").lower() != "pumpswap" or not snap.pair_created_at:
+            return None
+        return snap.age_minutes
 
     def volume_floor(self, snap: MarketSnapshot) -> float:
         """$50k/h for a token older than [analyst] young_age_hours (it may have pumped already: full bar).
@@ -276,13 +312,20 @@ class Filter(Agent):
         young = floor < f.min_volume_h1_usd
         label = f"${floor:,.0f}" + (f" (young token: {snap.age_minutes:.0f} min old, ${snap.liquidity_usd:,.0f} "
                                     f"liquidity)" if young else "")
-        return [
+        checks = [
             Check("volume_1h", snap.volume_h1 >= floor, round(snap.volume_h1), round(floor),
                   f"${snap.volume_h1:,.0f}/h < {label}" if snap.volume_h1 < floor
                   else f"${snap.volume_h1:,.0f}/h" + (f" >= {label}" if young else "")),
             Check("liquidity", snap.liquidity_usd >= f.min_liquidity_usd, round(snap.liquidity_usd),
                   f.min_liquidity_usd, f"${snap.liquidity_usd:,.0f}"),
         ]
+        grad = self.graduation_age(snap)
+        if f.graduation_wait_minutes > 0 and grad is not None:
+            ok = grad >= f.graduation_wait_minutes
+            checks.append(Check("graduation_wait", ok, round(grad, 1), f.graduation_wait_minutes,
+                                f"graduated {grad:.0f} min ago" + ("" if ok else
+                                f" < {f.graduation_wait_minutes:.0f} min wait (instant-rug window)")))
+        return checks
 
     async def deep(self, cand: Candidate, snap: MarketSnapshot) -> FilterReport:
         """On-chain / RugCheck / GMGN checks for a token that passed the market screen."""
@@ -347,6 +390,10 @@ class Filter(Agent):
         checks.append(Check("top10_holders", t10 is not None and t10 <= f.max_top10_pct,
                             None if t10 is None else round(t10, 2), f.max_top10_pct,
                             f"top10 hold {t10:.1f}% (pools excluded)" if t10 is not None else "holder data missing"))
+        spread = self._holder_spread(cand.mint, t10)
+        if spread:
+            checks.append(Check("holder_spread", False, round(t10, 1), f"top10 < {f.spread_top10_high_pct:.0f}% "
+                                f"for {f.spread_window_minutes:.0f} min", spread, permanent=True))
 
         # 5. Dev wallet connected to previous rugs
         rug_reasons = []
@@ -410,6 +457,27 @@ class Filter(Agent):
         }
         return FilterReport(cand.mint, sym, passed, checks, market=snap, rug=rug_facts, creator=creator,
                             source=cand.source)
+
+    def _holder_spread(self, mint: str, t10: float | None) -> str | None:
+        """Remember high top10 readings; flag a token whose top10 went from > spread_top10_high_pct to under
+        max_top10_pct within spread_window_minutes (seen on every instant rug: 74-99% -> 0.5-9% in ~10 min)."""
+        if t10 is None:
+            return None
+        f, t = self.f, time.time()
+        self._top10_seen[mint] = t
+        if len(self._top10_seen) > 20000:
+            self._top10_seen = {k: v for k, v in self._top10_seen.items() if t - v < 3600}
+        window = f.spread_window_minutes * 60
+        if t10 > f.spread_top10_high_pct:
+            self._top10_high[mint] = [t, round(t10, 1)]
+            self._top10_high = {k: v for k, v in self._top10_high.items() if t - v[0] < window}
+            self.desk.store.kv_set("filter_top10_high", self._top10_high)
+            return None
+        high = self._top10_high.get(mint)
+        if high and t - high[0] < window and t10 <= f.max_top10_pct:
+            return (f"holders spread to fake wallets: top10 {high[1]:.0f}% {(t - high[0]) / 60:.0f} min ago, "
+                    f"now {t10:.1f}%")
+        return None
 
     async def _onchain_lp(self, rc: dict, creator: str | None, mint: str) -> dict:
         """Read LP locks and concentrated-pool position owners from the chain (desk/onchain_lp.py)."""
@@ -528,7 +596,7 @@ class Filter(Agent):
                             "attempt": cand.attempts})
         # Only surface rejections that got past the cheap market checks, or permanent kills,
         # in the live activity feed (everything is still written to the database).
-        deep = any(c.name not in ("market", "volume_1h", "liquidity", "venue") for c in report.checks)
+        deep = any(c.name not in ("market", "volume_1h", "liquidity", "venue", "graduation_wait") for c in report.checks)
         self.emit("reject" if not report.permanent_fail else "kill",
                   f"{'KILLED' if report.permanent_fail else 'rejected'}: {reason}", report.mint, report.symbol,
                   deep=deep)

@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 
 from ..clients.feeds import gecko_active_pools, gecko_new_pools, pumpportal_stream, venue_dexes
+from .. import rugnames
 from ..models import Candidate
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
@@ -209,6 +210,7 @@ class Scout(Agent):
         if funder:
             self.desk.store.add_rugger(funder, mint, "funded a rugging dev: " + reason)
         self.desk.blacklist[mint] = "rugged: " + reason
+        rugnames.record(self.desk.store, mint, w.cand.symbol, w.cand.name, "liquidity pulled: " + reason)
         self.emit("warn", f"RUG observed ({reason}); dev {('added to rug ledger: ' + creator[:6]) if creator else 'unknown'}",
                   mint, w.cand.symbol)
 
