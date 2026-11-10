@@ -18,7 +18,7 @@ def make_dash(tmp_path):
 
 def test_state_serialises(tmp_path):
     s = json.loads(make_dash(tmp_path).state_json())
-    assert s["mode"] == "paper" and s["balance"]["open"] == 1 and len(s["agents"]) == 6
+    assert s["mode"] == "paper" and s["balance"]["open"] == 1 and len(s["agents"]) == 7
     assert s["rules"]["max_pos_pct"] <= 8 and s["positions"][0]["symbol"] == "TST"
 
 
@@ -52,7 +52,7 @@ def test_activity_view(tmp_path):
     a = json.loads(json.dumps(dash.activity(), allow_nan=False))
     ev = a["events"][-1]
     assert ev["agent"] == "Analyst" and ev["data"]["why"] == ["liquidity ok"] and "x" not in ev["data"]
-    assert ev["data"]["breakdown"]["liq"] is None and len(a["agents"]) == 6
+    assert ev["data"]["breakdown"]["liq"] is None and len(a["agents"]) == 7
     page = _request(dash, b"GET / HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n")
     assert page.startswith(b"HTTP/1.1 200") and b'id="vista3d"' in page and b"three@" in page
     api = _request(dash, b"GET /api/activity HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n")

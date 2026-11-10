@@ -178,6 +178,16 @@ button { font: inherit; }
 .logger .stats span { font-size: 11.5px; color: var(--ink-2); background: var(--surface-2); border-radius: 7px; padding: 3px 9px; }
 .logger .stats b { font-family: var(--mono); color: var(--ink); margin-right: 3px; }
 .logger .last { font-size: 12px; color: var(--ink-2); flex-basis: 100%; overflow-wrap: anywhere; }
+.ctl .head { display: flex; align-items: center; gap: 10px; }
+.ctl .glyph { width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; font-size: 16px; flex: none;
+  background: color-mix(in srgb, var(--ac) 18%, transparent); color: var(--ac); border: 1px solid color-mix(in srgb, var(--ac) 35%, transparent); }
+.ctl .name { font-weight: 650; font-size: 14.5px; } .ctl .role { font-size: 11.5px; color: var(--muted); }
+.ctl .stats { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.ctl .stats span { font-size: 11.5px; color: var(--ink-2); background: var(--surface-2); border-radius: 7px; padding: 3px 9px; }
+.ctl .stats b { font-family: var(--mono); color: var(--ink); margin-right: 3px; }
+.ctl h3 { margin-top: 16px; }
+.ctl .ev { grid-template-columns: 92px 92px minmax(0, 1fr); }
+@media (max-width: 640px) { .ctl .ev { grid-template-columns: 76px minmax(0, 1fr); } .ctl .ev .a { display: none; } .ctl .ev .kind { display: inline-flex; } }
 
 /* ── charts ── */
 svg { display: block; overflow: visible; }
@@ -368,7 +378,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
     <span class="pill" id="mode">—</span>
     <div class="tabs" id="tabs">
       <a href="#panoramica" class="on">Panoramica</a><a href="#vista3d">Vista 3D</a><a href="#agenti">Agenti</a><a href="#operazioni">Operazioni</a>
-      <a href="#attivita">Attività</a><a href="#regole">Regole</a>
+      <a href="#controllore">Controllore</a><a href="#attivita">Attività</a><a href="#regole">Regole</a>
     </div>
     <span class="spacer"></span>
     <span class="pill" id="conn"><span class="dot"></span><span>connessione…</span></span>
@@ -455,6 +465,11 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
     </div>
   </section>
 
+  <section class="sec" id="controllore">
+    <div class="sec-h"><h2>Controllore</h2><p>Verifica che gli agenti rispettino le regole e prova altre configurazioni sui dati registrati · propone, non cambia nulla da solo</p></div>
+    <div class="card ctl" id="ctl"></div>
+  </section>
+
   <section class="sec" id="attivita">
     <div class="grid g-21">
       <div class="card">
@@ -532,13 +547,15 @@ const AG = {
   Executor: { c: "#34d399", g: "⚡", role: "Unico agente che muove denaro" },
   Risk:     { c: "#fb923c", g: "⛨", role: "Stop, trailing e limiti giornalieri" },
   Logger:   { c: "#f472b6", g: "▤", role: "Registra tutto, recap periodico e follow-up a 60 min" },
+  Controller: { c: "#facc15", g: "◉", role: "Controllore: verifica gli agenti e propone configurazioni migliori" },
 };
 const agc = (n) => (AG[n] || { c: "#9ca3af" }).c;
 const KEYS = { Scout: [["watching", "in osservazione"], ["sent", "inviati"], ["dropped", "scartati"]],
   Filter: [["passed", "promossi"], ["rejected", "respinti"], ["blacklisted", "esclusi"]],
   Analyst: [["approved", "approvati"], ["rejected", "bocciati"]],
   Executor: [["sells", "vendite"], ["wins", "vinti"], ["losses", "persi"], ["declined", "rifiutati"], ["ev_block", "bloccati EV"]],
-  Risk: [], Logger: [["logged", "eventi"], ["shadowing", "in follow-up"], ["shadow_done", "follow-up chiusi"], ["recaps", "recap"]] };
+  Risk: [], Logger: [["logged", "eventi"], ["shadowing", "in follow-up"], ["shadow_done", "follow-up chiusi"], ["recaps", "recap"]],
+  Controller: [["checks", "verifiche"], ["alerts", "anomalie ora"], ["rounds", "cicli di test"], ["trials", "configurazioni provate"], ["proposals", "proposte"]] };
 const MAIN = { Scout: ["discovered", "scoperti"], Filter: ["evaluated", "valutati"], Analyst: ["scored", "valutati"],
   Executor: ["buys", "acquisti"], Risk: ["open", "posizioni sorvegliate"] };
 const ST = { working: "attivo", idle: "in attesa", error: "errore", starting: "avvio", halted: "fermo" };
@@ -728,6 +745,39 @@ function renderAgents(s) {
   box.append(head, stats, el("div", "last", (lg.last || "—") + (lg.last_ts ? " · " + ago(lg.last_ts) : "")));
 }
 
+// ── Controller: behaviour checks + proposals (read-only) ──
+const LV = { critical: ["critico", "#f43f5e"], warn: ["attenzione", "#fbbf24"], info: ["info", "#7c8197"], ok: ["ok", "#34d399"] };
+let ctlOpen = false;
+function renderController(s) {
+  const box = $("ctl"), ct = s.controller, a = (s.agents || []).find((x) => x.name === "Controller");
+  if (!box) return; box.replaceChildren(); box.style.setProperty("--ac", agc("Controller"));
+  if (!ct || !a) { box.append(el("div", "empty", "Controllore non attivo ([controller] enabled = false).")); return; }
+  const head = agentHead(a); box.append(head);
+  const stats = el("div", "stats");
+  for (const [k, lab] of KEYS.Controller) { const sp = el("span"); sp.append(el("b", null, int(a.counters[k])), document.createTextNode(lab)); stats.append(sp); }
+  box.append(stats);
+  box.append(el("h3", null, "Comportamento degli agenti"));
+  for (const f of ct.health) { const r = el("div", "ev"), [ll, lc] = LV[f.level] || [f.level, null];
+    const k = el("span", "kind"); if (lc) k.style.setProperty("--kc", lc); k.append(el("i"), document.createTextNode(ll));
+    const ag = el("span", "a"); ag.style.setProperty("--ac", agc(f.agent)); ag.append(el("i"), document.createTextNode(f.agent));
+    const m = el("div", "msg"); m.append(el("span", "sym", f.check), document.createTextNode(f.detail)); r.append(k, ag, m); box.append(r); }
+  if (!ct.health.length) box.append(el("div", "empty", "Prima verifica tra pochi secondi."));
+  box.append(el("h3", null, "Proposte di configurazione"));
+  const sub = ct.rounds ? ct.rounds + " cicli di test, " + int(ct.trials) + " configurazioni provate" + (ct.data && ct.data.analyst_rows != null
+    ? " su " + int(ct.data.analyst_rows) + " token valutati e " + int(ct.data.filter_rows) + " filtrati" : "") + " · prossimo ciclo " + (ct.next_round > s.now ? "tra " + Math.ceil((ct.next_round - s.now) / 60) + " min" : "a breve")
+    : "Il primo ciclo di test parte un minuto dopo l'avvio, poi ogni 10 minuti.";
+  box.append(el("p", "sub", sub));
+  if (!ct.proposals.length) box.append(el("div", "empty", ct.rounds ? "Nessuna proposta: nessuna variante batte la configurazione attuale anche sui dati di verifica." : "In attesa del primo ciclo."));
+  else { const rows = ct.proposals.slice(0, 12).map((p) => { const r = el("tr");
+      r.append(td(p.agent), td(p.label + (p.also && p.also.length ? " (+ altre " + p.also.length + ")" : "")), td(p.changes.join(" · ")), td(sgn(p.gain, 2) + " [" + sgn(p.lo, 1) + ", " + sgn(p.hi, 1) + "]", "n " + cls(p.gain)), td(p.verdict === "solida" ? "solida" : "promettente", p.verdict === "solida" ? "up" : null)); return r; });
+    const sc = el("div", "scroll"); sc.append(table([["Agente"], ["Situazione"], ["Modifica proposta"], ["Guadagno/token %", 1], ["Affidabilità"]], rows)); box.append(sc); }
+  const b = el("button", "btn", ctlOpen ? "Nascondi report completo" : "Report completo"); b.type = "button"; b.style.marginTop = "10px";
+  const pre = el("pre", "recap"); pre.hidden = !ctlOpen;
+  b.onclick = async () => { ctlOpen = !ctlOpen; renderController(S); };
+  box.append(b, pre);
+  if (ctlOpen) { pre.textContent = "Carico il report…"; fetch("/api/controller", { cache: "no-store" }).then((r) => r.text()).then((t) => { pre.textContent = t; }).catch(() => { pre.textContent = "Bot non raggiungibile."; }); }
+}
+
 // ── positions & trades ──
 function table(cols, rows) {
   const t = el("table", "tbl"), thead = el("thead"), tr = el("tr");
@@ -800,7 +850,7 @@ function renderTrades(s) {
 // ── feed ──
 function renderChips() {
   const box = $("chips"); box.replaceChildren();
-  for (const n of ["Tutti", "Scout", "Filter", "Analyst", "Executor", "Risk", "Logger"]) {
+  for (const n of ["Tutti", "Scout", "Filter", "Analyst", "Executor", "Risk", "Logger", "Controller"]) {
     const b = el("button", "chip"); b.type = "button"; b.setAttribute("aria-pressed", String(agentFilter === n));
     if (n !== "Tutti") { b.style.setProperty("--ac", agc(n)); b.append(el("i")); } b.append(document.createTextNode(n));
     b.onclick = () => { agentFilter = n; renderChips(); if (S) renderFeed(S); }; box.append(b);
@@ -845,6 +895,7 @@ function render(s) {
   PX = (s.balance && s.balance.sol_usd) || 0;
   renderHeader(s); renderKpis(s); summary(s); renderEquity(s); renderFunnel(s); renderAgents(s);
   renderPositions(s); renderTradeBars(s); renderFeed(s); renderRules(s); renderTrades(s);
+  if (!ctlOpen || !$("ctl").childElementCount) renderController(s);
   if (s.feed.length) seenTs = s.feed[s.feed.length - 1].ts;
 }
 
@@ -874,7 +925,7 @@ const hms = (ts) => new Date(ts * 1000).toLocaleTimeString("it-IT", { hour12: fa
 const int = (x) => Number(x || 0).toLocaleString("it-IT");
 function ago(ts) { const s = Math.max(0, Date.now() / 1000 - ts); if (!ts) return "—";
   if (s < 60) return Math.floor(s) + "s fa"; if (s < 3600) return Math.floor(s / 60) + " min fa"; return Math.floor(s / 3600) + " h fa"; }
-const POS = { Scout: [-20, 0, 6], Filter: [-10.5, 0, -1.5], Analyst: [0, 0, -4], Executor: [10.5, 0, -1.5], Risk: [20, 0, 6], Logger: [0, 7, -19] };
+const POS = { Scout: [-20, 0, 6], Filter: [-10.5, 0, -1.5], Analyst: [0, 0, -4], Executor: [10.5, 0, -1.5], Risk: [20, 0, 6], Logger: [0, 7, -19], Controller: [-22, 9, -18] };
 const PIPE = ["Scout", "Filter", "Analyst", "Executor", "Risk"];
 const KDESC = { trade: "Acquisto o vendita eseguiti", exit: "Segnale di uscita", risk: "Gestione del rischio", kill: "Token escluso per sempre",
   reject: "Token scartato con il motivo", pass: "Promosso allo stadio successivo", score: "Punteggio sopra soglia", error: "Errore gestito",
@@ -1061,7 +1112,8 @@ async function boot3D() {
 
   const GEO = { Scout: new THREE.IcosahedronGeometry(1.25, 0), Filter: new THREE.OctahedronGeometry(1.35, 0),
     Analyst: new THREE.DodecahedronGeometry(1.25, 0), Executor: new THREE.TorusKnotGeometry(0.8, 0.26, 96, 12),
-    Risk: new THREE.CylinderGeometry(1.1, 1.1, 1.6, 6), Logger: new THREE.BoxGeometry(1.8, 1.8, 1.8) };
+    Risk: new THREE.CylinderGeometry(1.1, 1.1, 1.6, 6), Logger: new THREE.BoxGeometry(1.8, 1.8, 1.8),
+    Controller: new THREE.IcosahedronGeometry(1.35, 1) };
   const nodes = {}, pickables = [], CORE_Y = 2.6;
   function makeNode(name) {
     const color = new THREE.Color(agc(name)), g = new THREE.Group(); g.position.set(...(POS[name] || [0, 0, 18]));
@@ -1099,6 +1151,9 @@ async function boot3D() {
   addLink("Risk", "Executor", -1.6, 0.18, 0xfb923c);
   for (const n of PIPE) { const c = arc(P(n), P("Logger"), 6); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
     new THREE.LineDashedMaterial({ color: 0xf472b6, transparent: true, opacity: 0.18, dashSize: 0.6, gapSize: 0.5 })).computeLineDistances()); }
+  // the Controller watches every agent from above (dashed yellow lines)
+  for (const n of [...PIPE, "Logger"]) { const c = arc(P("Controller"), P(n), 2); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
+    new THREE.LineDashedMaterial({ color: 0xfacc15, transparent: true, opacity: 0.22, dashSize: 0.5, gapSize: 0.6 })).computeLineDistances()); }
 
   // operations: one block per event on a helix around its agent
   const MAX_PER = 64;
@@ -1148,6 +1203,8 @@ async function boot3D() {
     n.bub.classList.remove("hide"); n.bubT = 4.5; n.pulse = 1; }
   function animate(e) {
     if (!nodes[e.agent] || !visible) return; say(e);
+    if (e.agent === "Controller") { burst(P("Controller"), kc(e.kind));   // a check or a test round: sparks to every agent it watches
+      for (const n of [...PIPE, "Logger"]) fly(P("Controller"), P(n), "#facc15", { small: true, dur: 1.8, lift: 2 }); return; }
     const prior = e.mint ? [...EV].reverse().find((x) => x.mint === e.mint && x.ts < e.ts && x.agent !== e.agent) : null;
     const dropped = e.kind === "reject" || e.kind === "kill";
     let from = prior && nodes[prior.agent] ? P(prior.agent) : null;

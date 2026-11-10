@@ -116,6 +116,7 @@ class Dashboard:
             "next_recap": self.logger.next_recap, "banner": list(d.hub.banner[-3:]),
             "agents": agents, "feed": feed, "positions": positions, "trades": trades,
             "equity": eq, "funnel": funnel, "filter_evals": c["Filter"].get("evaluated", 0),
+            "controller": d.controller.summary() if d.controller is not None else None,
         }
 
     def state_json(self) -> bytes:
@@ -179,6 +180,10 @@ class Dashboard:
                 return await self._send(writer, 200, body, "application/json")
             if path == "/api/state":
                 return await self._send(writer, 200, self.state_json(), "application/json")
+            if path == "/api/controller":
+                ctl = self.desk.controller
+                text = (ctl.report or ctl.write_report()) if ctl is not None else "Controllore non attivo."
+                return await self._send(writer, 200, text.encode(), "text/plain; charset=utf-8")
             if path == "/api/recap":
                 return await self._send(writer, 200, self.recap_text(), "text/plain; charset=utf-8")
             return await self._send(writer, 404, b"not found", "text/plain")

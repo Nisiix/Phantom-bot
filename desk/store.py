@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS shadow (
   desk_label TEXT, desk_hit_s REAL, model_label TEXT, model_hit_s REAL, ret_end_pct REAL, max_pct REAL,
   min_pct REAL, sim_net_pct REAL, p_up REAL, p_down REAL, p_neither REAL);
 CREATE INDEX IF NOT EXISTS ix_shadow_end ON shadow(end_ts);
+CREATE TABLE IF NOT EXISTS controller_runs (
+  id INTEGER PRIMARY KEY, ts REAL, trials INTEGER, health TEXT, proposals TEXT, report TEXT);
 CREATE TABLE IF NOT EXISTS rug_ledger (wallet TEXT PRIMARY KEY, mint TEXT, reason TEXT, ts REAL);
 """
 
@@ -42,7 +44,7 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
-        for col in ("source", "features"):
+        for col in ("source", "features", "path"):
             try:
                 self.db.execute(f"ALTER TABLE shadow ADD COLUMN {col} TEXT")
             except sqlite3.OperationalError:

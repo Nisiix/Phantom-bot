@@ -19,6 +19,7 @@ Executor can prove a token passed *every* filter and scored ≥ 0.6 before it wi
 | **Executor** | Verifies both signatures + freshness, asks Risk, re-quotes live, rejects high price impact and **honeypots / hidden taxes** (buy→sell round-trip quote), then buys. Exits always processed first. | **max 8% of current balance per trade** |
 | **Risk** | Marks positions on executable value (after exit costs) every ~2s with real Jupiter sell quotes. | **hard stop −6%**, **trail only after +12%** (6% below peak), no averaging down, no revenge trades (never re-enter a loser, no global cooldown after a loss, 30 min buy pause after 3 losses, −30% daily halt in live only), emergency exit on liquidity pull |
 | **Logger** | Writes every decision with its reasons to SQLite + log files; sends the **full recap every 4 hours**. | — |
+| **Controller** (Controllore) | Watches the other agents (alive, making progress, hard rules respected on every position and trade) and every 10 minutes tests other settings offline on the tokens already followed for 60 minutes. Writes a report of **proposals**; never changes the config, never trades, no API calls. | read-only |
 
 The core rules are hard-coded ceilings in `desk/config.py`. `config.toml` can make them
 stricter, never looser (e.g. `max_position_pct = 20` is clamped back to 8 and flagged
@@ -61,6 +62,28 @@ shadow row and every real trade. `python run.py research` then adds a "By market
 "crash hours" (BTC 1h <= -2%, SOL 1h <= -3% or meme index 1h <= -5%) against normal hours, and outcomes
 per bucket of each regime value. Nothing blocks entries on it: an entry block is worth adding only if
 this report shows a clear difference over several weeks of data.
+
+## Controller — checks and configuration proposals (`python run.py controller`)
+The Controller (Controllore) runs inside the desk with two read-only jobs:
+
+* **Behaviour checks** every `health_seconds` (60): every agent is alive and making progress (Scout discovers,
+  Filter screens, Analyst scores, Executor answers, Risk polls open positions); the hard rules hold on real
+  positions and trades (max open positions, max 8% per trade at entry, score >= threshold for every buy,
+  nothing left open under the hard stop, trailing armed after +12%); stops that filled far beyond the stop,
+  a stalled 60-minute follow-up, queues piling up, HTTP 429s from an API, and a funnel where nothing passes
+  (with the most common reason). Problems appear in the feed once, and in the dashboard's Controllore section.
+* **Tests** every `interval_minutes` (10): the shadow tracker now also stores each scored token's price
+  path. On those real tokens the Controller replays other settings per agent: Scout sources, stricter Filter
+  thresholds, Analyst threshold and component weights (tokens re-scored offline), Risk stop / trailing /
+  time stop (on the price paths), and what the trades the Executor declined did afterwards. Each round tries
+  the current setting, one-change variants, new random combinations and the best of earlier rounds, split by
+  situation (market crash / normal, memecoin index up / flat / down, young / mature token, small / large pool).
+  The winner is chosen on the older 70% of the data and must also win on the newest 30% (paired comparison,
+  95% interval; 99% for single situations). Proposals never cross the hard limits.
+
+The report is in `data/reports/controller_<mode>_latest.md`, in the dashboard (section Controllore, also
+shown in the 3D view) and on demand with `python run.py controller`. Applying a proposal is your choice:
+edit `config.toml`, restart, paper-test first. All of it uses local data only, so it costs no API budget.
 
 ## Engine
 * Filter runs in two stages: a batched market screen, then a priority queue of deep checks

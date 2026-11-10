@@ -6,6 +6,7 @@ import signal
 import sys
 
 from .agents.analyst import Analyst
+from .agents.controller import Controller
 from .agents.executor import Executor
 from .agents.filter import Filter
 from .agents.logger import Logger
@@ -95,7 +96,8 @@ async def run_desk(cfg: Config, use_tui: bool = True) -> None:
     desk, broker = await build(cfg)
     risk = Risk(desk)
     logger = Logger(desk)
-    agents = [Scout(desk), Filter(desk), Analyst(desk), Executor(desk, broker, risk), risk, logger]
+    agents = [Scout(desk), Filter(desk), Analyst(desk), Executor(desk, broker, risk), risk, logger,
+              Controller(desk, risk)]
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

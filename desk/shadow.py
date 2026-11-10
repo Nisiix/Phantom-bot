@@ -56,6 +56,7 @@ class Shadow:
     sim_peak: float = 0.0     # peak net return of the simulated position
     sim_trail: bool = False
     sim_ret: float | None = None
+    path: list = field(default_factory=list)   # analyst stage: [(seconds since start, raw % move)] for the Controller
 
 
 def update_shadow(s: Shadow, price: float, t: float, stop: float, up: float, trail_dist: float) -> None:
@@ -159,6 +160,8 @@ class ShadowTracker:
                     if snap and snap.price_usd > 0:
                         update_shadow(s, snap.price_usd, t, r.hard_stop_pct, r.trail_activate_pct,
                                       r.trail_distance_pct)
+                        if s.stage == "analyst":   # the price path lets the Controller replay other exit rules
+                            s.path.append((int(t - s.start), round(s.last, 2)))
                     if t - s.start >= self.horizon:
                         finalize_shadow(s)
                         self.active.pop(key, None)
@@ -180,6 +183,7 @@ class ShadowTracker:
             "ret_end_pct": s.last, "max_pct": s.max_ret, "min_pct": s.min_ret, "sim_net_pct": s.sim_ret,
             "p_up": s.p.get("up"), "p_down": s.p.get("down"), "p_neither": s.p.get("neither"),
             "features": json.dumps(s.features, default=str) if s.features else None,
+            "path": json.dumps(s.path, separators=(",", ":")) if s.path else None,
         }
         self.desk.store.add_shadow(row)
         # Analyst-scored, not actually traded -> a learning sample for QUANT (the real trade

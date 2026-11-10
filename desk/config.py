@@ -130,6 +130,17 @@ class GmgnCfg:
 
 
 @dataclass
+class ControllerCfg:
+    enabled: bool = True
+    interval_minutes: float = 10        # a new round of tests (offline, on the desk's own data) every N minutes
+    health_seconds: float = 60          # behaviour checks on the other agents every N seconds
+    random_variants: int = 24           # new random parameter combinations tried per agent per round
+    min_rows: int = 30                  # fewest tokens a situation needs before it is judged
+    holdout_pct: float = 30.0           # newest share of the data kept aside to verify the winner
+    lookback_days: float = 14           # only data from the last N days
+
+
+@dataclass
 class DashboardCfg:
     enabled: bool = True
     host: str = "127.0.0.1"          # localhost only; Docker sets DASHBOARD_HOST=0.0.0.0 inside the container
@@ -175,6 +186,7 @@ class Config:
     quant: QuantCfg = field(default_factory=QuantCfg)
     gmgn: GmgnCfg = field(default_factory=GmgnCfg)
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
+    controller: ControllerCfg = field(default_factory=ControllerCfg)
     live_gate: LiveGateCfg = field(default_factory=LiveGateCfg)
     secrets: Secrets = field(default_factory=Secrets)
     warnings: list[str] = field(default_factory=list)
@@ -253,6 +265,12 @@ def enforce_hard_limits(cfg: Config) -> None:
     clamp(e, "exit_slippage_ladder_bps",
           lambda v: isinstance(v, list) and 0 < len(v) <= 6 and all(isinstance(b, int) and 0 < b <= 5000 for b in v),
           [800, 1500, 3000], "exit slippage ladder must be 1-6 values of 1-5000 bps")
+    c = cfg.controller
+    clamp(c, "interval_minutes", lambda v: 1 <= v <= 24 * 60, 10.0, "controller interval must be 1-1440 min")
+    clamp(c, "health_seconds", lambda v: 10 <= v <= 3600, 60.0, "controller health checks every 10-3600 s")
+    clamp(c, "random_variants", lambda v: 0 <= v <= 200, 24, "controller random variants must be 0-200")
+    clamp(c, "min_rows", lambda v: 10 <= v <= 5000, 30, "controller min_rows must be 10-5000")
+    clamp(c, "holdout_pct", lambda v: 10 <= v <= 50, 30.0, "controller holdout must be 10-50%")
     if cfg.mode not in ("paper", "live"):
         w.append(f"config: mode {cfg.mode!r} invalid, using 'paper'")
         cfg.mode = "paper"
@@ -282,7 +300,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "dashboard", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "dashboard", "controller", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()

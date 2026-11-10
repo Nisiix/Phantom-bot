@@ -7,6 +7,7 @@
   python run.py gate            show whether the paper record unlocks live trading
   python run.py wallet          check the wallet key in .env (shows address + balance, never the key)
   python run.py research        which signals separated winners from losers (from the 60-min shadow data)
+  python run.py controller      Controller report now: tests other settings on the logged data (proposals only)
 """
 from __future__ import annotations
 
@@ -58,6 +59,27 @@ async def check_wallet(cfg) -> int:
     return 0
 
 
+def controller_report(cfg) -> str:
+    """Offline Controller round on the saved data (the behaviour checks need the running bot)."""
+    from desk.controller import build_report, reason_category, run_experiments
+    store = Store(cfg.data_dir / f"{cfg.mode}.db")
+    since = time.time() - cfg.controller.lookback_days * 86400
+    cols = "start_ts,mint,score,decision,sim_net_pct,cost_pct,features,path"
+    an = store.q(f"SELECT {cols} FROM shadow WHERE stage='analyst' AND features IS NOT NULL AND start_ts>=? "
+                 "ORDER BY start_ts DESC LIMIT 6000", (since,))
+    fi = store.q(f"SELECT {cols} FROM shadow WHERE stage='filter' AND features IS NOT NULL AND start_ts>=? "
+                 "ORDER BY start_ts DESC LIMIT 20000", (since,))
+    rej: dict = {}
+    for r in store.q("SELECT mint,reason FROM decisions WHERE stage='executor' AND outcome IN ('reject','refuse') "
+                     "AND ts>=?", (since,)):
+        rej.setdefault(r["mint"], []).append(reason_category(r["reason"]))
+    st = store.kv_get("controller_state", {}) or {}
+    exp = run_experiments(cfg, an, fi, rej, st.get("best", {}))
+    health = [{"level": "info", "agent": "Controller", "check": "verifiche sugli agenti",
+               "detail": "disponibili solo con il bot in esecuzione (dashboard, sezione Controllore)"}]
+    return build_report(health, exp, cfg, st.get("trials", 0) + exp["tried"], st.get("rounds", 0) + 1)
+
+
 def main() -> int:
     # Windows consoles/pipes may default to cp1252: never crash on token names or chart glyphs.
     for stream in (sys.stdout, sys.stderr):
@@ -66,7 +88,7 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description="Phantom Desk")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller"])
     ap.add_argument("--mode", choices=["paper", "live"], help="override mode from config.toml")
     ap.add_argument("--headless", action="store_true", help="plain log output instead of the live terminal")
     ap.add_argument("--config", help="path to config.toml")
@@ -89,6 +111,10 @@ def main() -> int:
         since = time.time() - args.days * 86400 if args.days else 0
         print(build_research(store.shadow_research_rows(args.stage, since), args.stage,
                              trades=[t for t in store.all_trades() if (t["entry_ts"] or 0) >= since]))
+        return 0
+
+    if args.command == "controller":
+        print(controller_report(cfg))
         return 0
 
     if args.command == "wallet":

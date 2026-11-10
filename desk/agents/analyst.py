@@ -49,7 +49,10 @@ def _band(x: float, lo0: float, lo1: float, hi1: float, hi0: float) -> float:
     return 1.0
 
 
-def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[float, dict, list[str]]:
+def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None,
+                info: dict | None = None) -> tuple[float, dict, list[str]]:
+    """info (optional): filled with the pre-cap score, the cap applied and whether a website counted, so the
+    Controller can re-score the same token offline with different weights."""
     from ..config import AnalystCfg
     cfg = cfg or AnalystCfg()
     b: dict[str, float] = {}
@@ -162,6 +165,7 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[floa
     if not has_site:
         weights["website"] *= 0.3
     score = sum(weights[k] * b[k] for k in weights) / sum(weights.values())
+    raw_score, cap_score = score, None
 
     # Hard caps — any one of these makes the token untradeable regardless of the rest.
     caps = []
@@ -188,7 +192,10 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None) -> tuple[floa
     for reason, cap in caps:
         if score > cap:
             score = cap
+            cap_score = cap
             why.append(f"CAP {cap:.2f}: {reason}")
+    if info is not None:
+        info.update(raw_score=round(raw_score, 4), cap_score=cap_score, has_site=has_site)
     return round(max(0.0, min(1.0, score)), 4), {k: round(v, 3) for k, v in b.items()}, why
 
 
@@ -283,7 +290,8 @@ class Analyst(Agent):
                 web = {"url": pick_website(m.websites), "score": 0.2, "legit": 0.2, "tasty": 0.1,
                        "flags": ["website check timed out"], "notes": []}
 
-        score, breakdown, why = score_token(m, rep.rug, web, self.cfg.analyst)
+        info: dict = {}
+        score, breakdown, why = score_token(m, rep.rug, web, self.cfg.analyst, info)
         min_score = self.cfg.analyst.min_score
         trade = score >= min_score
         issued = now()
@@ -295,7 +303,7 @@ class Analyst(Agent):
                                    "; ".join(why[:3]), m.price_usd, m.liquidity_usd, score=score,
                                    source=rep.source,
                                    features={**market_features(m, rep.source), **rug_features(rep.rug),
-                                             **{f"c_{k}": v for k, v in breakdown.items()}, "score": score})
+                                             **{f"c_{k}": v for k, v in breakdown.items()}, "score": score, **info})
         prev = self._last_logged.get(rep.mint)
         quiet = (not trade and prev is not None and abs(prev[0] - score) < 0.03 and issued - prev[1] < 600)
         if quiet:
