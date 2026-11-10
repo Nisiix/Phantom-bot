@@ -247,3 +247,20 @@ def test_outlier_capped_and_weights_configurable(tmp_path):
     bad = load_config(p)
     assert bad.analyst.weights == {} and any("weights" in w for w in bad.warnings)
     assert within_hard_limits(cfg, ["[analyst] weights = { holders = 0.30 }", "[analyst] min_score = 0.65"])
+
+
+def test_reset_never_drops_learning_memory(tmp_path):
+    from run import reset_paper
+    from desk.agents.risk import Risk
+    cfg = Config()
+    cfg.data_dir = tmp_path
+    desk = make_desk(tmp_path)
+    desk.store.add_trade({"mint": "LOSER", "symbol": "T", "mode": "paper", "entry_ts": 1, "exit_ts": 2,
+                          "cost_sol": 0.5, "proceeds_sol": 0.4, "pnl_sol": -0.1, "pnl_pct": -20.0,
+                          "peak_pnl_pct": 0.0, "score": 0.7, "entry_reason": "", "exit_reason": ""})
+    desk.store.kv_set("risk_state", {"history": {"OTHER": {"ts": 1, "pnl_sol": -0.2}}, "consecutive_losses": 2})
+    reset_paper(cfg)
+    desk2 = make_desk(tmp_path)
+    risk = Risk(desk2)
+    assert risk.consecutive_losses == 0
+    assert not risk.approve_entry("LOSER")[0] and not risk.approve_entry("OTHER")[0]

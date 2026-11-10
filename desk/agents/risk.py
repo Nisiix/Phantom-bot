@@ -60,6 +60,9 @@ class Risk(Agent):
         self.day_start_equity: float = s.get("day_start_equity", 0.0)
         self.day_halted: bool = s.get("day_halted", False) and self.cfg.is_live
         self.history: dict[str, dict] = s.get("history", {})   # mint -> {ts, pnl_sol}
+        # Trades archived by a paper reset are still part of the per-token memory (no revenge trades).
+        for t in desk.store.archived_trades() if hasattr(desk.store, "archived_trades") else []:
+            self.history.setdefault(t["mint"], {"ts": t["exit_ts"] or 0.0, "pnl_sol": t["pnl_sol"] or 0.0})
         self.exiting: dict[str, float] = {}
         self.trail_announced: set[str] = set()
         self._last_lag_warn = 0.0

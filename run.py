@@ -85,6 +85,8 @@ def controller_report(cfg) -> str:
 def reset_paper(cfg) -> str:
     """Paper account back to paper_starting_balance_sol with zeroed profit statistics.
 
+    NEVER removes learning data (the bot's historical memory): shadow follow-ups and price paths, QUANT outcomes,
+    decisions/events, rug ledger, Risk's per-token memory, Controller state, market history.
     Removes paper trades, open paper positions, the equity curve and the balance/streak state from the account
     (trades and equity are moved to archive tables: the live gate keeps counting them, so a reset never
     restarts or shortcuts the paper record needed for live). Keeps what the desk
@@ -102,7 +104,11 @@ def reset_paper(cfg) -> str:
     n_trades = store.q("SELECT COUNT(*) AS n FROM trades")[0]["n"]
     n_pos = store.q("SELECT COUNT(*) AS n FROM positions")[0]["n"]
     store.archive_and_clear_trades(time.time())     # archived trades keep counting for the live gate
-    for key in ("cash_sol", "starting_cash", "realized_sol", "risk_state", "last_recap_ts"):
+    # The per-token memory of Risk (tokens we lost on are never bought again) is learning, not a profit stat:
+    # keep it, reset only the losing streak and the daily counters.
+    risk = store.kv_get("risk_state", {}) or {}
+    store.kv_set("risk_state", {"history": risk.get("history", {})})
+    for key in ("cash_sol", "starting_cash", "realized_sol", "last_recap_ts"):
         store.db.execute("DELETE FROM kv WHERE key=?", (key,))
     store.kv_set("starting_cash", cfg.paper_starting_balance_sol)
     store.kv_set("cash_sol", cfg.paper_starting_balance_sol)
@@ -143,7 +149,8 @@ def main() -> int:
         store = Store(cfg.data_dir / f"{cfg.mode}.db")
         since = time.time() - args.days * 86400 if args.days else 0
         print(build_research(store.shadow_research_rows(args.stage, since), args.stage,
-                             trades=[t for t in store.all_trades() if (t["entry_ts"] or 0) >= since]))
+                             trades=[t for t in store.archived_trades() + store.all_trades()
+                                     if (t["entry_ts"] or 0) >= since]))
         return 0
 
     if args.command == "reset-paper":
