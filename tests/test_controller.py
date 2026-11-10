@@ -166,3 +166,23 @@ def test_entry_size_from_reason():
     from desk.agents.controller import entry_size_pct
     assert abs(entry_size_pct("score 0.7 | size 0.8000 SOL = 8.0% of 10.000 | impact 1%") - 8.0) < 1e-9
     assert entry_size_pct("test") is None
+
+
+def test_wider_stops_are_measured_but_never_proposed():
+    """Volatile young tokens that dip -8% then run: a wider stop wins, but it is shown as a measure only."""
+    from desk.controller import WIDE_STOPS
+    an, fi = _rows(300, seed=3)
+    for r in an:                                   # every path dips to -8% first, winners then run to +40%
+        f = json.loads(r["features"])
+        win = f["c_buy_pressure"] > 0.6
+        path = [(20, -4.0), (40, -8.0), (60, -5.0)] + [(80 + 20 * k, (k * 3.0 if win else -12.0 - k)) for k in range(14)]
+        r["path"] = json.dumps(path)
+    cfg = Config()
+    exp = run_experiments(cfg, an, fi, {}, {}, seed=5)
+    wide = [r for r in exp["results"] if r["agent"] == WIDE_STOPS and "variant" in r]
+    assert wide and any(r["variant"]["hard_stop_pct"] < -6 and r["verdict"] in ("solida", "promettente") for r in wide)
+    assert not any(p["agent"] == WIDE_STOPS for p in proposals(exp, cfg))
+    for p in proposals(exp, cfg):
+        assert within_hard_limits(cfg, p["changes"])
+    text = build_report(health_checks(_snapshot(time.time())), exp, cfg, exp["tried"], 1)
+    assert "Stop più larghi del -6% (solo misura" in text and "hard_stop_pct = -" in text

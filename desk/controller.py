@@ -17,6 +17,8 @@ it writes a report of PROPOSALS that the user can accept by editing config.toml.
      Filter    stricter liquidity / volume / top-10 thresholds (never looser than the hard limits)
      Analyst   score threshold and component weights (tokens re-scored offline)
      Risk      hard stop (only tighter), trailing start and distance, time stop, replayed on price paths
+               + stops wider than -6% (to -30%) with wider trailing / time exits: MEASURE ONLY, shown in their
+                 own report section, never proposed (the -6% stop is a hard limit, changing it is the user's call)
      Executor  what the trades it declined (max positions, price impact, round-trip, EV) did afterwards
    Each round tries the current setting, one-change-at-a-time variants and new random combinations, plus
    the best ones from earlier rounds. Results are split by situation (market crash / normal, memecoin
@@ -50,6 +52,7 @@ SITUATIONS = {
     "small_pool": "pool piccole (liquidità < $50k)",
     "big_pool": "pool grandi (liquidità >= $50k)",
 }
+WIDE_STOPS = "Risk (stop larghi)"     # measure-only experiment: stops wider than the -6% hard limit
 AGENT_NAMES = {"Scout": "Scout", "Filter": "Filter", "Analyst": "Analyst", "Risk": "Risk", "Executor": "Executor"}
 BASE_WEIGHTS = {
     "liquidity": 0.14, "turnover": 0.10, "buy_pressure": 0.16, "momentum": 0.12,
@@ -394,6 +397,26 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         return [f"[risk] {k} = {v[k]:g}" for k in cur_r if abs(v[k] - cur_r[k]) > 1e-9]
     spaces.append(Space("Risk", rows, cur_r, r_ret, grid, r_sample, r_desc, note + ", con percorso di prezzo"))
 
+    # ── Risk, wider stops: MEASURE ONLY. The -6% stop is a hard limit, so these never become proposals
+    # (within_hard_limits drops them); the report shows them apart, to see whether young volatile tokens would
+    # do better with room to move, wider trailing or a time exit. Changing the rule stays the user's call.
+    wide = [-8.0, -10.0, -12.0, -15.0, -20.0, -25.0, -30.0]
+    w_trail = [12.0, 15.0, 20.0, 30.0, 40.0, 60.0]
+    w_dists = [6.0, 8.0, 10.0, 15.0, 20.0]
+    w_holds = [0.0, 10.0, 20.0, 30.0, 45.0]
+    w_grid = [{**cur_r, "hard_stop_pct": st} for st in wide]
+    for st in (-10.0, -15.0, -20.0, -30.0):
+        for on, dist in ((20.0, 10.0), (30.0, 15.0), (40.0, 20.0)):
+            w_grid.append({**cur_r, "hard_stop_pct": st, "trail_activate_pct": on, "trail_distance_pct": dist})
+        for hold in (15.0, 30.0):
+            w_grid.append({**cur_r, "hard_stop_pct": st, "max_hold_minutes": hold})
+
+    def w_sample(rng):
+        return {"hard_stop_pct": rng.choice(wide), "trail_activate_pct": rng.choice(w_trail),
+                "trail_distance_pct": rng.choice(w_dists), "max_hold_minutes": rng.choice(w_holds)}
+    spaces.append(Space(WIDE_STOPS, rows, cur_r, r_ret, w_grid, w_sample, r_desc,
+                        note + ", con percorso di prezzo; stop più larghi del limite rigido: solo misura"))
+
     # ── Filter (only stricter than now: looser would let unchecked tokens through) ──
     passed = [x for x in filter_rows if x["decision"] in ("approve", "pass")]
     young_min = a.young_age_hours * 60
@@ -608,7 +631,7 @@ def proposals(exp: dict, cfg) -> list[dict]:
     proposal (shown with the best-measured situation and the list of the others)."""
     cands = []
     for r in exp.get("results", []):
-        if r.get("verdict") not in ("solida", "promettente") or not r.get("changes"):
+        if r.get("verdict") not in ("solida", "promettente") or not r.get("changes") or r["agent"] == WIDE_STOPS:
             continue
         if not within_hard_limits(cfg, r["changes"]):
             continue
@@ -624,6 +647,31 @@ def proposals(exp: dict, cfg) -> list[dict]:
         else:
             groups[k] = {**p, "also": []}
     return list(groups.values())
+
+
+def wide_stop_section(exp: dict) -> list[str]:
+    """Stops wider than -6% (with wider trailing / time exits): what they would have done, never a proposal."""
+    rs = [r for r in exp.get("results", []) if r["agent"] == WIDE_STOPS]
+    out = ["## Stop più larghi del -6% (solo misura, non proposte)",
+           "Lo stop a -6% è un limite rigido: queste varianti non vengono mai proposte. Servono a capire se i "
+           "token giovani e volatili renderebbero di più lasciando più spazio al prezzo. Se una risulta SOLIDA "
+           "per più cicli, la scelta di cambiare la regola resta tua."]
+    shown = 0
+    for sit in ("young", "all", "small_pool", "big_pool", "old"):
+        r = next((x for x in rs if x["situation"] == sit), None)
+        if r is None:
+            continue
+        head = f"- {SITUATIONS[sit]} ({r['n']} token)"
+        if "variant" not in r:
+            out.append(f"{head}: {r['verdict']}")
+        else:
+            out.append(f"{head}: attuale {r['current_avg']:+.2f}% per token | migliore: "
+                       f"{'; '.join(r['changes']) or 'nessuna modifica'} -> {r['valid']['mean']:+.2f} "
+                       f"[{r['valid']['lo']:+.2f}, {r['valid']['hi']:+.2f}] in verifica — {r['verdict'].upper()}")
+        shown += 1
+    if not shown:
+        out.append("- dati insufficienti per ora")
+    return out + [""]
 
 
 def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, rounds: int) -> str:
@@ -658,8 +706,9 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
         lines.append(f"    guadagno stimato {p['gain']:+.2f} punti % per token valutato, intervallo 95% "
                      f"[{p['lo']:+.2f}, {p['hi']:+.2f}] su {p['valid_n']} token di verifica — {p['verdict'].upper()}")
     lines.append("")
+    lines += wide_stop_section(exp)
     lines.append("## Dettaglio per agente e situazione")
-    for agent in ("Scout", "Filter", "Analyst", "Executor", "Risk"):
+    for agent in ("Scout", "Filter", "Analyst", "Executor", "Risk", WIDE_STOPS):
         rs = [r for r in exp["results"] if r["agent"] == agent]
         if not rs:
             continue

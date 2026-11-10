@@ -79,7 +79,9 @@ The Controller (Controllore) runs inside the desk with two read-only jobs:
   the current setting, one-change variants, new random combinations and the best of earlier rounds, split by
   situation (market crash / normal, memecoin index up / flat / down, young / mature token, small / large pool).
   The winner is chosen on the older 70% of the data and must also win on the newest 30% (paired comparison,
-  95% interval; 99% for single situations). Proposals never cross the hard limits.
+  95% interval; 99% for single situations). Proposals never cross the hard limits. Stops wider than -6%
+  (down to -30%, with wider trailing and time exits) are also replayed, as a measure only: they get their own
+  report section ("Stop più larghi del -6%") and are never proposed, so changing the rule stays your call.
 
 The report is in `data/reports/controller_<mode>_latest.md`, in the dashboard (section Controllore, also
 shown in the 3D view) and on demand with `python run.py controller`. Applying a proposal is your choice:
