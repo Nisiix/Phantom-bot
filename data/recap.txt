@@ -1,0 +1,133 @@
+# PHANTOM DESK — PAPER recap
+Window: 2026-11-16 19:26 UTC → 2026-11-16 23:26 UTC
+
+## Performance
+- Equity: 11.4179 → 11.5222 SOL  (+0.91%)
+- Window P&L (realized): +0.9318 SOL ($+66.68)
+- Cash: 9.9688 SOL | open positions: 5 (value 1.5534 SOL)
+- Since inception: -1.7398 SOL ($-124.50) on 13.2620 SOL start (-13.12%)
+- Max drawdown: window -5.79% | all-time -23.76%
+- Equity curve (window): ▃▂▂▂▂▂▁▁▁▁▁▁▃▂▁▁▂▅█▇▆▇▆▆▆▆▆▅▅▅▅▅▅▅▅▅▅▄▅▅▄▄▄▄▄▄▃▃
+
+## Trades this window
+- 2 closed | 2W / 0L | win rate 100% | avg win +60.44% | avg loss +0.00% | profit factor ∞
+### BELLA +40.99% (+0.2988 SOL) — held 5 min
+- mint `Csu5jtHmWJFuYXP2cB3AEUwia6tYrDffdUknLuxqpump`
+- WHY ENTERED: score 0.70 | liquidity $15,569; 1h turnover 13.5x liquidity; buys 61% (1h) / 54% (5m), 6904 txns/h; price -0.1% 5m / -77.3% 1h / +29.9% 6h; top10 17.5%, 4183 holders, insider clusters 4% | timing: ribasso -11.3% dal prezzo di approvazione | filters: volume_1h=210374, liquidity=15443, graduation_wait=128.8, token_age=2.1, market_cap=40252, min_market_cap=40252, mint_revoked=revoked, freeze_revoked=revoked, lp_locked=100.0, top10_holders=17.49, dev_rug_link=clean, funder_rug_link=clean, token2022_safe=ok, rugcheck_danger=none, dev_sold=0.0 | size 0.7289 SOL = 8.0% of 9.112 | impact 0.00% | round-trip 2.17% | pool pumpswap E6VDN9… vs SOL ($16,459); route SOL -> BELLA (Pump.fun Amm E6VDN9…) | EV -0.62% (P↑66% P↓19% P→15%, cost 2.2%, n=20 solo misura) | exec paper: checks 4854 ms + swap 0 ms
+- WHY EXITED: PROFIT_LOCK: profit lock: value back to +41.85% from peak +63.9% (keeps +44.0% net + 1.0% sale costs) (peak +63.9%)
+### Trader +79.89% (+0.6330 SOL) — held 46 min
+- mint `7TnXXR1ytJ9PZDxgSA8VwbyKmEWZmiA2YAn55YyVpump`
+- WHY ENTERED: score 0.74 | liquidity $36,098; 1h turnover 14.9x liquidity; buys 57% (1h) / 60% (5m), 11193 txns/h; price +5.7% 5m / -44.7% 1h / +490.0% 6h; top10 14.3%, 4180 holders, insider clusters 5% | timing: ribasso -5.9% dal prezzo di approvazione | filters: volume_1h=473374, liquidity=30867, graduation_wait=81.0, token_age=1.4, market_cap=160103, min_market_cap=160103, mint_revoked=revoked, freeze_revoked=revoked, lp_locked=100.0, top10_holders=14.27, dev_rug_link=clean, funder_rug_link=clean, token2022_safe=ok, rugcheck_danger=none, dev_sold=0.0 | size 0.7923 SOL = 8.0% of 9.904 | impact 0.36% | round-trip 1.74% | pool pumpswap AAzZ8n… vs SOL ($29,904); route SOL -> Trader (Pump.fun Amm AAzZ8n…) | EV -0.19% (P↑66% P↓19% P→15%, cost 1.7%, n=20 solo misura) | exec paper: checks 4848 ms + swap 0 ms
+- WHY EXITED: PROFIT_LOCK: profit lock: value back to +80.99% from peak +122.9% (keeps +85.3% net + 1.0% sale costs) (peak +122.9%)
+
+## Open positions
+- Sakura: P&L -77.48% (peak +7.5%, trail not armed) — score 0.76 | liquidity $40,333; 1h turnover 1.1x liquidity; buys 51% (1h) / 62% (5m), 984 txns/h; price +13.1% 5m / +18.8% 1h / -27.4% 6h; top10 16.0%, 10142 ho
+- Angel: P&L -69.64% (peak +10.7%, trail not armed) — score 0.77 | liquidity $27,746; 1h turnover 14.4x liquidity; buys 58% (1h) / 56% (5m), 9151 txns/h; price +49.4% 5m / +12.7% 1h / +342.0% 6h; top10 16.9%, 2317 
+- JENSEN: P&L -98.61% (peak +3.6%, trail not armed) — score 0.82 | liquidity $45,099; 1h turnover 1.1x liquidity; buys 69% (1h) / 69% (5m), 7885 txns/h; price -2.6% 5m / -17.0% 1h / -41.0% 6h; top10 18.3%, 3275 hol
+- WIGGLES: P&L -80.04% (peak +19.4%, trail not armed) — score 0.77 | liquidity $44,963; 1h turnover 1.8x liquidity; buys 60% (1h) / 63% (5m), 2073 txns/h; price -0.4% 5m / +17.5% 1h / -12.8% 6h; top10 18.2%, 5321 hol
+- BLACKOUT: P&L -4.39% (peak -1.2%, trail not armed) — score 0.73 | liquidity $8,938; 1h turnover 7.7x liquidity; buys 61% (1h) / 81% (5m), 2114 txns/h; price +33.0% 5m / -31.6% 1h / -31.6% 6h; top10 14.8%, 412 hold
+
+## Pipeline funnel (logged decisions)
+- Filter: 88 passed, 9454 rejected, 55 killed permanently
+- Analyst: 41 scored ≥ threshold, 34 below
+- Executor: 3 buys, 2 sells, 25 declined at execution
+- Top rejection reasons: liquidity ×6229, volume_1h ×5662, min_market_cap ×5604, market ×2776, rugged_name ×1393, identity not checked yet ×1357, quote_currency ×1024, venue ×998
+
+## Latest Analyst verdicts
+- HOLDMAS: score 0.45 < 0.65 -> no trade | liquidity $13,390; 1h turnover 0.6x liquidity; buys 6% (1h) / 0% (5m), 4786 txns/h; price -1.2% 5m / +1.4% 1h / +38.5% 6h; top10 15.6%, 481 holders, insider clusters 0%; website 0.78 (legi
+- CHOP: score 0.79 >= 0.65 -> BUY SIGNAL | liquidity $33,996; 1h turnover 2.6x liquidity; buys 76% (1h) / 73% (5m), 8954 txns/h; price -4.2% 5m / +7.6% 1h / +562.0% 6h; top10 3.2%, 2560 holders, insider clusters 0%; website 0.91
+- CHOP: score 0.80 >= 0.65 -> BUY SIGNAL | liquidity $34,353; 1h turnover 2.4x liquidity; buys 75% (1h) / 74% (5m), 8893 txns/h; price -0.4% 5m / +13.5% 1h / +576.0% 6h; top10 3.2%, 2523 holders, insider clusters 0%; website 0.9
+- CHOP: score 0.80 >= 0.65 -> BUY SIGNAL | liquidity $34,565; 1h turnover 2.4x liquidity; buys 75% (1h) / 75% (5m), 8904 txns/h; price +6.0% 5m / +21.9% 1h / +582.0% 6h; top10 3.2%, 2523 holders, insider clusters 0%; website 0.9
+- CHOP: score 0.79 >= 0.65 -> BUY SIGNAL | liquidity $34,030; 1h turnover 2.4x liquidity; buys 75% (1h) / 76% (5m), 8936 txns/h; price -2.4% 5m / +22.5% 1h / +561.0% 6h; top10 3.1%, 2516 holders, insider clusters 0%; website 0.9
+- CHOP: score 0.79 >= 0.65 -> BUY SIGNAL | liquidity $35,577; 1h turnover 2.3x liquidity; buys 75% (1h) / 76% (5m), 8969 txns/h; price +5.2% 5m / +24.9% 1h / +621.0% 6h; top10 3.1%, 2516 holders, insider clusters 0%; website 0.9
+- BLACKOUT: score 0.73 >= 0.65 -> BUY SIGNAL | liquidity $8,938; 1h turnover 7.7x liquidity; buys 61% (1h) / 81% (5m), 2114 txns/h; price +33.0% 5m / -31.6% 1h / -31.6% 6h; top10 14.8%, 412 holders, insider clusters 0%; website 0.82
+- CHOP: score 0.80 >= 0.65 -> BUY SIGNAL | liquidity $37,076; 1h turnover 2.3x liquidity; buys 75% (1h) / 76% (5m), 9051 txns/h; price +12.9% 5m / +26.6% 1h / +680.0% 6h; top10 3.0%, 2564 holders, insider clusters 0%; website 0.
+- CHOP: score 0.80 >= 0.65 -> BUY SIGNAL | liquidity $35,375; 1h turnover 2.4x liquidity; buys 74% (1h) / 71% (5m), 8932 txns/h; price +0.7% 5m / +14.3% 1h / +612.0% 6h; top10 3.0%, 2564 holders, insider clusters 0%; website 0.9
+- HOLDMAS: score 0.44 < 0.65 -> no trade | liquidity $12,584; 1h turnover 0.6x liquidity; buys 6% (1h) / 1% (5m), 4675 txns/h; dumping now (-8.3% 5m); price -8.3% 5m / -6.0% 1h / +23.3% 6h; top10 15.7%, 477 holders, insider cluster
+- CHOP: score 0.81 >= 0.65 -> BUY SIGNAL | liquidity $36,141; 1h turnover 2.4x liquidity; buys 74% (1h) / 69% (5m), 8971 txns/h; price +4.6% 5m / +15.5% 1h / +642.0% 6h; top10 3.0%, 2564 holders, insider clusters 0%; website 0.9
+- CHOP: score 0.81 >= 0.65 -> BUY SIGNAL | liquidity $36,873; 1h turnover 2.4x liquidity; buys 74% (1h) / 71% (5m), 8991 txns/h; price +7.8% 5m / +28.0% 1h / +673.0% 6h; top10 2.8%, 2610 holders, insider clusters 0%; website 0.9
+
+## Declined at execution
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+- CHOP: a smart wallet sold this token while we waited to buy it: dropped for 6 h unless other smart wallets buy it
+
+## Risk & incident log
+- 21:31 UTC [Filter] GROYPERS KILLED: graduation_wait: graduated 2 min ago < 30 min wait (instant-rug window) | early release no: only 2 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 21:36 UTC [Filter] GAVIN KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window) | early release no: only 1 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 21:47 UTC [Filter] 007 KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window) | early release no: only 4 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 21:52 UTC [Filter] mert KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window) | early release no: only 1 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 22:03 UTC [Filter] JENSEN KILLED: graduation_wait: graduated 8 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 28.8% (pools excluded); rugged_name: same name as rugged JENSEN (6vvMqv…)
+- 22:07 UTC [Filter] SIX KILLED: graduation_wait: graduated 2 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 22.2% (pools excluded); funder_rug_link: funder D89hHJ also funded 7KwZRv
+- 22:07 UTC [Filter] KRW1 KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window) | early release no: only 3 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 22:08 UTC [Filter] BEAST KILLED: graduation_wait: graduated 5 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 23.4% (pools excluded); rugged_name: same name as rugged MrBeast (7BQw9Y…
+- 22:21 UTC [Filter] WASTED KILLED: graduation_wait: graduated 11 min ago < 30 min wait (instant-rug window); funder_rug_link: funder 2UPzAi in rug ledger (funded a rugging dev: liquidity collapsed 11,587 -) 
+- 22:23 UTC [Filter] crime KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window) | early release no: only 3 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 22:26 UTC [Filter] JENSEN KILLED: graduation_wait: graduated 3 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 35.2% (pools excluded); rugged_name: same name as rugged JENSEN (6vvMqv…)
+- 22:29 UTC [Filter] BABYMIHAO KILLED: graduation_wait: graduated 2 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 61.0% (pools excluded); funder_rug_link: funder 2UPzAi in rug ledger (fun
+- 22:45 UTC [Executor] CHOP REFUSED unverified order: Filter clearance expired (> 240s old)
+- 22:58 UTC [Filter] SWITAR KILLED: graduation_wait: graduated 4 min ago < 30 min wait (instant-rug window); lp_locked: 0.0% locked [pump_fun_amm:0%]; dev_sold: DANGEROUS: creator 6ZBYEj + 0 linked wallets ho
+- 22:58 UTC [Filter] GTA6 KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 39.1% (pools excluded); dev_rug_link: Creator history of rugged tokens; r
+- 22:58 UTC [Filter] Hedge KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window) | early release no: only 1 min since graduation, 1 readings over 0 min, holders not growing; dev_sol
+- 23:00 UTC [Filter] GTA6 KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); dev_rug_link: Creator history of rugged tokens; dev in rug ledger (Creator history of rugged tokens
+- 23:01 UTC [Filter] Bull KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); dev_rug_link: Creator history of rugged tokens; dev in rug ledger (Creator history of rugged tokens
+- 23:02 UTC [Filter] LUCIA KILLED: graduation_wait: graduated 2 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 53.7% (pools excluded); rugged_name: same name as rugged LUCI (HR7aW9…); 
+- 23:05 UTC [Filter] CLAVICULAR KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); dev_rug_link: Creator history of rugged tokens; dev in rug ledger (Creator history of rugged tokens
+- 23:06 UTC [Filter] FIONA KILLED: graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 41.6% (pools excluded); dev_sold: DANGEROUS: creator FjmJJQ + 0 linked wa
+- 23:07 UTC [Filter] FORM KILLED: graduation_wait: graduated 6 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 22.2% (pools excluded); dev_sold: DANGEROUS: creator 9jqWNL + 0 linked wa
+- 23:08 UTC [Filter] LEOSTAR KILLED: graduation_wait: graduated 6 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 32.5% (pools excluded); rugged_name: same name as rugged LEONIDA (2uQw2g…
+- 23:13 UTC [Filter] GTA KILLED: graduation_wait: graduated 6 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 56.7% (pools excluded); rugged_name: same name as rugged GTA (8Secg5…); n
+- 23:25 UTC [Filter] MAIN KILLED: graduation_wait: graduated 4 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 62.3% (pools excluded); funder_rug_link: funder 2UPzAi in rug ledger (fun
+
+## QUANT — edge after costs (calibration)
+- Status: QUANT solo misura (n=22: calcola l'EV, non blocca) | signals evaluated 5, blocked for negative EV 0
+- Forecast quality (Brier, lower = better): model 0.742 vs base-rate 0.459 → model does NOT beat the naive base rate
+- Score bucket → observed outcome of 'profit stop armed (+30% net) first / -50% first / neither' on the real horizon (trades + tokens followed 24 h) | model now | avg net
+  - 0.00-0.50: n=2 (0 real) | ↑100% ↓0% →0% | model ↑47% ↓7% | +40.2%
+  - 0.50-0.60: n=2 (0 real) | ↑50% ↓50% →0% | model ↑41% ↓13% | -41.2%
+  - 0.60-0.65: n=1 (0 real) | ↑100% ↓0% →0% | model ↑44% ↓8% | -99.6%
+  - 0.65-0.70: n=5 (5 real) | ↑60% ↓40% →0% | model ↑58% ↓28% | -19.6%
+  - 0.70-0.80: n=14 (12 real) | ↑79% ↓14% →7% | model ↑70% ↓16% | +11.9%
+  - 0.80-1.00: n=3 (2 real) | ↑33% ↓67% →0% | model ↑50% ↓33% | -47.3%
+- Learned gross payoff per scenario: ↑ +31.1% | ↓ -88.7% | → -0.2%
+
+## Shadow tracking (60 min after every decision)
+- 451 tokens followed to the end of their 60-minute window
+  - grad45:gone_at_wait_end (n=188): desk +12 first 0%, -6 first 0% | model +60 first 0%, -30 first 0% | avg simulated desk trade +0.0%
+  - filter:reject (n=176): desk +12 first 32%, -6 first 56% | model +60 first 39%, -30 first 40% | avg simulated desk trade +0.1%
+  - grad45:buy_at_wait_end (n=61): desk +12 first 15%, -6 first 69% | model +60 first 23%, -30 first 49% | avg simulated desk trade -10.1%
+  - filter:kill (n=18): desk +12 first 17%, -6 first 83% | model +60 first 28%, -30 first 72% | avg simulated desk trade -12.0%
+  - analyst:reject_score (n=7): desk +12 first 29%, -6 first 71% | model +60 first 29%, -30 first 57% | avg simulated desk trade -17.0%
+  - analyst:approve (n=1): desk +12 first 0%, -6 first 100% | model +60 first 100%, -30 first 0% | avg simulated desk trade +51.7%
+- By discovery source (all evaluated tokens):
+  - pumpfun:migration (n=100): desk +12 first 14%, model +60 first 26%, -30 first 71%
+  - pumpswap:pool (n=75): desk +12 first 60%, model +60 first 60%, -30 first 17%
+  - dexscreener:profile (n=11): desk +12 first 0%, model +60 first 18%, -30 first 0%
+  - pumpfun:new (n=8): desk +12 first 0%, model +60 first 0%, -30 first 0%
+- Skipped tokens that hit +60% first (missed): 75 | hit -30% first (avoided): 88
+- Missed winners were rejected for: volume_1h ×51, graduation_wait ×19, quote_currency ×2, min_market_cap ×1, liquidity $27,558; 1h turnover 4.7x liqu ×1
+  - BAWSAQ: max +2081% / min -9% — volume_1h: $4,559/h < $5,000 (young token: 1 min old, $10,813 liquidity); graduation_wait: graduated 1 min ago
+  - GORP: max +1461% / min +0% — volume_1h: $1,406/h < $5,000 (young token: 1 min old, $30,503 liquidity); graduation_wait: graduated 1 min ago
+  - Max: max +1258% / min -100% — volume_1h: $414/h < $5,000 (young token: 1 min old, $8,688 liquidity); graduation_wait: graduated 1 min ago < 
+  - BAWSAQ: max +1091% / min -23% — graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); top10_holders: top10 hold 88.2% (pool
+  - WIGGLES: max +834% / min -100% — graduation_wait: graduated 1 min ago < 30 min wait (instant-rug window); min_market_cap: market cap $7,208 < $
+
+## Agent health
+- Scout: working, errors 0 | archived=239, discovered=14189, dropped=13714, revived=20, rug_false_alarm=43, sent=273912, watching=556
+- Filter: working, errors 1 | blacklisted=131, deep_queue=0, deep_stale=1, early_release=44, evaluated=273847, funder_errors=1321, funders_backfilled=12, onchain_lp_errors=2, passed=2461, quarantine_served=2, quarantined=9, rejected=271382
+- Analyst: idle, errors 0 | approved=44, rejected=41, scored=220, skipped_held=515
+- Executor: idle, errors 1 | buys=5, declined=24, sells=3, timing_wait=3, whale_drop=1, wins=3
+- Risk: working, errors 0 | false_stop_avoided=2, open=5
+- Logger: working, errors 0 | logged=24898, long_followed=308, real_closed=143, real_followed=46, recaps=2, shadow_done=1260, shadowing=46
+- Controller: idle, errors 0 | alerts=1, applied=6, checks=616, model=0, proposals=7, rounds=983, trials=259091, whale_tokens=54
+- Whale checker: working, errors 0 | backfilled=18, hits=26, reports=219, rpc_errors=5, scanned=222, too_long=14, wait_checks=3088, wait_hits=459, wallets=53, watching=33
+
+## All-time
+- 14 trades | win rate 86% | realized +1.4049 SOL ($+100.54)
