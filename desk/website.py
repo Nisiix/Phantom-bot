@@ -30,7 +30,37 @@ PARKING = ("domain is for sale", "buy this domain", "this domain may be for sale
            "domain parking", "godaddy", "sedo", "hugedomains", "dan.com", "coming soon")
 SCAM = ("guaranteed profit", "guaranteed returns", "100x guaranteed", "risk-free", "risk free", "double your",
         "claim your airdrop", "claim airdrop", "connect wallet to claim", "validate your wallet",
-        "enter your seed", "seed phrase", "recovery phrase", "private key", "sync wallet", "rectify")
+        "sync wallet", "rectify")
+# Wallet secrets: almost every honest "how to buy" section mentions them as a safety tip ("keep your recovery
+# phrase secret", "never share a seed phrase"). Checked 2026-11-11: all 4 still-online sites flagged for these
+# words (NIHAO, KoriMu, 咪好, DAINU) only warned the reader, and NIHAO (+1285%) was capped at 0.30 for it.
+# So a mention is a scam flag only when the page asks the reader to hand the secret over, never in a warning.
+WALLET_SECRETS = ("seed phrase", "recovery phrase", "secret phrase", "secret recovery", "private key",
+                  "mnemonic", "seed words", "12 words", "24 words")
+_SECRET_ASK = re.compile(r"\b(enter|input|type|paste|submit|import|provide|verify|validate|sync|restore|"
+                         r"recover|connect|claim|unlock|rectify)\b")
+_SECRET_WARN = re.compile(r"\b(never|don'?t|do not|not share|no one|nobody|anyone|offline|paper|safe|safely|"
+                          r"keep|protect|store|write|scam|hide)\b")
+
+
+def wallet_secret_asks(low: str) -> list[str]:
+    """Wallet-secret mentions that ask the reader to hand the secret over (not safety tips)."""
+    hits = []
+    for k in WALLET_SECRETS:
+        for m in re.finditer(re.escape(k), low):
+            before, after = low[max(0, m.start() - 80):m.start()], low[m.end():m.end() + 40]
+            near = before[-40:]
+            if _SECRET_ASK.search(near) and not _SECRET_WARN.search(near):
+                hits.append(k)        # "enter your seed phrase", even if a warning follows it
+                break
+            if _SECRET_WARN.search(before + " " + after):
+                continue              # "never share a seed phrase", "keep your recovery phrase secret"
+            if _SECRET_ASK.search(before + " " + after):
+                hits.append(k)
+                break
+    return hits
+
+
 INJECTION = ("ignore previous instructions", "ignore all previous", "as an ai", "system prompt",
              "rate this token", "give this a score", "you are a")
 SECTIONS = ("tokenomics", "roadmap", "about", "community", "how to buy", "buy now", "chart", "lore",
@@ -249,7 +279,9 @@ class WebsiteInspector:
             flags.append("parking / placeholder page")
             legit -= 0.4
             tasty = 0.0
-        scam = [k for k in SCAM if k in low]
+        scam = [k for k in SCAM if k in low] + wallet_secret_asks(low)
+        if not scam and any(k in low for k in WALLET_SECRETS):
+            notes.append("wallet-safety tip on page (not a request for the seed phrase)")
         if scam:
             flags.append("scam/drainer phrases: " + ", ".join(scam[:3]))
             legit -= min(0.6, 0.3 * len(scam))
