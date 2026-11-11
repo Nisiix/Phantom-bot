@@ -243,9 +243,9 @@ class ControllerCfg:
     min_rows: int = 30                  # fewest tokens a situation needs before it is judged
     holdout_pct: float = 30.0           # newest share of the data kept aside to verify the winner
     lookback_days: float = 14           # only data from the last N days
-    # Applying improvements by itself (desk/controller_memory.py): "paper" = on the paper desk only (live: proposals
-    # only), "always" = also live, "off" = proposals only. Applied values: data/controller_overrides_<mode>.json.
-    auto_apply: str = "paper"
+    # BASE RULE (user, 2026-11-11): the Controller only PROPOSES, the user decides. Always "off" (clamped below);
+    # "paper"/"always" (applying by itself) are refused. Old applied values: data/controller_overrides_<mode>.json.
+    auto_apply: str = "off"
     confirm_rounds: int = 3             # a PROMETTENTE result must win this many rounds in a row (SOLIDA: at once)
     apply_cooldown_minutes: float = 60  # at most one change per agent in this time, so each effect can be measured
     review_min_rows: int = 30           # new tokens needed before an applied change is confirmed or rolled back
@@ -255,7 +255,8 @@ class ControllerCfg:
 class ModelCfg:
     # MODELLO (desk/model.py): boosted trees trained by the Controller every round on the 60-min follow-ups.
     enabled: bool = True                # train it and log P(win) for every buy
-    enforce: bool = True                # may BLOCK buys once verified (SOLIDA, or PROMETTENTE confirm_rounds times)
+    enforce: bool = False               # YOUR approval: true = may BLOCK buys once verified (SOLIDA, or PROMETTENTE
+                                        # confirm_rounds times). false = the block is only proposed (rule 2026-11-11)
     min_rows: int = 1000                # fewest Analyst follow-ups with stored values before the first training
     min_leaf: int = 40                  # fewest tokens in a tree leaf (bigger = smoother, less overfitting)
     min_eval_rows: int = 30             # fewest tradeable tokens in the verification part to judge on them alone
@@ -463,8 +464,8 @@ def enforce_hard_limits(cfg: Config) -> None:
     clamp(c, "random_variants", lambda v: 0 <= v <= 200, 24, "controller random variants must be 0-200")
     clamp(c, "min_rows", lambda v: 10 <= v <= 5000, 30, "controller min_rows must be 10-5000")
     clamp(c, "holdout_pct", lambda v: 10 <= v <= 50, 30.0, "controller holdout must be 10-50%")
-    clamp(c, "auto_apply", lambda v: v in ("off", "paper", "always"), "paper",
-          'controller auto_apply must be "off", "paper" or "always"')
+    clamp(c, "auto_apply", lambda v: v == "off", "off",
+          "the Controller never applies its decisions by itself: it only proposes, you decide (user rule 2026-11-11)")
     clamp(c, "confirm_rounds", lambda v: 1 <= v <= 50, 3, "controller confirm_rounds must be 1-50")
     clamp(c, "apply_cooldown_minutes", lambda v: 10 <= v <= 7 * 24 * 60, 60.0, "controller cooldown must be 10 min-7 days")
     clamp(c, "review_min_rows", lambda v: 10 <= v <= 5000, 30, "controller review_min_rows must be 10-5000")
@@ -516,7 +517,8 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
 
     enforce_hard_limits(cfg)
     # What the Controller learned and applied (data/controller_overrides_<mode>.json), over config.toml, still
-    # inside the hard limits. Ignored when [controller] auto_apply = "off".
+    # inside the hard limits. Loaded whatever auto_apply says (the Controller no longer applies anything, but the values
+    # it applied before 2026-11-11 stay until the user decides on them).
     from .controller_memory import load_overrides
     cfg.controller_overrides = load_overrides(cfg)
     if cfg.controller_overrides:

@@ -276,7 +276,8 @@ def _fill_shadow(desk, rows):
                                "features": r["features"], "path": r["path"]})
 
 
-def test_auto_apply_records_why_persists_and_survives_restart(tmp_path):
+def test_controller_never_applies_only_proposes(tmp_path):
+    """Base rule (user, 2026-11-11): the Controller only proposes, the user decides."""
     from desk import controller_memory as mem
     from desk.config import load_config
     desk = make_desk(tmp_path)
@@ -285,36 +286,35 @@ def test_auto_apply_records_why_persists_and_survives_restart(tmp_path):
     _fill_shadow(desk, an)
     ctl = Controller(desk)
     ctl.health = []
+    before = (desk.cfg.analyst.min_score, dict(desk.cfg.analyst.weights or {}), desk.cfg.risk.trail_activate_pct)
     exp = ctl._round(mem.pending_reviews(desk.store))
     props = proposals(exp, desk.cfg)
-    applied = ctl.auto_apply(exp, props)
-    assert applied >= 1
-    ds = mem.decisions(desk.store)
-    assert ds[0]["kind"] == "apply" and ds[0]["status"] == "attiva" and "Scelta perché" in ds[0]["reasoning"]
-    assert ds[0]["variant_after"] and ds[0]["before"] and ds[0]["after"]
-    # the live config object changed, within the hard limits
-    assert desk.cfg.analyst.min_score >= 0.6 and desk.cfg.risk.hard_stop_pct >= -6
-    # second change for the same agent waits for the cooldown
-    assert ctl.auto_apply(exp, props) == 0
-    # persisted: overrides file, loaded over config.toml at the next start
-    ov = mem.overrides_path(tmp_path, "paper")
-    assert ov.exists()
-    toml = tmp_path / "c.toml"
-    toml.write_text(f'data_dir = "{tmp_path.as_posix()}"\n', encoding="utf-8")
-    cfg2 = load_config(toml)
-    assert cfg2.controller_overrides and all(k in json.loads(ov.read_text()) for k in cfg2.controller_overrides)
-    toml.write_text(f'data_dir = "{tmp_path.as_posix()}"\n[controller]\nauto_apply = "off"\n', encoding="utf-8")
-    assert load_config(toml).controller_overrides == {}
-    # memory and report survive a restart
+    assert props                                         # it does find winners...
+    assert ctl.auto_apply(exp, props) == 0               # ...but never applies them
+    assert mem.decisions(desk.store) == []
+    assert (desk.cfg.analyst.min_score, dict(desk.cfg.analyst.weights or {}),
+            desk.cfg.risk.trail_activate_pct) == before
+    assert not mem.overrides_path(tmp_path, "paper").exists()
     ctl.exp = exp
+    s = ctl.summary()
+    assert s["proposals"] and not s["auto_on"]
+    assert "non le applica" in ctl.write_report()
+    # config.toml cannot switch it back on
+    toml = tmp_path / "c.toml"
+    toml.write_text(f'data_dir = "{tmp_path.as_posix()}"\n[controller]\nauto_apply = "always"\n', encoding="utf-8")
+    cfg2 = load_config(toml)
+    assert cfg2.controller.auto_apply == "off" and any("only proposes" in w for w in cfg2.warnings)
+    # values it applied before the rule stay in use until the user decides (loaded whatever auto_apply says)
+    mem.overrides_path(tmp_path, "paper").write_text('{"risk.trail_activate_pct": 30.0}', encoding="utf-8")
+    cfg3 = load_config(toml)
+    assert cfg3.controller_overrides == {"risk.trail_activate_pct": 30.0} and cfg3.risk.trail_activate_pct == 30.0
+    # memory and report survive a restart
     ctl._save_state()
-    ctl.write_report()
     ctl2 = Controller(desk)
     assert ctl2.report and "Decisioni del Controllore" in ctl2.report and ctl2.exp and ctl2.rounds == ctl.rounds
-    assert ctl2.summary()["decisions"]
 
 
-def test_disproved_decision_is_rolled_back_and_never_retried(tmp_path):
+def test_disproved_decision_becomes_a_rollback_proposal(tmp_path):
     from desk import controller_memory as mem
     desk = make_desk(tmp_path)
     ctl = Controller(desk)
@@ -325,9 +325,15 @@ def test_disproved_decision_is_rolled_back_and_never_retried(tmp_path):
     did = mem.record(desk.store, desk.cfg, "apply", "Risk", p["changes"], before, after, p, 1, exp, "test",
                      {"x": 0}, {"x": 1})
     ctl.review({"reviews": [{"id": did, "n": 40, "mean": -5.0, "lo": -8.0, "hi": -2.0}]})
-    assert desk.cfg.risk.max_hold_minutes == 0
+    assert desk.cfg.risk.max_hold_minutes == 45                 # NOT rolled back by the Controller
     ds = mem.decisions(desk.store)
-    assert {d["kind"] for d in ds} == {"apply", "revert"}
+    assert [d["kind"] for d in ds] == ["apply"] and ds[0]["status"] == "smentita"
+    rb = [x for x in ctl.all_proposals() if x.get("kind") == "rollback"]
+    assert rb and rb[0]["changes"] == [f"[risk] max_hold_minutes = {before['risk.max_hold_minutes']:g}"]
+    assert rb[0]["gain"] == 5.0 and rb[0]["decision"] == did
+    # once the user changed the value, there is nothing left to propose
+    desk.cfg.risk.max_hold_minutes = 30
+    assert not [x for x in ctl.all_proposals() if x.get("kind") == "rollback"]
     assert next(d for d in ds if d["id"] == did)["status"] == "smentita"
     refuted = mem.refuted_keys(desk.store)
     picked, _ = mem.choose([{**p, "situation": "all"}], desk.cfg, {}, {}, refuted, time.time())

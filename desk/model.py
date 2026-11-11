@@ -22,8 +22,10 @@ Overfitting guard (same idea as the Controller's experiments)
 What it may do
     It can only BLOCK a buy that every other rule allowed, like QUANT. It never forces a trade and never loosens a
     rule. It starts "in prova" (computes and logs P(win), blocks nothing). It blocks only after a SOLIDA verdict,
-    or PROMETTENTE for [controller] confirm_rounds rounds in a row, and only where [controller] auto_apply allows
-    the Controller to act. A later round without advantage switches the block off again by itself.
+    or PROMETTENTE for [controller] confirm_rounds rounds in a row, and only if the USER approved it with
+    [model] enforce = true (base rule 2026-11-11: the Controller only proposes). Until then a verdict that would
+    switch it on appears as a PROPOSAL (`wanted`). Once approved, a later round without advantage switches the
+    block off again, as part of the rule the user approved.
     The model is retrained every Controller round; the data it learns from is never deleted.
 """
 from __future__ import annotations
@@ -328,11 +330,12 @@ class ModelGate:
         st = store.kv_get(self.KV, {}) or {}
         self.model: dict | None = st.get("model")
         self.last: dict = st.get("last", {})
-        self.active: bool = bool(st.get("active", False))
+        self.active: bool = bool(st.get("active", False)) and bool(cfg.model.enforce)   # only if the user approved
         self.streak: int = int(st.get("streak", 0))
         self.history: list = st.get("history", [])
         self.calls = 0
         self.blocks = 0
+        self.wanted = False
 
     def _save(self) -> None:
         self.store.kv_set(self.KV, {"model": self.model, "last": self.last, "active": self.active,
@@ -351,8 +354,10 @@ class ModelGate:
             on = was or self.streak >= self.cfg.controller.confirm_rounds
         else:                         # no advantage, or too little data in the lookback window: block off
             on = False
-        self.active = bool(on and may_apply and self.cfg.model.enabled and self.cfg.model.enforce
-                           and self.model is not None and self.model.get("threshold") is not None)
+        ready = bool(on and self.cfg.model.enabled and self.model is not None
+                     and self.model.get("threshold") is not None)
+        self.wanted = ready                      # what the verdict asks for: a proposal until the user approves it
+        self.active = bool(ready and may_apply and self.cfg.model.enforce)
         self.last = {k: v for k, v in res.items() if k != "model"}
         msg = None
         if self.active != was:
@@ -393,7 +398,8 @@ class ModelGate:
         return {"status": self.status(), "verdict": last.get("verdict"), "rows": last.get("rows"),
                 "min_rows": last.get("min_rows", self.cfg.model.min_rows), "auc": last.get("auc_valid"),
                 "threshold": (self.model or {}).get("threshold"), "valid": last.get("valid"),
-                "streak": self.streak, "blocks": self.blocks, "calls": self.calls, "ts": last.get("t")}
+                "streak": self.streak, "blocks": self.blocks, "calls": self.calls, "ts": last.get("t"),
+                "wanted": self.wanted}
 
 
 # ── report ──

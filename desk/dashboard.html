@@ -561,7 +561,7 @@ const KEYS = { Scout: [["watching", "in osservazione"], ["sent", "inviati"], ["d
   Analyst: [["approved", "approvati"], ["rejected", "bocciati"]],
   Executor: [["sells", "vendite"], ["wins", "vinti"], ["losses", "persi"], ["declined", "rifiutati"], ["ev_block", "bloccati EV"]],
   Risk: [], Logger: [["logged", "eventi"], ["shadowing", "in follow-up"], ["shadow_done", "follow-up chiusi"], ["recaps", "recap"]],
-  Controller: [["checks", "verifiche"], ["alerts", "anomalie ora"], ["rounds", "cicli di test"], ["trials", "configurazioni provate"], ["proposals", "proposte"], ["applied", "modifiche applicate"]] };
+  Controller: [["checks", "verifiche"], ["alerts", "anomalie ora"], ["rounds", "cicli di test"], ["trials", "configurazioni provate"], ["proposals", "proposte"], ["applied", "decisioni passate"]] };
 const MAIN = { Scout: ["discovered", "scoperti"], Filter: ["evaluated", "valutati"], Analyst: ["scored", "valutati"],
   Executor: ["buys", "acquisti"], Risk: ["open", "posizioni sorvegliate"] };
 const ST = { working: "attivo", idle: "in attesa", error: "errore", starting: "avvio", halted: "fermo" };
@@ -776,12 +776,12 @@ function renderController(s) {
   box.append(el("p", "sub", sub));
   if (!ct.proposals.length) box.append(el("div", "empty", ct.rounds ? "Nessuna proposta: nessuna variante batte la configurazione attuale anche sui dati di verifica." : "In attesa del primo ciclo."));
   else { const rows = ct.proposals.slice(0, 12).map((p) => { const r = el("tr");
-      r.append(td(p.agent), td(p.label + (p.also && p.also.length ? " (+ altre " + p.also.length + ")" : "")), td(p.changes.join(" · ")), td(sgn(p.gain, 2) + " [" + sgn(p.lo, 1) + ", " + sgn(p.hi, 1) + "]", "n " + cls(p.gain)), td(p.verdict === "solida" ? "solida" : "promettente", p.verdict === "solida" ? "up" : null)); return r; });
+      r.append(td(p.agent), td(p.label + (p.also && p.also.length ? " (+ altre " + p.also.length + ")" : "")), td(p.changes.join(" · ")), td(sgn(p.gain, 2) + " [" + sgn(p.lo, 1) + ", " + sgn(p.hi, 1) + "]", "n " + cls(p.gain)), td(p.verdict || "", p.verdict === "solida" ? "up" : null)); return r; });
     const sc = el("div", "scroll"); sc.append(table([["Agente"], ["Situazione"], ["Modifica proposta"], ["Guadagno/token %", 1], ["Affidabilità"]], rows)); box.append(sc); }
-  box.append(el("h3", null, "Decisioni applicate dal Controllore"));
-  box.append(el("p", "sub", ct.auto_on ? "Applicazione automatica attiva: le proposte confermate vengono applicate da sole e poi verificate sui token successivi."
-    : "Applicazione automatica disattivata in questa modalità: il Controllore propone soltanto."));
-  if (ct.overrides && Object.keys(ct.overrides).length) box.append(el("p", "sub", "Impostazioni in uso decise dal Controllore: " + Object.entries(ct.overrides).map(([k, v]) => k + " = " + (typeof v === "object" ? JSON.stringify(v) : v)).join(" · ")));
+  box.append(el("p", "sub", "Il Controllore propone soltanto: non applica nulla da solo. Decidi tu quali proposte applicare (chiedilo a Claude o scrivi la riga in config.toml)."));
+  box.append(el("h3", null, "Decisioni del Controllore (storico)"));
+  box.append(el("p", "sub", "Prese prima del 2026-11-11, quando il Controllore applicava da solo. Restano verificate sui token successivi; se i dati ne smentiscono una, l'annullamento compare tra le proposte."));
+  if (ct.overrides && Object.keys(ct.overrides).length) box.append(el("p", "sub", "Impostazioni decise in passato dal Controllore, ancora in uso finché non decidi tu: " + Object.entries(ct.overrides).map(([k, v]) => k + " = " + (typeof v === "object" ? JSON.stringify(v) : v)).join(" · ")));
   if (!ct.decisions || !ct.decisions.length) box.append(el("div", "empty", "Nessuna decisione ancora."));
   else for (const d of ct.decisions) { const r = el("div", "ev"), col = d.kind === "revert" ? "#fb923c" : d.status === "smentita" ? "#f43f5e" : d.status === "confermata" ? "#34d399" : "#facc15";
     const k = el("span", "kind"); k.style.setProperty("--kc", col); k.append(el("i"), document.createTextNode(d.kind === "revert" ? "annullata" : d.status));

@@ -128,8 +128,8 @@ exit_slippage_ladder_bps = [800, 1500, 3000]
 # fallback: what to do if the moment doesn't come in the window: "skip" (no trade) or "buy" (buy at that price).
 # Waiting never skips a check: the buy still needs a fresh Filter + Analyst clearance, Risk, price impact,
 # round-trip, QUANT. If liquidity drops max_liq_drop_pct % while waiting, the token is dropped (rug starting).
-# The Controller ("Timing" agent) replays every rule on the 60-minute price paths of approved tokens and switches
-# the rule by itself (auto_apply) only when one beats the current one on data it never saw.
+# The Controller ("Timing" agent) replays every rule on the 60-minute price paths of approved tokens and PROPOSES a
+# switch when one beats the current one on data it never saw (it never switches by itself: rule 2026-11-11).
 # Measured at launch on 42 approved tokens: waiting looked better on the older tokens, not on the newest ones,
 # so it starts on "now" and the Controller decides as data comes in.
 # USER'S TRIAL (2026-11-11 02:12 UTC): buy only on a 3% dip within 5 min of approval, else no trade.
@@ -264,11 +264,12 @@ serial_max_graduation = 0.05     # ...<= 5% graduated -> permanent kill (and add
 [controller]
 # CONTROLLORE: checks that the other agents behave (every health_seconds) and, every interval_minutes,
 # replays different settings on the tokens the desk already followed for 60 minutes (no API calls, no trades).
-# With auto_apply it APPLIES the improvements it finds by itself (never beyond the hard limits), records why
-# (controller_decisions table, kept forever), re-checks each change on the tokens that come after it and rolls
-# back what the new data disproves. Applied values: data/controller_overrides_<mode>.json, loaded over this file
-# at every start (delete that file to go back to config.toml). Report: data/reports/controller_<mode>_latest.md,
-# dashboard, `python run.py controller`.
+# BASE RULE (user, 2026-11-11 23:31 UTC): the Controller only PROPOSES, the user decides. It never applies a change
+# and never rolls one back by itself: every change it would make goes to the proposals summary (dashboard section
+# "Controllore", report) and you choose whether to apply it. Decisions it applied before this rule stay recorded
+# (controller_decisions table, kept forever) and keep being re-checked; if the data disproves one, going back is
+# a proposal too. The values it applied then are in data/controller_overrides_<mode>.json, still loaded over this
+# file until you decide on them. Report: data/reports/controller_<mode>_latest.md, `python run.py controller`.
 enabled = true
 interval_minutes = 10
 health_seconds = 60
@@ -276,20 +277,21 @@ random_variants = 24      # new random combinations tried per agent each round (
 min_rows = 30             # fewest tokens a situation needs before it is judged
 holdout_pct = 30          # newest share of the data kept aside to verify the winner
 lookback_days = 14
-auto_apply = "always"     # applies by itself in paper AND live (user choice 2026-11-10) | "paper" = paper only | "off"
-confirm_rounds = 3        # a PROMETTENTE result must win 3 rounds in a row before it is applied (SOLIDA: at once)
-apply_cooldown_minutes = 60   # at most one change per agent per hour, so each effect can be measured
-review_min_rows = 30      # new tokens needed to confirm an applied change or roll it back
+auto_apply = "off"        # always "off": proposals only (user rule 2026-11-11; any other value is refused)
+confirm_rounds = 3        # rounds in a row a PROMETTENTE model verdict needs before the block is proposed/used
+apply_cooldown_minutes = 60   # (unused while auto_apply is off)
+review_min_rows = 30      # new tokens needed to confirm a past decision or propose rolling it back
 
 [model]
 # MODELLO: small statistical model (boosted trees, CPU, numpy) the Controller retrains every round on the 60-minute
 # follow-ups. It estimates P(win) = chance that the current exit rules close a token in profit, from the numbers
 # seen at decision time. Trained on the oldest 70%, judged on the newest 30% it never saw. It starts "in prova"
 # (logs P(win), blocks nothing) and BLOCKS buys under its threshold only after a SOLIDA verdict (or PROMETTENTE for
-# [controller] confirm_rounds rounds in a row) where auto_apply allows; it switches itself off when the advantage
+# [controller] confirm_rounds rounds in a row) and only if YOU approved it with enforce = true; until then the
+# Controller shows it as a proposal (rule 2026-11-11). Once approved it switches itself off when the advantage
 # disappears. It can only block, never force a buy or loosen a rule. Data check: `python run.py model`.
 enabled = true
-enforce = true
+enforce = false           # your approval for the block: false = the Controller only proposes it
 min_rows = 1000           # Analyst follow-ups with stored values needed before the first training
 min_leaf = 40
 min_eval_rows = 30

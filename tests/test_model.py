@@ -42,6 +42,7 @@ def _rows(n: int, signal: bool, seed: int = 1) -> list[dict]:
 def _cfg(**model) -> Config:
     cfg = Config()
     cfg.model.min_rows = 400
+    cfg.model.enforce = True            # the user approved the block (default false: only proposed)
     for k, v in model.items():
         setattr(cfg.model, k, v)
     return cfg
@@ -113,6 +114,7 @@ def _desk_with_gate(tmp_path, active: bool):
     desk = make_desk(tmp_path)
     cfg = desk.cfg
     cfg.model.min_rows = 400
+    cfg.model.enforce = True
     gate = ModelGate(desk.store, cfg)
     gate.update(train_round(_rows(1500, True), cfg), may_apply=active)
     desk.model = gate
@@ -179,7 +181,13 @@ def test_controller_round_trains_the_model(tmp_path):
     ctl.exp = asyncio.run(asyncio.to_thread(ctl._round))
     assert ctl.model_new["verdict"] == "solida"
     ctl.model_res = ctl.model_new
+    # without the user's approval ([model] enforce = false, the default) the block is only PROPOSED
+    assert desk.model.update(ctl.model_new, True) is None and not desk.model.active and desk.model.wanted
+    props = ctl.summary()["proposals"]
+    assert any(p["changes"] == ["[model] enforce = true"] for p in props)
+    desk.cfg.model.enforce = True                 # the user approves it
     desk.model.update(ctl.model_new, True)
+    assert not any(p["changes"] == ["[model] enforce = true"] for p in ctl.summary()["proposals"])
     text = ctl.write_report()
     assert "Modello statistico" in text and "SOLIDA" in text and "attivo" in text
     assert ctl.summary()["model"]["status"] == "attivo"

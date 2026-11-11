@@ -990,12 +990,12 @@ def wide_stop_section(exp: dict) -> list[str]:
 
 
 def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, rounds: int,
-                 decisions: list[str] | None = None) -> str:
+                 decisions: list[str] | None = None, props: list[dict] | None = None) -> str:
     t = time.time()
     lines = [f"# Controllore — report del {datetime.fromtimestamp(t, timezone.utc):%Y-%m-%d %H:%M} UTC", "",
              "Il Controllore verifica gli agenti e prova configurazioni diverse sui dati reali registrati dal "
-             "Logger. Non fa trade. Con l'applicazione automatica attiva applica da solo i miglioramenti confermati "
-             "(sezione Decisioni), sempre dentro i limiti rigidi, e ricorda perché li ha scelti.", "",
+             "Logger. Non fa trade e non applica nulla da solo: ogni modifica che farebbe compare tra le Proposte, "
+             "sempre dentro i limiti rigidi, e decidi tu se applicarla (regola base, 2026-11-11).", "",
              "## Comportamento degli agenti"]
     for f in health:
         lines.append(f"- [{LEVEL[f['level']]}] {f['agent']} — {f['check']}: {f['detail']}")
@@ -1017,8 +1017,9 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
               f"- {exp['tried']} configurazioni provate in questo ciclo, {trials_total} in totale in {rounds} cicli",
               f"- scelta sul {100 - cfg.controller.holdout_pct:.0f}% più vecchio dei dati, verifica sul "
               f"{cfg.controller.holdout_pct:.0f}% più recente", ""]
-    props = proposals(exp, cfg)
-    lines.append("## Proposte")
+    if props is None:
+        props = proposals(exp, cfg)
+    lines.append("## Proposte (da valutare: il Controllore non le applica)")
     if not props:
         lines.append("Nessuna proposta per ora: nessuna variante batte la configurazione attuale anche sui dati di "
                      "verifica. Più dati arrivano, più i test diventano precisi.")
@@ -1028,6 +1029,9 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
             lines.append(f"    vince anche in: {', '.join(p['also'])}")
         lines.append(f"    guadagno stimato {p['gain']:+.2f} punti % per token valutato, intervallo 95% "
                      f"[{p['lo']:+.2f}, {p['hi']:+.2f}] su {p['valid_n']} token di verifica — {p['verdict'].upper()}")
+    if props:
+        lines.append("Per applicarne una: chiedilo a Claude o scrivi la riga in config.toml (attenzione: una chiave "
+                     f"presente in data/controller_overrides_{cfg.mode}.json vince su config.toml).")
     lines.append("")
     lines += wide_stop_section(exp)
     lines.append("## Dettaglio per agente e situazione")

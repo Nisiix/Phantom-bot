@@ -1,7 +1,10 @@
-"""CONTROLLER MEMORY — the Controller's own decisions: applying improvements, remembering why, checking them later.
+"""CONTROLLER MEMORY — the Controller's own decisions: remembering why, checking them later.
 
-When [controller] auto_apply allows it (default "paper": the paper desk only), an improvement found by the tests is
-applied to the running desk by the Controller itself:
+BASE RULE (user, 2026-11-11 23:31 UTC): the Controller only PROPOSES, the user decides. It never applies a change
+and never rolls one back by itself: auto_apply_on() is always False, [controller] auto_apply is clamped to "off",
+and a disproved decision becomes a roll-back PROPOSAL in the proposals summary (rollback_proposals).
+The rest of this module documents how decisions were applied before that rule (2026-11-10/11); the decisions
+recorded then, and the values in data/controller_overrides_<mode>.json, stay until the user decides on them:
 
   * only changes to the general configuration ("tutte le situazioni"), only plain config keys, always inside the
     hard limits (the same check as config.toml);
@@ -18,7 +21,8 @@ tokens exist the decision is marked "confermata" or "smentita"; a disproved chan
 and that roll-back is recorded as its own decision.
 
 The applied values live in data/controller_overrides_<mode>.json and are loaded over config.toml at every start
-(desk/config.py), so the desk restarts with what the Controller learned. auto_apply = "off" ignores the file.
+(desk/config.py), so the desk restarts with the same settings: they are loaded whatever auto_apply says, so nothing
+changes silently. Only the user removes them (or moves them into config.toml).
 """
 from __future__ import annotations
 
@@ -41,8 +45,8 @@ def overrides_path(data_dir: Path, mode: str) -> Path:
 
 
 def auto_apply_on(cfg) -> bool:
-    mode = cfg.controller.auto_apply
-    return mode == "always" or (mode == "paper" and cfg.mode == "paper")
+    """Always False: base rule (user, 2026-11-11), the Controller never applies its decisions by itself."""
+    return False
 
 
 def parse_change(ch: str) -> tuple[str, str, object] | None:
@@ -84,7 +88,7 @@ def set_values(cfg, triples: list[tuple[str, str, object]]) -> tuple[dict, dict]
 def load_overrides(cfg) -> dict:
     """Called by load_config: the Controller's applied values over config.toml (if auto-apply is on)."""
     p = overrides_path(cfg.data_dir, cfg.mode)
-    if not auto_apply_on(cfg) or not p.exists():
+    if not p.exists():
         return {}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -116,6 +120,41 @@ def save_overrides(cfg, after: dict) -> None:
     cur.update(after)
     p.write_text(json.dumps(cur, indent=2, sort_keys=True), encoding="utf-8")
     cfg.controller_overrides = dict(cur)
+
+
+def toml_value(v) -> str:
+    """A value written the way config.toml (and the proposals) spell it."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return f"{v:g}"
+    if isinstance(v, dict):
+        return "{ " + ", ".join(f"{k} = {toml_value(x)}" for k, x in v.items()) + " }"
+    return json.dumps(v)
+
+
+def rollback_proposals(store, cfg) -> list[dict]:
+    """Decisions the newer data disproved ("smentita") whose values are still in use: going back to the values
+    before them is PROPOSED to the user, never done by the Controller."""
+    out = []
+    for d in decisions(store):
+        if d["kind"] != "apply" or d["status"] != "smentita" or not d["before"] or not d["after"]:
+            continue
+        try:
+            cur = {k: getattr(getattr(cfg, k.split(".")[0]), k.split(".")[1]) for k in d["after"]}
+        except AttributeError:
+            continue
+        if cur != d["after"]:
+            continue                                   # already changed since: nothing to roll back
+        rv = d.get("review") or {}
+        changes = [f"[{k.split('.')[0]}] {k.split('.')[1]} = {toml_value(v)}" for k, v in d["before"].items()]
+        out.append({"agent": d["agent"], "situation": "all", "kind": "rollback", "decision": d["id"],
+                    "label": f"annulla la decisione #{d['id']} del "
+                             f"{time.strftime('%Y-%m-%d %H:%M', time.gmtime(d['ts']))} UTC",
+                    "changes": changes, "verdict": "annullamento", "gain": -rv.get("mean", 0.0),
+                    "lo": -rv.get("hi", 0.0), "hi": -rv.get("lo", 0.0), "n": rv.get("n", 0),
+                    "valid_n": rv.get("n", 0), "also": []})
+    return out
 
 
 def scout_all_off(cfg, triples) -> bool:
@@ -217,18 +256,15 @@ def refuted_keys(store) -> set[str]:
 
 def report_section(store, cfg, limit: int = 12) -> list[str]:
     ds = decisions(store, limit)
-    mode = cfg.controller.auto_apply
-    head = {"off": "disattivata: il Controllore propone soltanto",
-            "paper": "attiva sul conto paper (in live il Controllore propone soltanto)",
-            "always": "attiva anche in live"}.get(mode, mode)
     lines = ["## Decisioni del Controllore (memoria delle scelte)",
-             f"Applicazione automatica {head}. Una proposta SOLIDA viene applicata subito, una PROMETTENTE dopo "
-             f"{cfg.controller.confirm_rounds} cicli vinti di fila; al massimo una modifica per agente ogni "
-             f"{cfg.controller.apply_cooldown_minutes:g} min; ogni scelta viene poi verificata sui token arrivati dopo."]
+             "Il Controllore propone soltanto: non applica e non annulla nulla da solo (regola base dell'utente, "
+             "2026-11-11). Le decisioni qui sotto sono state applicate prima di questa regola e vengono ancora "
+             "verificate sui token arrivati dopo; se i dati le smentiscono, l'annullamento compare tra le proposte."]
     ov = getattr(cfg, "controller_overrides", {}) or {}
     if ov:
-        lines.append("Impostazioni ora decise dal Controllore (sopra config.toml): "
-                     + ", ".join(f"{k} = {v}" for k, v in sorted(ov.items())))
+        lines.append("Impostazioni decise in passato dal Controllore e ancora in uso (data/controller_overrides_"
+                     f"{cfg.mode}.json, sopra config.toml) finché non decidi tu: "
+                     + ", ".join(f"{k} = {toml_value(v)}" for k, v in sorted(ov.items())))
     if not ds:
         lines += ["- nessuna decisione ancora", ""]
         return lines

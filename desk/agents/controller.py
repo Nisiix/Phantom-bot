@@ -1,5 +1,6 @@
-"""CONTROLLER (Controllore) agent — watches the other agents, tests other settings offline and, when
-[controller] auto_apply allows it, applies the improvements it finds and remembers why (desk/controller_memory.py).
+"""CONTROLLER (Controllore) agent — watches the other agents, tests other settings offline and PROPOSES the
+improvements it finds. Base rule (user, 2026-11-11): it never applies or rolls back anything by itself; every
+change it would make goes to the proposals summary and the user decides (desk/controller_memory.py).
 
 It never places an order and makes no API calls (everything comes from memory and the local database).
 Its memory (rounds, best variants, streaks, decisions, last report) lives in the database and survives restarts.
@@ -68,8 +69,8 @@ class Controller(Agent):
             return
         self.status("working")
         self.emit("info", f"Controller online: checks the agents every {self.c.health_seconds:g}s, tests other "
-                          f"settings on logged data every {self.c.interval_minutes:g} min, applies improvements "
-                          f"{'by itself' if mem.auto_apply_on(self.cfg) else 'NO (proposals only)'}, no API calls; "
+                          f"settings on logged data every {self.c.interval_minutes:g} min, proposals only "
+                          f"(you decide), no API calls; "
                           f"memory: {self.rounds} rounds, {self.trials} settings tried, "
                           f"{len(mem.decisions(self.desk.store))} decisions"
                           + (f", Controller settings in use: {', '.join(f'{k}={v}' for k, v in self.cfg.controller_overrides.items())}"
@@ -203,11 +204,13 @@ class Controller(Agent):
             if verdict == "confermata":
                 self.emit("info", f"decision confirmed by {rv['n']} new tokens: {'; '.join(d['changes'])} "
                                   f"({rv['mean']:+.2f} pts/token)")
-            elif verdict == "smentita":
-                self.revert(d, rv, exp)
+            elif verdict == "smentita":                # never rolled back here: proposed (rollback_proposals)
+                self.emit("risk", f"decision #{d['id']} disproved by {rv['n']} new tokens ({rv['mean']:+.2f} "
+                                  f"pts/token): going back to the previous values is now a PROPOSAL, you decide")
 
     def revert(self, d: dict, rv: dict, exp: dict) -> None:
-        """A change the newer data disproved goes back to the previous values (if nothing changed them since)."""
+        """Rolls a decision back. NOT called by the Controller since the base rule of 2026-11-11 (it only proposes):
+        kept for a roll-back the user approves."""
         cur = {k: getattr(getattr(self.cfg, k.split(".")[0]), k.split(".")[1]) for k in (d["after"] or {})}
         if cur != d["after"]:
             return
@@ -224,6 +227,7 @@ class Controller(Agent):
         self.emit("risk", f"ROLLED BACK: {why}")
 
     def auto_apply(self, exp: dict, props: list[dict]) -> int:
+        """Disabled: base rule (user, 2026-11-11), the Controller only proposes. auto_apply_on() is always False."""
         if not mem.auto_apply_on(self.cfg):
             return 0
         picked, self.streaks = mem.choose(props, self.cfg, self.streaks, self.last_applied,
@@ -274,7 +278,7 @@ class Controller(Agent):
                 self.model_res = res
                 gate = self.desk.model
                 if gate is not None:
-                    msg = gate.update(res, mem.auto_apply_on(self.cfg))
+                    msg = gate.update(res, True)       # blocks only with the user's [model] enforce = true
                     if msg:
                         self.emit("risk", msg)
                     self.state.counters["model"] = 1 if gate.active else 0
@@ -283,8 +287,8 @@ class Controller(Agent):
             self.trials += exp["tried"]
             self.best = exp["best"]
             self.review(exp)
-            props = proposals(exp, self.cfg)
-            applied = self.auto_apply(exp, props)
+            props = self.all_proposals()
+            applied = 0                               # the Controller never applies: proposals only (2026-11-11)
             self.flag_entry_trial(exp.get("entry_trial"))
             self.state.counters["applied"] = self.state.counters.get("applied", 0) + applied
             self._save_state()
@@ -303,6 +307,24 @@ class Controller(Agent):
             self.next_round = time.time() + self.c.interval_minutes * 60
             self.status("idle")
 
+    def all_proposals(self) -> list[dict]:
+        """Everything the Controller would change, for the user to decide: the tests' winners, going back from a
+        decision the data disproved, switching on the model's block."""
+        out = list(proposals(self.exp, self.cfg)) if self.exp else []
+        try:
+            out += mem.rollback_proposals(self.desk.store, self.cfg)
+        except Exception:  # noqa: BLE001 - report only
+            pass
+        gate = self.desk.model
+        if gate is not None and getattr(gate, "wanted", False) and not self.cfg.model.enforce:
+            va = (gate.last or {}).get("valid") or {}
+            out.append({"agent": "Modello", "situation": "all", "kind": "model",
+                        "label": f"blocca gli acquisti con P(win) sotto {gate.model['threshold']:.2f}",
+                        "changes": ["[model] enforce = true"], "verdict": (gate.last or {}).get("verdict", ""),
+                        "gain": va.get("mean", 0.0), "lo": va.get("lo", 0.0), "hi": va.get("hi", 0.0),
+                        "n": va.get("n", 0), "valid_n": va.get("n", 0), "also": []})
+        return out
+
     def _exit_records(self) -> list[dict]:
         try:
             return self.desk.store.q("SELECT data FROM trades UNION ALL SELECT data FROM trades_archive")
@@ -311,7 +333,7 @@ class Controller(Agent):
 
     def write_report(self) -> str:
         self.report = build_report(self.health, self.exp, self.cfg, self.trials, self.rounds,
-                                   mem.report_section(self.desk.store, self.cfg)) \
+                                   mem.report_section(self.desk.store, self.cfg), self.all_proposals()) \
             + "\n\n" + "\n".join(profit_lock_section(self._exit_records(), self.cfg)) \
             + ml.report_section(self.model_res, self.desk.model, self.cfg)
         self.report_ts = time.time()
@@ -326,7 +348,7 @@ class Controller(Agent):
         """For the dashboard."""
         return {"health": self.health, "rounds": self.rounds, "trials": self.trials,
                 "next_round": self.next_round, "report_ts": self.report_ts,
-                "proposals": proposals(self.exp, self.cfg) if self.exp else [],
+                "proposals": self.all_proposals(),
                 "auto_apply": self.c.auto_apply, "auto_on": mem.auto_apply_on(self.cfg),
                 "overrides": self.cfg.controller_overrides,
                 "model": self.desk.model.summary() if self.desk.model is not None else None,
