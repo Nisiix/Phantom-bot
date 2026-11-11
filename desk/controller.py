@@ -19,6 +19,7 @@ it writes a report of PROPOSALS that the user can accept by editing config.toml.
      Risk      hard stop (only tighter), trailing start and distance, time stop, replayed on price paths
                + stops wider than -6% (to -30%) with wider trailing / time exits: MEASURE ONLY, shown in their
                  own report section, never proposed (the -6% stop is a hard limit, changing it is the user's call)
+     Timing    when to buy an approved token (at once / dip / bounce / confirmation, desk/entry.py), on the paths
      Executor  what the trades it declined (max positions, price impact, round-trip, EV) did afterwards
    Each round tries the current setting, one-change-at-a-time variants and new random combinations, plus
    the best ones from earlier rounds. Results are split by situation (market crash / normal, memecoin
@@ -38,6 +39,7 @@ import statistics
 import time
 from datetime import datetime, timezone
 
+from .entry import MAX_WINDOW_MINUTES, entry_path, settings as entry_settings
 from .market import is_crash
 
 SITUATIONS = {
@@ -53,7 +55,8 @@ SITUATIONS = {
     "big_pool": "pool grandi (liquidità >= $50k)",
 }
 WIDE_STOPS = "Risk (stop larghi)"     # measure-only experiment: stops wider than the -6% hard limit
-AGENT_NAMES = {"Scout": "Scout", "Filter": "Filter", "Analyst": "Analyst", "Risk": "Risk", "Executor": "Executor"}
+AGENT_NAMES = {"Scout": "Scout", "Filter": "Filter", "Analyst": "Analyst", "Risk": "Risk", "Executor": "Executor",
+               "Timing": "Timing (momento d'acquisto)"}
 # One token's result is capped to this range in every test: a single price glitch (or one +50,000% runner)
 # must not decide the average for 80 others. A real exit beyond +300% in an hour is rare and still counts as +300%.
 RET_MIN, RET_MAX = -100.0, 300.0
@@ -299,18 +302,23 @@ def parse_rows(raw: list[dict], young_minutes: float, cfg=None, skipped: dict | 
                 path = None
         cost = float(r.get("cost_pct") or 2.5)
         ret = clip_ret(float(r["sim_net_pct"]))
+        epath = None
         if cfg is not None and path:
             why = path_problem(path)
             if why:
                 skip(why)
                 continue
-            ret = simulate_exit(path, cost, r_.exit_stop_pct or r_.hard_stop_pct, r_.trail_activate_pct, r_.trail_distance_pct,
-                                float(r_.max_hold_minutes))
+            # Entry timing ([entry]): the position starts where the current rule would have bought, or never.
+            epath = entry_path(path, entry_settings(cfg.entry))
+            ret = 0.0 if not epath else simulate_exit(
+                epath, cost, r_.exit_stop_pct or r_.hard_stop_pct, r_.trail_activate_pct, r_.trail_distance_pct,
+                float(r_.max_hold_minutes))
         if r.get("score") is not None:
             f.setdefault("score", r["score"])
         rows.append({"ts": r["start_ts"], "mint": mint, "ret": ret,
                      "cost": cost, "decision": r.get("decision", ""), "f": f,
-                     "path": path, "sit": row_situations(f, young_minutes)})
+                     "path": path, "epath": epath if (cfg is not None and path) else path,
+                     "sit": row_situations(f, young_minutes)})
     rows.sort(key=lambda x: x["ts"])
     return rows
 
@@ -442,8 +450,10 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
              "trail_distance_pct": r.trail_distance_pct, "max_hold_minutes": float(r.max_hold_minutes)}
 
     def r_ret(v, rows=rows):
-        return [simulate_exit(x["path"], x["cost"], v["hard_stop_pct"], v["trail_activate_pct"],
-                              v["trail_distance_pct"], v["max_hold_minutes"]) for x in rows]
+        # exits start where the current entry rule buys (epath); a token the rule doesn't buy counts 0
+        return [simulate_exit(x["epath"], x["cost"], v["hard_stop_pct"], v["trail_activate_pct"],
+                              v["trail_distance_pct"], v["max_hold_minutes"]) if x.get("epath") else 0.0
+                for x in rows]
     grid = [{**cur_r, "hard_stop_pct": s} for s in stops] + [{**cur_r, "trail_activate_pct": x} for x in trail_on] \
         + [{**cur_r, "trail_distance_pct": x} for x in dists] + [{**cur_r, "max_hold_minutes": x} for x in holds]
 
@@ -474,6 +484,61 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
                 "trail_distance_pct": rng.choice(w_dists), "max_hold_minutes": rng.choice(w_holds)}
     spaces.append(Space(WIDE_STOPS, rows, cur_r, r_ret, w_grid, w_sample, r_desc,
                         note + ", con percorso di prezzo; stop più larghi del limite rigido: solo misura"))
+
+    # ── Timing (when to buy an approved token: desk/entry.py), replayed on the same price paths ──
+    rows, note = bought(with_path)
+    cur_t = entry_settings(cfg.entry)
+    stop_now = exit_stop
+
+    def t_ret(v, rows=rows):
+        out = []
+        for x in rows:
+            ep = entry_path(x["path"], v)
+            out.append(simulate_exit(ep, x["cost"], stop_now, r.trail_activate_pct, r.trail_distance_pct,
+                                     float(r.max_hold_minutes)) if ep else 0.0)
+        return out
+    used = {"now": (), "dip": ("window_minutes", "dip_pct", "fallback"),
+            "bounce": ("window_minutes", "dip_pct", "bounce_pct", "fallback"),
+            "confirm": ("window_minutes", "confirm_minutes", "confirm_pct")}
+
+    def t_norm(v):
+        """Keys a rule doesn't use stay at their current value (no meaningless changes in the proposals)."""
+        keep = ("mode",) + used.get(v["mode"], ())
+        return {k: (v[k] if k in keep else cur_t[k]) for k in cur_t}
+    windows = [3.0, 5.0, 10.0, MAX_WINDOW_MINUTES]
+    t_dips = [2.0, 3.0, 5.0, 8.0, 12.0]
+    t_bounces = [1.0, 2.0, 4.0]
+    t_conf = [(m, c) for m in (2.0, 3.0, 5.0, 10.0) for c in (-3.0, 0.0, 3.0)]
+    grid = [{**cur_t, "mode": "now"}]
+    for wdw in windows:
+        for d in t_dips:
+            grid.append({**cur_t, "mode": "dip", "window_minutes": wdw, "dip_pct": d, "fallback": "skip"})
+        grid.append({**cur_t, "mode": "dip", "window_minutes": wdw, "dip_pct": 5.0, "fallback": "buy"})
+        for d in (3.0, 5.0, 10.0):
+            for b in t_bounces:
+                grid.append({**cur_t, "mode": "bounce", "window_minutes": wdw, "dip_pct": d, "bounce_pct": b,
+                             "fallback": "skip"})
+    for m, c_ in t_conf:
+        grid.append({**cur_t, "mode": "confirm", "window_minutes": max(m, 5.0), "confirm_minutes": m,
+                     "confirm_pct": c_})
+
+    def t_sample(rng):
+        mode = rng.choice(("dip", "bounce", "confirm"))
+        wdw = rng.choice(windows)
+        return t_norm({**cur_t, "mode": mode, "window_minutes": wdw, "dip_pct": rng.choice(t_dips),
+                       "bounce_pct": rng.choice(t_bounces),
+                       "confirm_minutes": min(wdw, rng.choice((2.0, 3.0, 5.0, 10.0))),
+                       "confirm_pct": rng.choice((-3.0, 0.0, 3.0)), "fallback": rng.choice(("skip", "buy"))})
+    grid = [t_norm(v) for v in grid]
+
+    def t_desc(v):
+        out = []
+        for k in cur_t:
+            if v[k] != cur_t[k] if isinstance(v[k], str) else abs(v[k] - cur_t[k]) > 1e-9:
+                out.append(f'[entry] {k} = "{v[k]}"' if isinstance(v[k], str) else f"[entry] {k} = {v[k]:g}")
+        return out
+    spaces.append(Space("Timing", rows, cur_t, t_ret, grid, t_sample, t_desc,
+                        note + ", con percorso di prezzo: quando comprare dopo l'approvazione"))
 
     # ── Filter (only stricter than now: looser would let unchecked tokens through) ──
     passed = [x for x in filter_rows if x["decision"] in ("approve", "pass")]
@@ -537,7 +602,8 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         if x is None:
             continue
         for rc in set(reasons):
-            cats.setdefault(rc, []).append(x)
+            if rc != "entry timing":            # measured by the Timing space, on the price path
+                cats.setdefault(rc, []).append(x)
     rows = [x for xs in cats.values() for x in xs]
     rows = list({id(x): x for x in rows}.values())
     cat_names = sorted(cats)
@@ -696,8 +762,11 @@ def within_hard_limits(cfg, changes: list[str]) -> bool:
         if obj is None or not hasattr(obj, key):
             return False
         cur = getattr(obj, key)
-        v = (val == "true") if isinstance(cur, bool) else type(cur)(float(val)) if isinstance(cur, (int, float)) \
-            else val
+        if isinstance(cur, str):
+            v = val.strip().strip('"').strip("'")     # '[entry] mode = "dip"' -> dip
+        else:
+            v = (val == "true") if isinstance(cur, bool) else type(cur)(float(val)) if isinstance(cur, (int, float)) \
+                else val
         setattr(obj, key, v)
     enforce_hard_limits(test)
     return not any(w.startswith("HARD LIMIT") for w in test.warnings)
@@ -799,7 +868,7 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
     lines.append("")
     lines += wide_stop_section(exp)
     lines.append("## Dettaglio per agente e situazione")
-    for agent in ("Scout", "Filter", "Analyst", "Executor", "Risk", WIDE_STOPS):
+    for agent in ("Scout", "Filter", "Analyst", "Timing", "Executor", "Risk", WIDE_STOPS):
         rs = [r for r in exp["results"] if r["agent"] == agent]
         if not rs:
             continue

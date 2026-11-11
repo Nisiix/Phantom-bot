@@ -102,6 +102,30 @@ execution = "jupiter_v2"
 # Exit retries: if a sell fails it is retried IMMEDIATELY at these slippages (bps) to make sure we get out.
 exit_slippage_ladder_bps = [800, 1500, 3000]
 
+[entry]
+# ENTRY TIMING (2026-11-11): WHEN to buy a token the Analyst approved (desk/entry.py).
+#   "now"     buy at once (as before)
+#   "dip"     wait up to window_minutes for the price to be dip_pct % under the approval price
+#   "bounce"  wait for that dip, then buy only when the price bounces bounce_pct % off its lowest point
+#             (a dip that keeps falling is never bought)
+#   "confirm" look again after confirm_minutes: buy only if the price is >= approval price + confirm_pct %
+# fallback: what to do if the moment doesn't come in the window: "skip" (no trade) or "buy" (buy at that price).
+# Waiting never skips a check: the buy still needs a fresh Filter + Analyst clearance, Risk, price impact,
+# round-trip, QUANT. If liquidity drops max_liq_drop_pct % while waiting, the token is dropped (rug starting).
+# The Controller ("Timing" agent) replays every rule on the 60-minute price paths of approved tokens and switches
+# the rule by itself (auto_apply) only when one beats the current one on data it never saw.
+# Measured at launch on 42 approved tokens: waiting looked better on the older tokens, not on the newest ones,
+# so it starts on "now" and the Controller decides as data comes in.
+mode = "now"
+window_minutes = 10       # 1-15
+dip_pct = 5.0
+bounce_pct = 2.0
+confirm_minutes = 5.0
+confirm_pct = 0.0
+fallback = "skip"
+max_liq_drop_pct = 20.0
+poll_seconds = 6.0        # price check of waiting tokens (one batched DexScreener call)
+
 [risk]
 hard_stop_pct = -4.0          # user rule: hard stop at -6% (can only be tightened). -4: Controller proposal 2026-11-10
 paper_hard_stop_pct = -25.0   # PAPER ONLY, user's choice 2026-11-11: trial of a stop wider than the -6% hard limit

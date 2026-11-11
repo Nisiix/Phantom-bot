@@ -10,6 +10,10 @@ It will only buy a token when ALL of these hold:
     (catches honeypots, hidden taxes and thin books right before execution);
   * QUANT: expected value after the measured round-trip cost is positive, using calibrated
     probabilities of +12% first / -6% first / neither within 60 min (blocks only, never forces).
+Entry timing ([entry], desk/entry.py): with a mode other than "now" an approved token is not bought at once.
+The Executor watches its price for up to [entry] window_minutes and buys at the moment the rule finds (a dip,
+a bounce off a dip, a confirmation), always with a FRESH Analyst verdict and all the checks above; if the
+moment doesn't come, or liquidity leaves while waiting, the token is dropped.
 Size = max_position_pct (<= 8%, hard ceiling) of the CURRENT balance. Never more.
 Exits run on their own loop and never wait for an entry (no shared swap lock).
 """
@@ -23,6 +27,7 @@ from ..clients.jupiter import SOL_MINT
 from ..config import HARD_MAX_POSITION_PCT, HARD_MIN_SCORE
 from ..models import ExitOrder, FilterPass, Position, Verdict, now
 from .. import rugnames
+from ..entry import EntryPlan, plan_from, settings as entry_settings
 from ..portfolio import AveragingDownError
 from ..quant import label_outcome, outcome_row
 from .analyst import ANALYSIS_MAX_SECONDS
@@ -53,6 +58,9 @@ class Executor(Agent):
         self.broker = broker
         self.risk = risk
         self.e = self.cfg.executor
+        self.plans: dict[str, dict] = {}         # mint -> approved token waiting for its entry moment
+        self.timing_done: dict[str, float] = {}  # mint -> when its plan ended without a buy (no new plan for 1 h)
+        self.timing_notes: dict[str, str] = {}   # mint -> why this moment was chosen (goes in the buy reason)
         # No swap lock: fills are measured per transaction (Jupiter's result / tx metadata), so an exit
         # never waits for an entry's swap to land.
 
@@ -61,7 +69,8 @@ class Executor(Agent):
         self.emit("info", f"Executor online [{self.broker.mode.upper()}]: max {self.e.max_position_pct}% "
                           f"of balance per trade, max {self.e.max_open_positions} positions")
         await asyncio.gather(self.supervised("executor-exits", self.exit_loop),
-                             self.supervised("executor-entries", self.loop))
+                             self.supervised("executor-entries", self.loop),
+                             self.supervised("executor-timing", self.timing_loop))
 
     async def exit_loop(self) -> None:
         """Exits run on their own loop: a stop is never queued behind an entry's quotes and checks.
@@ -138,12 +147,110 @@ class Executor(Agent):
         ok, why = self.risk.approve_entry(v.mint)
         if not ok:
             return self.reject(v, f"Risk: {why}")
+        if not await self.timing_allows(v):
+            return
         self.desk.in_flight.add(v.mint)
         self.status("working")
         try:
             await self._enter(v)
         finally:
             self.desk.in_flight.discard(v.mint)
+            self.timing_notes.pop(v.mint, None)
+
+    # ── entry timing ──
+    def rule_text(self) -> str:
+        en = self.cfg.entry
+        return {"dip": f"ribasso di {en.dip_pct:g}% entro {en.window_minutes:g} min",
+                "bounce": f"ribasso di {en.dip_pct:g}% poi rimbalzo di {en.bounce_pct:g}% entro {en.window_minutes:g} min",
+                "confirm": f"prezzo >= {en.confirm_pct:+g}% dopo {en.confirm_minutes:g} min"}.get(en.mode, "subito") + \
+            (" (altrimenti compra a fine finestra)" if en.mode in ("dip", "bounce") and en.fallback == "buy" else "")
+
+    async def timing_allows(self, v: Verdict) -> bool:
+        """True = buy now. False = the token waits for its moment (or its plan already ended)."""
+        p = self.plans.get(v.mint)
+        if p is not None:
+            p["verdict"] = v                      # freshest clearance, used when the moment comes
+            if p["plan"].state == "buy":
+                self.plans.pop(v.mint, None)
+                self.timing_notes[v.mint] = p["plan"].why
+                return True
+            return False
+        if self.cfg.entry.mode == "now":
+            return True
+        t = now()
+        done = self.timing_done.get(v.mint)
+        if done and t - done < self.cfg.quant.horizon_minutes * 60:
+            return False                          # its moment didn't come: not re-planned for an hour (as measured)
+        if len(self.plans) >= 40:
+            self.reject(v, "too many approved tokens already waiting for their entry moment")
+            return False
+        snap = await self.desk.dex.snapshot(v.mint)
+        if snap is None or snap.price_usd <= 0:
+            self.reject(v, "entry timing: no price to start from")
+            return False
+        plan = plan_from(entry_settings(self.cfg.entry))
+        plan.max_liq_drop_pct = self.cfg.entry.max_liq_drop_pct
+        self.plans[v.mint] = {"plan": plan, "t0": t, "ref_price": snap.price_usd, "ref_liq": snap.liquidity_usd,
+                              "verdict": v, "symbol": v.symbol, "armed_ts": 0.0}
+        self.state.bump("timing_wait")
+        msg = f"approvato, aspetto il momento giusto: {self.rule_text()}"
+        self.desk.store.add_decision(t, "executor", "wait", v.mint, v.symbol, msg, {"score": v.score,
+                                     "ref_price": snap.price_usd, "rule": entry_settings(self.cfg.entry)})
+        self.emit("info", msg, v.mint, v.symbol)
+        return False
+
+    def _end_plan(self, mint: str, p: dict, why: str) -> None:
+        self.plans.pop(mint, None)
+        self.timing_done[mint] = now()
+        if len(self.timing_done) > 5000:
+            cut = now() - 3600
+            self.timing_done = {k: x for k, x in self.timing_done.items() if x > cut}
+        self.state.bump("timing_skip")
+        self.desk.store.add_decision(now(), "executor", "reject", mint, p["symbol"], f"entry timing: {why}",
+                                     {"score": p["verdict"].score})
+        self.emit("reject", f"no trade: entry timing: {why}", mint, p["symbol"], deep=True)
+
+    def timing_step(self, snaps: dict, t: float) -> list[Verdict]:
+        """Advance every waiting plan with fresh prices (pure apart from bookkeeping). Returns the verdicts to buy
+        now: a plan whose moment came and whose last Analyst verdict is still fresh. A plan whose moment came with
+        a stale verdict stays armed and buys on the Analyst's next verdict (re-scored every ~90 s), for 150 s."""
+        go = []
+        for mint, p in list(self.plans.items()):
+            plan: EntryPlan = p["plan"]
+            if plan.state == "buy":
+                if t - p["armed_ts"] > 150:
+                    self._end_plan(mint, p, f"{plan.why}, ma nessun segnale fresco dell'Analyst entro 150 s")
+                continue
+            snap = snaps.get(mint)
+            if snap is None or snap.price_usd <= 0:
+                if t - p["t0"] > plan.window_s + 60:
+                    self._end_plan(mint, p, "nessun prezzo durante l'attesa")
+                continue
+            move = (snap.price_usd / p["ref_price"] - 1) * 100
+            liq = snap.liquidity_usd / p["ref_liq"] if p["ref_liq"] > 0 else None
+            st = plan.update(t - p["t0"], move, liq)
+            if st == "buy":
+                p["armed_ts"] = t
+                self.emit("info", f"momento d'acquisto: {plan.why}", mint, p["symbol"])
+                ok, _ = self.verify_clearance(p["verdict"])
+                if ok:
+                    go.append(p["verdict"])
+            elif st in ("skip", "cancel"):
+                self._end_plan(mint, p, plan.why)
+        return go
+
+    async def timing_loop(self) -> None:
+        while not self.desk.stop.is_set():
+            if not await self.sleep(max(3.0, float(self.cfg.entry.poll_seconds))):
+                return
+            if not self.plans:
+                continue
+            try:
+                snaps = await self.desk.dex.snapshots(list(self.plans), fresh=True, lane="entry")
+            except Exception:  # noqa: BLE001 - next tick retries
+                continue
+            for v in self.timing_step(snaps or {}, now()):
+                await self.desk.verdicts.put(v)  # back through handle_verdict: clearance + Risk checks again
 
     async def _enter(self, v: Verdict) -> None:
         pf = self.desk.portfolio
@@ -249,7 +356,8 @@ class Executor(Agent):
         self.desk.exec_stats.append({"side": "buy", **speed})
 
         rep = v.clearance.report
-        reason = (f"score {v.score:.2f} | {'; '.join(v.rationale[:5])} | filters: "
+        timing = self.timing_notes.pop(v.mint, "")
+        reason = (f"score {v.score:.2f} | {'; '.join(v.rationale[:5])} |{' timing: ' + timing + ' |' if timing else ''} filters: "
                   + ", ".join(f"{c.name}={c.value}" for c in rep.checks)
                   + f" | size {size:.4f} SOL = {self.e.max_position_pct}% of {cash:.3f} | impact {impact:.2f}% "
                     f"| round-trip {rt_loss:.2f}% | {qv.short()}{' | ' + mv.short() if mv else ''} | exec {fill.route}: checks "

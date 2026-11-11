@@ -63,6 +63,7 @@ HOST_LIMITS = {
     "api.dexscreener.com#risk": 60,      # open positions: priority lane
     "api.dexscreener.com#shadow": 60,    # 60-minute follow-up of evaluated tokens
     "api.dexscreener.com#revisit": 20,   # second look at archived (dropped) tokens
+    "api.dexscreener.com#entry": 10,     # approved tokens waiting for their entry moment (one batched call)
     "api.rugcheck.xyz": 12,
     "lite-api.jup.ag": 25,               # entry quotes
     "lite-api.jup.ag#risk": 30,          # exit-value quotes for open positions

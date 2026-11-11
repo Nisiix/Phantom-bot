@@ -119,6 +119,21 @@ class ExecutorCfg:
 
 
 @dataclass
+class EntryCfg:
+    # When to buy an approved token (desk/entry.py). "now" = at once; "dip" / "bounce" / "confirm" = wait up to
+    # window_minutes for a better moment. The Controller tests these rules and switches when one is confirmed.
+    mode: str = "now"
+    window_minutes: float = 10.0
+    dip_pct: float = 5.0
+    bounce_pct: float = 2.0
+    confirm_minutes: float = 5.0
+    confirm_pct: float = 0.0
+    fallback: str = "skip"
+    max_liq_drop_pct: float = 20.0
+    poll_seconds: float = 6.0
+
+
+@dataclass
 class RiskCfg:
     hard_stop_pct: float = -6.0
     # Paper-only trial of a stop wider than the -6% hard limit (user's choice 2026-11-11, from the Controller's
@@ -249,6 +264,7 @@ class Config:
     filter: FilterCfg = field(default_factory=FilterCfg)
     analyst: AnalystCfg = field(default_factory=AnalystCfg)
     executor: ExecutorCfg = field(default_factory=ExecutorCfg)
+    entry: EntryCfg = field(default_factory=EntryCfg)
     risk: RiskCfg = field(default_factory=RiskCfg)
     recap: RecapCfg = field(default_factory=RecapCfg)
     quant: QuantCfg = field(default_factory=QuantCfg)
@@ -349,6 +365,18 @@ def enforce_hard_limits(cfg: Config) -> None:
             or (aw and sum({**_W, **aw}.values()) <= 0):
         w.append(f"config: bad [analyst] weights {aw!r}, using the built-in weights")
         a.weights = {}
+    en = cfg.entry
+    clamp(en, "mode", lambda v: v in ("now", "dip", "bounce", "confirm"), "now",
+          'entry mode must be "now", "dip", "bounce" or "confirm"')
+    clamp(en, "fallback", lambda v: v in ("skip", "buy"), "skip", 'entry fallback must be "skip" or "buy"')
+    clamp(en, "window_minutes", lambda v: 1 <= v <= 15, 10.0, "entry window must be 1-15 min")
+    clamp(en, "dip_pct", lambda v: 0.5 <= v <= 30, 5.0, "entry dip must be 0.5-30%")
+    clamp(en, "bounce_pct", lambda v: 0.5 <= v <= 20, 2.0, "entry bounce must be 0.5-20%")
+    clamp(en, "confirm_minutes", lambda v: 0.5 <= v <= en.window_minutes, min(5.0, en.window_minutes),
+          "entry confirm time must be within the entry window")
+    clamp(en, "confirm_pct", lambda v: -10 <= v <= 20, 0.0, "entry confirm level must be -10..+20%")
+    clamp(en, "max_liq_drop_pct", lambda v: 5 <= v <= 50, 20.0, "entry liquidity cancel must be 5-50%")
+    clamp(en, "poll_seconds", lambda v: 3 <= v <= 30, 6.0, "entry price poll must be 3-30 s")
     c = cfg.controller
     clamp(c, "interval_minutes", lambda v: 1 <= v <= 24 * 60, 10.0, "controller interval must be 1-1440 min")
     clamp(c, "health_seconds", lambda v: 10 <= v <= 3600, 60.0, "controller health checks every 10-3600 s")
@@ -389,7 +417,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "risk", "recap", "quant", "gmgn", "dashboard", "pages", "controller", "model", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "entry", "risk", "recap", "quant", "gmgn", "dashboard", "pages", "controller", "model", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()
