@@ -648,6 +648,9 @@ class _Probe:
     async def metadata(self, uri):
         return self.meta.get(uri, {})
 
+    async def telegram(self, url):
+        return self.tg.get(url, {}) if hasattr(self, "tg") else {}
+
     async def site(self, url, mint):
         from desk.identity import own_site
         ca_mint, xs = self.sites.get(own_site(url), (None, set()))
@@ -712,6 +715,36 @@ def _rc_with_creator(report, creator):
         return r
     rep.__wrapped__ = base
     return rep
+
+
+def test_telegram_page_parsing():
+    from desk.identity import parse_tg_page
+    ok = parse_tg_page('<div class="tgme_page_title" dir="auto">\n  <span dir="auto">GTAVI AudaCity Portal</span>'
+                       '</div><div class="tgme_page_extra">1 234 subscribers</div>')
+    assert ok["exists"] and ok["kind"] == "channel" and ok["members"] == 1234
+    grp = parse_tg_page('<div class="tgme_page_title"><span dir="auto">X</span></div>'
+                        '<div class="tgme_page_extra">5 210 members, 300 online</div>')
+    assert grp["kind"] == "group" and grp["members"] == 5210
+    dead = parse_tg_page('<title>Telegram: Contact @nobody</title><div class="tgme_page_extra">If you have Telegram'
+                         '</div>')
+    assert not dead["exists"]
+
+
+def test_identity_telegram_points(tmp_path):
+    from desk.models import Candidate
+    real = "REALpump"
+    probe = _Probe({"realsite.xyz": (real, set())})
+    probe.tg = {"https://t.me/realportal": {"ok": True, "exists": True, "kind": "channel", "members": 400},
+                "https://t.me/ghost": {"ok": True, "exists": False}}
+    desk, f = _identity_filter(tmp_path, probe)
+    s = snap(mint=real, symbol="DACITY", name="AudaCity", websites=["https://realsite.xyz"],
+             socials={"telegram": "https://t.me/realportal"})
+    c = next(c for c in asyncio.run(f.deep(Candidate(real), s)).checks if c.name == "rugged_name")
+    assert c.passed and "Telegram channel reachable, 400 subscribers" in c.detail     # CA 2 + profile 1 + TG 1
+    s = snap(mint="GHOSTpump", symbol="DACITY", name="AudaCity", websites=[],
+             socials={"twitter": "https://x.com/someone", "telegram": "https://t.me/ghost"})
+    c = next(c for c in asyncio.run(f.deep(Candidate("GHOSTpump"), s)).checks if c.name == "rugged_name")
+    assert not c.passed and "does not exist" in c.detail
 
 
 def test_identity_link_parsing():

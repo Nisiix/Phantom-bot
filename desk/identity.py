@@ -14,7 +14,8 @@ launch (or right after it), they rug, and the rugged-name ledger then blocked th
     but the real site shows the real CA), the site links the same X account, the team paid a DexScreener profile.
 
 Evidence points (default need 3): CA on the website +2, DexScreener profile +1, own X account +1, website
-links that X account +1. Of the 34 name-blocked pump.fun tokens with a DexScreener profile up to 2026-11-11,
+links that X account +1, Telegram group/channel that exists with >= identity_tg_min_members +1; a Telegram link
+that leads nowhere -1 (read from the public t.me preview page, no Telegram account or API key needed). Of the 34 name-blocked pump.fun tokens with a DexScreener profile up to 2026-11-11,
 9 were alive the day after (26%); of the 3,108 without one, 7 (0.2%).
 """
 from __future__ import annotations
@@ -79,13 +80,13 @@ def tg_link(u: str) -> str | None:
         return None
     parts = [s for s in p.path.split("/") if s]
     if not parts or parts[0].startswith("+") or parts[0].lower() == "joinchat":
-        return "tg-invite:" + "/".join(parts).lower() if parts else None
+        return "tg-invite:" + "/".join(parts) if parts else None     # invite hashes are case-sensitive
     return parts[0].lower()
 
 
 def channels(websites: list[str], socials: dict[str, str], meta: dict | None = None) -> dict:
     """The token's own channels from DexScreener info (paid profile) and its metadata JSON."""
-    out: dict = {"x": None, "x_kind": None, "site": None, "site_url": None, "tg": None,
+    out: dict = {"x": None, "x_kind": None, "site": None, "site_url": None, "tg": None, "tg_url": None,
                  "profile": bool(websites or socials)}
     cand_x = [v for v in (socials or {}).values() if v] + [(meta or {}).get("twitter") or ""]
     for u in cand_x:
@@ -100,6 +101,7 @@ def channels(websites: list[str], socials: dict[str, str], meta: dict | None = N
         t = tg_link(u) if u else None
         if t:
             out["tg"] = t
+            out["tg_url"] = "https://t.me/" + (t.split(":", 1)[1] if t.startswith("tg-invite:") else t)
             break
     return out
 
@@ -114,6 +116,21 @@ def link_keys(ch: dict) -> list[str]:
     if ch.get("tg") and not str(ch["tg"]).startswith("tg-invite:"):
         keys.append("tg:" + ch["tg"])
     return keys
+
+
+def parse_tg_page(html: str) -> dict:
+    """t.me preview -> {"exists", "kind": group|channel|account, "members", "title"}."""
+    import html as _h
+    import re
+    title = re.search(r'class="tgme_page_title"[^>]*>\s*(?:<span[^>]*>)?([^<]*)', html)
+    extra = re.search(r'class="tgme_page_extra"[^>]*>([^<]*)', html)
+    if not title or not title.group(1).strip():
+        return {"exists": False, "kind": None, "members": None, "title": None}
+    ex = _h.unescape(extra.group(1)).strip().lower() if extra else ""
+    m = re.search(r"(\d[\d\s,.\u00a0\u202f']*)\s*(members|subscribers)", ex)
+    members = int(re.sub(r"\D", "", m.group(1))) if m else None
+    kind = "group" if "member" in ex else "channel" if "subscriber" in ex else "account"
+    return {"exists": True, "kind": kind, "members": members, "title": _h.unescape(title.group(1)).strip()[:80]}
 
 
 class SiteProbe:
@@ -154,6 +171,25 @@ class SiteProbe:
         self.cache[key] = (time.time(), out)
         return out
 
+    async def telegram(self, url: str) -> dict:
+        """Does the linked Telegram exist and is it reachable? Read from the public t.me preview page:
+        a group/channel shows its title and "N members" / "N subscribers"; a dead link shows no title."""
+        key = ("tg", url)
+        hit = self.cache.get(key)
+        if hit and time.time() - hit[0] < (3600 if hit[1].get("ok") else 600):
+            return hit[1]
+        res: dict = {"ok": False, "exists": False, "kind": None, "members": None}
+        try:
+            r = await self.client().get(url)
+            if r.status_code == 200:
+                res = {"ok": True, **parse_tg_page(r.text[:300_000])}
+            else:
+                res["error"] = f"HTTP {r.status_code}"
+        except Exception as e:  # noqa: BLE001
+            res["error"] = e.__class__.__name__
+        self.cache[key] = (time.time(), res)
+        return res
+
     async def site(self, url: str, mint: str) -> dict:
         host = own_site(url) or ""
         key = (host, mint)
@@ -187,7 +223,8 @@ class SiteProbe:
 
 
 async def verify(store, probe: SiteProbe, mint: str, creator: str | None, hit: dict, websites: list[str],
-                 socials: dict[str, str], metadata_uri: str | None, min_score: float) -> dict:
+                 socials: dict[str, str], metadata_uri: str | None, min_score: float,
+                 min_tg_members: int = 20) -> dict:
     """Is `mint` the rugged token's relaunch (or a copycat of it), or a different, real project?
 
     Returns {"ok", "permanent", "score", "detail", "channels"}."""
@@ -240,9 +277,25 @@ async def verify(store, probe: SiteProbe, mint: str, creator: str | None, hit: d
                 why.append("site links that X account")
     elif ch.get("x"):
         why.append(f"X link is a {ch['x_kind']}, not an account")
+    tg = await probe.telegram(ch["tg_url"]) if ch.get("tg_url") else {}
+    if tg.get("ok") and not tg.get("exists"):
+        score -= 1          # a Telegram link that leads nowhere: decoration, not a community
+        why.append(f"Telegram {ch['tg']} does not exist")
+    elif tg.get("exists") and tg.get("kind") in ("group", "channel"):
+        n = tg.get("members") or 0
+        unit = "members" if tg["kind"] == "group" else "subscribers"
+        if n >= min_tg_members:
+            score += 1
+            why.append(f"Telegram {tg['kind']} reachable, {n} {unit}")
+        else:
+            why.append(f"Telegram {tg['kind']} reachable but only {n} {unit}")
+    elif tg.get("exists"):
+        why.append("Telegram link is a personal account / bot, not a community")
+    elif ch.get("tg"):
+        why.append(f"Telegram not checked ({tg.get('error', '?')})")
     if creator and rug_creator:
         why.append(f"other dev ({creator[:6]})")
     ok = score >= min_score
-    return {"ok": ok, "permanent": False, "score": score, "channels": {**ch, "site_ca": bool(site.get("ca"))},
+    return {"ok": ok, "permanent": False, "score": score, "channels": {**ch, "site_ca": bool(site.get("ca")), "telegram": tg},
             "detail": f"{tag}; {'DIFFERENT PROJECT' if ok else 'not proven different'}: "
                       f"{', '.join(why) or 'no evidence'} (identity {score:.0f}/{min_score:.0f})"}

@@ -522,7 +522,8 @@ class Filter(Agent):
         try:
             return await asyncio.wait_for(
                 identity.verify(self.desk.store, self.site_probe, mint, creator, hit, snap.websites, snap.socials,
-                                metadata_uri, self.f.identity_min_score), timeout=20)
+                                metadata_uri, self.f.identity_min_score,
+                                self.f.identity_tg_min_members), timeout=25)
         except Exception as e:  # noqa: BLE001 - unproven = held back, re-checked on the next pass
             return {"ok": False, "permanent": False, "score": 0, "channels": {},
                     "detail": f"same name as rugged {hit['symbol'] or hit['key']}; identity check failed "
