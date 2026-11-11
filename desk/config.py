@@ -162,6 +162,7 @@ class RiskCfg:
     streak_pause_minutes: float = 0
     daily_loss_limit_pct: float = 30.0
     liquidity_drop_exit_pct: float = 35.0
+    data_loss_exit_seconds: float = 60.0   # emergency exit after this long with no price and no sell quote (0 = off)
     max_hold_minutes: float = 0
     price_poll_seconds: float = 2.0
     hot_poll_seconds: float = 1.0          # ...while a position is pumping (min 1 s)

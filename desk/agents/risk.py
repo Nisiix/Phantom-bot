@@ -9,7 +9,8 @@ Exits (checked every couple of seconds on executable value, i.e. after exit cost
     (desk/exits.py; levels raised by the sell buffer = configured minimum or measured exit slippage)
   * while a position is pumping Risk checks the price every second and a real sell quote every ~3 s
   * LIQUIDITY PULL: pool liquidity drops liquidity_drop_exit_pct% vs. entry -> emergency exit
-  * DATA LOSS: no price for 60s and no sell quote -> emergency exit
+  * DATA LOSS: no price and no sell quote for data_loss_exit_seconds -> emergency exit (0 = off: user's choice
+    2026-11-11, the desk keeps holding while the feeds are silent)
   * optional time stop (forced off when loss_stop = false)
 
 Entry permission (Executor must ask before every buy):
@@ -337,13 +338,14 @@ class Risk(Agent):
                 # The batched feed can return a wrong/thin pair: confirm on the full pair list before dumping.
                 try:
                     full = await self.desk.dex.snapshot(mint, lane="risk")
-                except Exception:  # noqa: BLE001 - feed down: the DATA_LOSS rule covers a dead market
+                except Exception:  # noqa: BLE001 - feed down: keep the batched reading
                     full = None
                 if full is not None:
                     pos.last_liquidity_usd = full.liquidity_usd
                     reason, detail = exit_decision(pos, self.r, t, full.liquidity_usd, lock, speed)
-            if reason is None and t - pos.last_price_ts > 60:
-                reason, detail = "DATA_LOSS", "no price and no sell quote for 60s"
+            dl = self.r.data_loss_exit_seconds
+            if reason is None and dl > 0 and t - pos.last_price_ts > dl:
+                reason, detail = "DATA_LOSS", f"no price and no sell quote for {dl:g}s"
             if pos.trailing_active and mint not in self.trail_announced:
                 self.trail_announced.add(mint)
                 self.emit("risk", f"trailing stop ARMED at peak {pos.peak_pnl_pct:+.1f}%", mint, pos.symbol)
