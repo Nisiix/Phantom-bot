@@ -383,9 +383,20 @@ class Space:
     the current variant, and how to generate others."""
 
     def __init__(self, agent: str, rows: list[dict], current: dict, returns, grid: list[dict],
-                 sampler, describe, universe_note: str) -> None:
+                 sampler, describe, universe_note: str, safe=None) -> None:
         self.agent, self.rows, self.current, self.returns = agent, rows, current, returns
         self.grid, self.sampler, self.describe, self.note = grid, sampler, describe, universe_note
+        self.safe = safe      # optional safe(vec, base, idx) -> bool: a variant must also pass it to win
+
+
+def no_less_safe(vec: list[float], base: list[float], idx: list[int]) -> bool:
+    """Exit rules must win AND stay at least as safe (user's ask 2026-11-11: "vincente e abbastanza sicuro"):
+    no more losing trades than now, and the worst 10% of trades no more than 1 point worse on average."""
+    if sum(vec[i] < 0 for i in idx) > sum(base[i] < 0 for i in idx):
+        return False
+    k = max(1, len(idx) // 10)
+    tail = lambda v: statistics.fmean(sorted(v[i] for i in idx)[:k])   # noqa: E731
+    return tail(vec) >= tail(base) - 1.0
 
 
 def _key(v: dict) -> str:
@@ -502,7 +513,9 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
 
     def r_desc(v):
         return [f"[risk] {k} = {v[k]:g}" for k in cur_r if abs(v[k] - cur_r[k]) > 1e-9]
-    spaces.append(Space("Risk", rows, cur_r, r_ret, grid, r_sample, r_desc, note + ", con percorso di prezzo"))
+    spaces.append(Space("Risk", rows, cur_r, r_ret, grid, r_sample, r_desc,
+                        note + ", con percorso di prezzo; una variante vince solo se non aumenta i trade in perdita "
+                               "né peggiora il 10% peggiore", safe=no_less_safe))
 
     # ── Risk, wider stops: MEASURE ONLY. The -6% stop is a hard limit, so these never become proposals
     # (within_hard_limits drops them); the report shows them apart, to see whether young volatile tokens would
@@ -703,6 +716,8 @@ def evaluate_space(sp: Space, rng: random.Random, n_random: int, previous: list[
             changed = sum(1 for i in train if abs(vec[i] - base[i]) > 1e-9)
             if changed < 3:
                 continue
+            if sp.safe is not None and not sp.safe(vec, base, train):
+                continue
             st = paired(d_train)
             if best is None or st["mean"] > best[1]["mean"]:
                 best = (k, st, changed)
@@ -715,7 +730,9 @@ def evaluate_space(sp: Space, rng: random.Random, n_random: int, previous: list[
         k, st, changed = best
         vec = vecs[k]
         va = paired([vec[i] - base[i] for i in valid], z=1.96 if sit == "all" else 2.58)
-        if st["mean"] > 0 and va["n"] >= max(10, min_rows // 3) and va["lo"] > 0:
+        if sp.safe is not None and not sp.safe(vec, base, valid):
+            verdict = "nessun miglioramento (meno sicura sui dati di verifica)"
+        elif st["mean"] > 0 and va["n"] >= max(10, min_rows // 3) and va["lo"] > 0:
             verdict = "solida"
         elif st["mean"] > 0 and va["mean"] > 0:
             verdict = "promettente"

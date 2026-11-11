@@ -125,3 +125,13 @@ def test_fixed_lock_variant():
     assert exit_decision(p, r, time.time(), 80_000)[0] is None
     p.mark_value_sol = 1.035
     assert exit_decision(p, r, time.time(), 80_000)[0] == "PROFIT_LOCK"
+
+
+def test_controller_picks_lock_levels_only_if_no_less_safe():
+    from desk.controller import no_less_safe
+    base = [5.0, -4.0, 3.0, 10.0, -25.0, 2.0, 1.0, 4.0, 6.0, 8.0]
+    idx = list(range(len(base)))
+    better_safer = [5.0, 3.0, 3.0, 10.0, -25.0, 2.0, 1.0, 4.0, 6.0, 8.0]     # a loser turned into a win
+    richer_riskier = [9.0, -4.0, -1.0, 30.0, -25.0, 2.0, 1.0, 4.0, 6.0, 8.0]  # more profit, one more loser
+    assert no_less_safe(better_safer, base, idx)
+    assert not no_less_safe(richer_riskier, base, idx)
