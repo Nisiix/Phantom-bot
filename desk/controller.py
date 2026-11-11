@@ -471,7 +471,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
     trail_on = sorted({max(12.0, r.trail_activate_pct), 12.0, 15.0, 20.0, 25.0, 30.0, 40.0})
     trail_on = [x for x in trail_on if x >= 12.0]
     dists = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
-    holds = [0.0, 15.0, 30.0, 45.0]
+    holds = [0.0, 15.0, 30.0, 45.0] if r.loss_stop else [0.0]    # no time exit while there is no loss stop
     cur_r = {"hard_stop_pct": exit_stop, "trail_activate_pct": r.trail_activate_pct,
              "trail_distance_pct": r.trail_distance_pct, "max_hold_minutes": float(r.max_hold_minutes),
              "profit_lock_activate_pct": float(r.profit_lock_activate_pct),

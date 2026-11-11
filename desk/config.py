@@ -15,6 +15,7 @@ from pathlib import Path
 HARD_MAX_POSITION_PCT = 8.0      # never more than 8% of current balance per trade
 HARD_MIN_SCORE = 0.6             # Analyst score under 0.6 = no trade
 HARD_STOP_PCT = -6.0             # hard stop at -6%
+NO_STOP_PCT = -100.0             # loss_stop = false: the stop sits at -100%, i.e. it never sells at a loss
 PAPER_STOP_FLOOR_PCT = -30.0     # paper-only trial of wider stops (user's choice 2026-11-11): never wider than this
 HARD_TRAIL_ACTIVATE_PCT = 12.0   # trail winners only after +12%
 HARD_MAX_TOP10_PCT = 20.0
@@ -150,6 +151,10 @@ class RiskCfg:
     # The stop Risk actually exits at (set on every load by enforce_hard_limits, not a config.toml key):
     # paper_hard_stop_pct in paper when set, else hard_stop_pct. QUANT labels keep using hard_stop_pct.
     exit_stop_pct: float = 0.0
+    # User's rule 2026-11-11 (paper AND live): no stop loss while a position is at break-even or at a loss. false =
+    # no hard stop (exit_stop_pct becomes NO_STOP_PCT) and no time exit (max_hold_minutes forced to 0); the profit
+    # stops (profit lock, rising stop, trailing) and the rug exits (liquidity pull, data loss) stay. true = old rules.
+    loss_stop: bool = True
     trail_activate_pct: float = 12.0
     trail_distance_pct: float = 6.0
     cooldown_after_loss_minutes: float = 20
@@ -352,6 +357,12 @@ def enforce_hard_limits(cfg: Config) -> None:
           "paper stop trial must be 0 (off) or between -30% and 0")
     r.exit_stop_pct = r.paper_hard_stop_pct if (cfg.mode == "paper" and r.paper_hard_stop_pct < 0) \
         else r.hard_stop_pct
+    if not r.loss_stop:
+        # User's rule 2026-11-11: no stop at a loss (paper and live). The time exit closes at whatever P&L the
+        # token has after N minutes, i.e. mostly at a loss, so it goes too (the Controller can't turn it back on).
+        r.exit_stop_pct = NO_STOP_PCT
+        clamp(r, "max_hold_minutes", lambda v: not v, 0.0,
+              "no time exit while loss_stop = false (it would sell at a loss)")
     clamp(r, "trail_activate_pct", lambda v: v >= HARD_TRAIL_ACTIVATE_PCT, HARD_TRAIL_ACTIVATE_PCT,
           "trailing may only start after +12%")
     clamp(r, "trail_distance_pct", lambda v: 0 < v < HARD_TRAIL_ACTIVATE_PCT, 6.0,

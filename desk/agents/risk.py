@@ -1,7 +1,8 @@
 """RISK — owns every exit and every permission to enter.
 
 Exits (checked every couple of seconds on executable value, i.e. after exit costs):
-  * HARD STOP at -6%                       (no exceptions, no "give it a minute")
+  * HARD STOP at -6%                       (off when [risk] loss_stop = false: user's rule 2026-11-11, no stop
+                                            while the position is at break-even or at a loss, paper and live)
   * TRAILING STOP armed only after +12%;   then exit if value falls trail_distance% below the peak
   * PROFIT LOCK: after +8% net (+10% on a fast move) the stop moves to +4% net, sale fees included; from a +30%
     peak it rises with the price (70% of the peak, up to 85% when the rise is fast) and never comes down
@@ -9,7 +10,7 @@ Exits (checked every couple of seconds on executable value, i.e. after exit cost
   * while a position is pumping Risk checks the price every second and a real sell quote every ~3 s
   * LIQUIDITY PULL: pool liquidity drops liquidity_drop_exit_pct% vs. entry -> emergency exit
   * DATA LOSS: no price for 60s and no sell quote -> emergency exit
-  * optional time stop
+  * optional time stop (forced off when loss_stop = false)
 
 Entry permission (Executor must ask before every buy):
   * no averaging down: never add to a held token
@@ -37,7 +38,7 @@ def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None,
     rises with the price."""
     pnl = pos.pnl_pct
     stop = getattr(cfg, "exit_stop_pct", 0) or cfg.hard_stop_pct    # paper stop trial, else the hard stop
-    if pnl <= stop:
+    if getattr(cfg, "loss_stop", True) and pnl <= stop:
         return "HARD_STOP", f"P&L {pnl:+.2f}% <= {stop}%"
     if not pos.trailing_active and pos.peak_pnl_pct >= cfg.trail_activate_pct:
         pos.trailing_active = True
@@ -202,7 +203,8 @@ class Risk(Agent):
     async def run(self) -> None:
         self.status("working")
         self._rollover(force=not self.day)
-        self.emit("info", f"Risk online: stop {self.r.exit_stop_pct or self.r.hard_stop_pct}%, trail after +{self.r.trail_activate_pct}% "
+        stop_txt = f"{self.r.exit_stop_pct or self.r.hard_stop_pct}%" if self.r.loss_stop else "none at a loss"
+        self.emit("info", f"Risk online: stop {stop_txt}, trail after +{self.r.trail_activate_pct}% "
                           f"({self.r.trail_distance_pct}% distance), daily limit "
                           + (f"-{self.r.daily_loss_limit_pct}%" if self.cfg.is_live else "off in paper (live only)"))
         await self.supervised("risk", self.loop)

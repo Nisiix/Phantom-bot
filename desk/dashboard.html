@@ -814,17 +814,17 @@ function tokenCell(sym, mint, pnl) { const c = el("td"), a = el("a", "tok", sym 
   if (pnl != null) a.style.setProperty("--tc", css(pnl >= 0 ? "--gain" : "--loss"));
   a.href = "https://dexscreener.com/solana/" + encodeURIComponent(mint || ""); a.target = "_blank"; a.rel = "noopener noreferrer"; c.append(a); return c; }
 function rail(p, rules) {
-  const lo = Math.min(rules.stop, p.stop_pct, p.pnl_pct), hi = Math.max(rules.trail * 2, p.peak_pct, p.pnl_pct), X = (v) => (v - lo) / (hi - lo || 1) * 100;
+  const lo = Math.min(rules.stop ?? 0, p.stop_pct ?? 0, p.pnl_pct), hi = Math.max(rules.trail * 2, p.peak_pct, p.pnl_pct), X = (v) => (v - lo) / (hi - lo || 1) * 100;
   const r = el("div", "rail"); r.append(el("div", "bg"));
   const z = el("div", "z"); z.style.left = X(0) + "%"; const t = el("div", "t"); t.style.left = X(rules.trail) + "%";
   const pt = el("div", "p"); pt.style.left = X(p.pnl_pct) + "%"; pt.style.background = css(p.pnl_pct >= 0 ? "--gain" : "--loss");
-  r.append(z, t, pt); r.title = `stop ${sgn(p.stop_pct, 1)}% · ora ${sgn(p.pnl_pct, 1)}% · trailing da +${rules.trail}%`; return r;
+  r.append(z, t, pt); r.title = `${p.stop_pct == null ? "nessuno stop in perdita" : "stop " + sgn(p.stop_pct, 1) + "%"} · ora ${sgn(p.pnl_pct, 1)}% · trailing da +${rules.trail}%`; return r;
 }
 function renderPositions(s) {
   const box = $("positions"); box.replaceChildren();
   if (!s.positions.length) { box.append(el("div", "empty", "Nessuna posizione aperta: il desk aspetta un segnale che superi tutte le regole.")); return; }
   const rows = s.positions.map((p) => { const r = el("tr"), rc = el("td"); rc.append(rail(p, s.rules));
-    const ex = el("td", "n"); ex.append(el("span", "badge" + (p.trailing ? " trail" : ""), (p.trailing ? "trailing " : "stop ") + sgn(p.stop_pct, 1) + "%"));
+    const ex = el("td", "n"); ex.append(el("span", "badge" + (p.trailing ? " trail" : ""), p.stop_pct == null ? "nessuno stop" : (p.trailing ? "trailing " : "stop ") + sgn(p.stop_pct, 1) + "%"));
     r.append(tokenCell(p.symbol, p.mint, p.pnl_pct), td(sol(p.cost, 3), "n"), td(sgn(p.pnl_pct) + "%", "n " + cls(p.pnl_pct)), td(PX ? usdP(p.value - p.cost) : sgn(p.value - p.cost, 4), "n " + cls(p.pnl_pct)), rc, ex,
       td(Math.round(p.age_min) + "m", "n"), td(fx(p.score, 2), "n")); r.title = p.reason; return r; });
   box.append(table([["Token"], ["Costo", 1], ["P&L %", 1], [PX ? "P&L $" : "P&L SOL", 1], ["Rischio"], ["Uscita", 1], ["Età", 1], ["Score", 1]], rows));
@@ -901,7 +901,7 @@ function renderFeed(s) {
 // ── rules, live gate, QUANT calibration ──
 function renderRules(s) {
   const r = $("rules"); r.replaceChildren(); const add = (v, l) => { const d = el("div"); d.append(el("b", null, v), document.createTextNode(l)); r.append(d); };
-  add(s.rules.max_pos_pct + "%", "massimo per trade"); add(s.rules.stop + "%", "stop fisso");
+  add(s.rules.max_pos_pct + "%", "massimo per trade"); add(s.rules.stop == null ? "nessuno" : s.rules.stop + "%", s.rules.stop == null ? "stop in perdita" : "stop fisso");
   add("+" + s.rules.trail + "%", "attiva il trailing"); add("≥ " + s.rules.min_score, "punteggio minimo");
   const g = $("gate"); g.replaceChildren(); const body = el("div");
   body.append(el("b", null, s.mode === "live" ? "Modalità live attiva. " : s.live_gate.ok ? "Live sbloccabile. " : "Live bloccato. "),

@@ -78,7 +78,8 @@ class Dashboard:
             "pnl_pct": p.pnl_pct, "peak_pct": p.peak_pnl_pct, "trailing": p.trailing_active,
             "stop_pct": max(((p.peak_value_sol * (1 - d.cfg.risk.trail_distance_pct / 100)) / p.cost_sol - 1) * 100
                             if p.trailing_active and p.cost_sol else (d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct),
-                            (position_lock_level(p) + p.lock_buffer) if p.lock_armed_on else -100.0),
+                            (position_lock_level(p) + p.lock_buffer) if p.lock_armed_on else -100.0)
+            if d.cfg.risk.loss_stop or p.trailing_active or p.lock_armed_on else None,   # None = no stop at a loss
             "profit_lock": position_lock_level(p) if p.lock_armed_on else None,
             "age_min": (t - p.entry_ts) / 60, "score": p.score, "ev_pct": p.ev_pct, "reason": p.entry_reason,
         } for p in pf.positions.values()]
@@ -107,7 +108,7 @@ class Dashboard:
                         "max_open": d.cfg.executor.max_open_positions},
             "gates": {"day_halted": r.day_halted, "pause_left": max(0.0, r.pause_until - t),
                       "cooldown_left": cd_left},
-            "rules": {"max_pos_pct": d.cfg.executor.max_position_pct, "stop": d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct,
+            "rules": {"max_pos_pct": d.cfg.executor.max_position_pct, "stop": (d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct) if d.cfg.risk.loss_stop else None,
                       "daily_limit": d.cfg.risk.daily_loss_limit_pct if d.cfg.is_live else 0.0,  # live only
                       "trail": d.cfg.risk.trail_activate_pct, "min_score": d.cfg.analyst.min_score},
             "quant": {"status": q.status(), "enforcing": q.enforcing, "samples": q.effective_samples,

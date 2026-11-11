@@ -886,3 +886,40 @@ def test_scout_graduation_restarts_watch_window(tmp_path):
     sc.watch["G"] = Watch(Candidate("G", "GRD", source="pumpfun:new"), added=old, first_seen=old)
     sc.discover("G", "GRD", "", "pumpfun:migration", urgent=True)
     assert time.time() - sc.watch["G"].added < 5 and sc.watch["G"].first_seen == old
+
+
+# ── no stop at a loss (user's rule 2026-11-11, paper and live) ──
+@pytest.mark.parametrize("mode", ["paper", "live"])
+def test_no_loss_stop_config(mode):
+    cfg = Config()
+    cfg.mode = mode
+    cfg.risk.loss_stop = False
+    cfg.risk.paper_hard_stop_pct = -25.0
+    cfg.risk.max_hold_minutes = 45
+    enforce_hard_limits(cfg)
+    assert cfg.risk.exit_stop_pct == -100.0
+    assert cfg.risk.max_hold_minutes == 0
+    assert cfg.risk.hard_stop_pct == -6.0         # the QUANT label barrier is unchanged
+
+
+def test_no_loss_stop_holds_losers_but_keeps_profit_and_rug_exits():
+    cfg = Config()
+    cfg.risk.loss_stop = False
+    enforce_hard_limits(cfg)
+    r = cfg.risk
+    t = time.time()
+    for v in (1.0, 0.94, 0.70, 0.30, 0.02):        # break-even down to -98%: no exit
+        assert exit_decision(position(1.0, v), r, t, 80_000)[0] is None
+    old = position(1.0, 0.80)
+    old.entry_ts = t - 6 * 3600                     # held for hours at a loss: no time exit
+    assert exit_decision(old, r, t, 80_000)[0] is None
+    p = position(1.0, 1.11, peak=1.11)              # profit lock still arms and sells in profit
+    p.entry_ts = t - 600
+    assert exit_decision(p, r, t, 80_000)[0] is None and p.lock_armed_on
+    p.mark_value_sol = 1.04
+    assert exit_decision(p, r, t, 80_000)[0] == "PROFIT_LOCK"
+    p = position(1.0, 1.40, peak=1.40)              # trailing still sells
+    exit_decision(p, r, t, 80_000)
+    p.mark_value_sol = 1.40 * 0.90
+    assert exit_decision(p, r, t, 80_000)[0] in ("TRAILING_STOP", "PROFIT_LOCK")
+    assert exit_decision(position(1.0, 0.7), r, t, 40_000)[0] == "LIQUIDITY_PULL"   # rug: pool pulled

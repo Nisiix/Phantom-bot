@@ -140,6 +140,11 @@ max_liq_drop_pct = 20.0
 poll_seconds = 6.0        # price check of waiting tokens (one batched DexScreener call)
 
 [risk]
+# NO STOP AT A LOSS (user's rule 2026-11-11, paper AND live): while a position is at break-even or at a loss no stop
+# sells it (no hard stop, no time exit). Only the profit stops sell (profit lock +8/+10 -> +4%, the stop rising
+# from +20% at 70% of the peak, the trailing) plus the two rug exits: pool liquidity pulled (liquidity_drop_exit_pct)
+# and no price/no sell quote for 60 s. true = back to hard_stop_pct / paper_hard_stop_pct and max_hold_minutes.
+loss_stop = false
 hard_stop_pct = -4.0          # user rule: hard stop at -6% (can only be tightened). -4: Controller proposal 2026-11-10
 paper_hard_stop_pct = -25.0   # PAPER ONLY, user's choice 2026-11-11: trial of a stop wider than the -6% hard limit
                               # (Controller measure "Stop più larghi": -25% did +5.8 pts/token on 41 tokens, still uncertain).
@@ -151,7 +156,7 @@ max_consecutive_losses = 3           # ...and a longer pause after a losing stre
 streak_pause_minutes = 0               # 0 = no pause after a losing streak (set e.g. 30 to pause new buys after 3 losses in a row)
 daily_loss_limit_pct = 30.0          # live only: halt new entries for the day after -30% equity (ignored in paper)
 liquidity_drop_exit_pct = 35.0       # emergency exit if pool liquidity drops this much
-max_hold_minutes = 45                # 0 = no time stop (45: Controller proposal 2026-11-10)
+max_hold_minutes = 0                 # 0 = no time stop (was 45; forced to 0 while loss_stop = false)
 price_poll_seconds = 2.0
 hot_poll_seconds = 1.0               # while a position is pumping (peak up 5+ points in the last minute): price
                                      # every second (the DexScreener positions lane allows 60 calls/min) and a
