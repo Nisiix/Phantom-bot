@@ -934,4 +934,4 @@ def test_profit_lock_is_never_off(loss_stop):
     cfg.risk.profit_lock_activate_pct = 0          # what the Controller applied on 2026-11-11 19:41 UTC
     enforce_hard_limits(cfg)
     assert cfg.risk.profit_lock_activate_pct == 8.0
-    assert any("profit lock can't be turned off" in w for w in cfg.warnings)
+    assert any("profit lock can never be turned off" in w for w in cfg.warnings)
