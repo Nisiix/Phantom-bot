@@ -128,6 +128,8 @@ class Scout(Agent):
             if tx == "create":
                 self.discover(msg["mint"], msg.get("symbol", "?"), msg.get("name", ""), "pumpfun:new",
                               creator=msg.get("traderPublicKey"))
+                if self.desk.devwatch is not None:      # the creator's own buy: "what it held from the start"
+                    self.desk.devwatch.note_create(msg["mint"], msg.get("traderPublicKey"), msg.get("initialBuy"))
             elif tx == "migrate" or "pool" in msg and tx != "create":
                 self.discover(msg["mint"], msg.get("symbol", "?"), msg.get("name", ""), "pumpfun:migration",
                               urgent=True)

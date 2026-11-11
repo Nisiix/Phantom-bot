@@ -70,6 +70,8 @@ async def build(cfg: Config) -> tuple[Desk, object]:
     portfolio = Portfolio(store, cfg.mode, starting)
     desk = Desk(cfg=cfg, hub=hub, store=store, http=http, dex=DexScreener(http), rug=RugCheck(http), jup=jup,
                 rpc=rpc, portfolio=portfolio, authority=ClearanceAuthority())
+    from .devwatch import DevWatch
+    desk.devwatch = DevWatch(store, rpc, cfg.devwatch)
     # QUANT learns from paper AND live outcomes (paper fills are priced on real quotes).
     q = cfg.quant
     desk.quant = model_from_cfg(cfg)

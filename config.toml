@@ -199,6 +199,19 @@ profit_lock_speed_seconds = 60.0
 # matters for an expensive token.
 profit_lock_fee_multiple = 1.0
 
+[devwatch]
+# CREATOR SELLING (user's rule 2026-11-11, desk/devwatch.py): the token's creator and the wallets linked to it
+# (RugCheck insider networks that contain the creator, the creator's funder when GMGN knows it) must not sell more
+# than max_sold_pct of what they held from the start (the creator's own buy at launch, or the most the group was
+# seen holding). Moves between wallets of the group are not sales. No position open -> the token is marked
+# dangerous and dropped for good; position open -> sold at once, whatever the P&L. Balances are read on-chain.
+enabled = true
+max_sold_pct = 10.0
+min_hold_pct = 0.1                 # the group held under 0.1% of the supply (dust): not judged
+position_check_seconds = 20.0      # open positions: one RPC call per position this often
+filter_check_seconds = 60.0        # tokens without a position: one RPC call per token at most this often
+max_linked_wallets = 12
+
 [recap]
 interval_hours = 4
 

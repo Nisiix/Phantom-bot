@@ -39,6 +39,7 @@ import time
 
 from ..clients.feeds import is_pump_copycat, is_pump_token
 from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
+from ..devwatch import linked_wallets
 from ..onchain_lp import OnchainLP
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
 from ..research import market_features, rug_features
@@ -500,6 +501,12 @@ class Filter(Agent):
         if self.desk.gmgn is not None and all(c.passed for c in checks):
             gm = await self.gmgn_checks(cand.mint, sym, creator, checks)
 
+        # 7. Creator and linked wallets selling (user's rule 2026-11-11): more than 10% of what they held from
+        # the start -> dangerous, dropped for good (desk/devwatch.py).
+        dev = await self._dev_sold(cand.mint, creator, rc, token, checks)
+        if dev is not None:
+            checks.append(dev)
+
         passed = all(c.passed for c in checks)
         rug_facts = {
             "top10_pct": t10, "holders_total": rc.get("totalHolders") or n_holders,
@@ -517,6 +524,46 @@ class Filter(Agent):
         }
         return FilterReport(cand.mint, sym, passed, checks, market=snap, rug=rug_facts, creator=creator,
                             source=cand.source)
+
+    async def _dev_sold(self, mint: str, creator: str | None, rc: dict, token: dict,
+                        checks: list[Check]) -> Check | None:
+        """Has the creator's group sold more than [devwatch] max_sold_pct of what it held from the start?
+        The creator is read on-chain at every deep check (at most every filter_check_seconds); the linked
+        wallets (RugCheck insider networks with the creator, GMGN funder) are added once the token passes
+        everything else, to spare RugCheck's budget. A read that fails never kills: the next check retries."""
+        dw, c = self.desk.devwatch, self.cfg.devwatch
+        if dw is None or not c.enabled or any(not x.passed and x.permanent for x in checks):
+            return None
+        dec = int(token.get("decimals") or 0)
+        supply = float(token.get("supply") or 0) / 10 ** dec
+        g = dw.group(mint, creator, supply, rc.get("tokenProgram"))
+        if g is None:
+            return Check("dev_sold", True, "n/a", f"<= {c.max_sold_pct:g}%", "creator unknown: not judged")
+        added = False
+        if all(x.passed for x in checks):
+            try:
+                graph = await self.desk.rug.insider_graph(mint)
+            except Exception:  # noqa: BLE001 - RugCheck down: the creator alone is still watched
+                graph = []
+            for w, role in linked_wallets(g.creator, graph, c.max_linked_wallets).items():
+                added |= g.add(w, role)
+            funder = self.desk.funders.get(mint)
+            if funder:
+                added |= g.add(funder, "dev funder")
+        if added or time.time() - g.updated >= c.filter_check_seconds:
+            try:
+                await dw.refresh(g)
+            except Exception as e:  # noqa: BLE001
+                self.state.bump("devwatch_errors")
+                if not g.updated:
+                    return Check("dev_sold", True, "n/a", f"<= {c.max_sold_pct:g}%",
+                                 f"creator balance unreadable ({e.__class__.__name__}): retried next check")
+        if not g.judgeable(c.min_hold_pct):
+            return Check("dev_sold", True, round(g.sold_pct, 1), f"<= {c.max_sold_pct:g}%",
+                         f"creator group held under {c.min_hold_pct:g}% of supply (dust): not judged")
+        bad = dw.breached(g)
+        return Check("dev_sold", not bad, round(g.sold_pct, 1), f"<= {c.max_sold_pct:g}%",
+                     ("DANGEROUS: " if bad else "") + g.describe(), permanent=bad)
 
     def _note_links(self, mint: str, snap: MarketSnapshot) -> None:
         """Remember which channels (X account, website, Telegram) each token claims, once per mint: a copycat

@@ -219,6 +219,18 @@ class GmgnCfg:
 
 
 @dataclass
+class DevWatchCfg:
+    """User's rule 2026-11-11 (desk/devwatch.py): the creator and its linked wallets must not sell more than
+    max_sold_pct of what they held from the start. No position -> permanent kill; open position -> sell."""
+    enabled: bool = True
+    max_sold_pct: float = 10.0        # % of the group's starting holding
+    min_hold_pct: float = 0.1         # a group that held less than this % of the supply is dust: not judged
+    position_check_seconds: float = 20.0   # open positions: on-chain balances read this often (1 RPC call each)
+    filter_check_seconds: float = 60.0     # no position: at most one on-chain read per token this often
+    max_linked_wallets: int = 12      # wallets taken from the insider networks that contain the creator
+
+
+@dataclass
 class ControllerCfg:
     enabled: bool = True
     interval_minutes: float = 10        # a new round of tests (offline, on the desk's own data) every N minutes
@@ -302,6 +314,7 @@ class Config:
     recap: RecapCfg = field(default_factory=RecapCfg)
     quant: QuantCfg = field(default_factory=QuantCfg)
     gmgn: GmgnCfg = field(default_factory=GmgnCfg)
+    devwatch: DevWatchCfg = field(default_factory=DevWatchCfg)
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
     pages: PagesCfg = field(default_factory=PagesCfg)
     controller: ControllerCfg = field(default_factory=ControllerCfg)
@@ -475,7 +488,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "entry", "risk", "recap", "quant", "gmgn", "dashboard", "pages", "controller", "model", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "entry", "risk", "recap", "quant", "gmgn", "devwatch", "dashboard", "pages", "controller", "model", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()

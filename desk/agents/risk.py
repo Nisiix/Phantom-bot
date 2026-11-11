@@ -13,6 +13,9 @@ Exits (checked every couple of seconds on executable value, i.e. after exit cost
   * DATA LOSS: no price and no sell quote for data_loss_exit_seconds -> emergency exit (0 = off: user's choice
     2026-11-11, the desk keeps holding while the feeds are silent)
   * optional time stop (forced off when loss_stop = false)
+  * DEV SOLD: the creator and its linked wallets sold more than [devwatch] max_sold_pct (10%) of what they held
+    from the start -> sell at once, whatever the P&L (user's rule 2026-11-11, desk/devwatch.py; on-chain balances
+    read every position_check_seconds in a loop of its own)
 
 Entry permission (Executor must ask before every buy):
   * no averaging down: never add to a held token
@@ -209,7 +212,39 @@ class Risk(Agent):
         self.emit("info", f"Risk online: stop {stop_txt}, trail after +{self.r.trail_activate_pct}% "
                           f"({self.r.trail_distance_pct}% distance), daily limit "
                           + (f"-{self.r.daily_loss_limit_pct}%" if self.cfg.is_live else "off in paper (live only)"))
-        await self.supervised("risk", self.loop)
+        if self.desk.devwatch is not None and self.cfg.devwatch.enabled:
+            await asyncio.gather(self.supervised("risk", self.loop), self.supervised("devwatch", self.dev_loop))
+        else:
+            await self.supervised("risk", self.loop)
+
+    async def dev_loop(self) -> None:
+        """Open positions: sell when the creator's group has sold more than max_sold_pct (desk/devwatch.py)."""
+        pf, dw, c = self.desk.portfolio, self.desk.devwatch, self.cfg.devwatch
+        while not self.desk.stop.is_set():
+            for mint, pos in list(pf.positions.items()):
+                if mint in self.exiting:
+                    continue
+                g = dw.group(mint, self.desk.creators.get(mint))
+                if g is None:
+                    continue
+                funder = self.desk.funders.get(mint)
+                if funder:
+                    g.add(funder, "dev funder")
+                try:
+                    await dw.refresh(g)
+                except Exception:  # noqa: BLE001 - RPC hiccup: next round
+                    self.state.bump("devwatch_errors")
+                    continue
+                if dw.breached(g) and mint not in self.exiting and pf.positions.get(mint) is pos:
+                    t = time.time()
+                    self.exiting[mint] = t
+                    pos.trigger_pnl_pct = pos.pnl_pct
+                    pf.persist(pos)
+                    detail = g.describe()
+                    self.emit("exit", f"DEV_SOLD: {detail}", mint, pos.symbol, pnl_pct=pos.pnl_pct)
+                    await self.desk.exits.put(ExitOrder(mint, "DEV_SOLD", detail))
+            if not await self.sleep(c.position_check_seconds):
+                return
 
     def _rollover(self, force: bool = False) -> None:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

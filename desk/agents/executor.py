@@ -460,7 +460,7 @@ class Executor(Agent):
             if i + 1 < len(attempts):
                 self.emit("warn", f"sell attempt {i + 1} failed ({err}) -> retrying now at "
                                   f"{attempts[i + 1]} bps", order.mint, pos.symbol)
-        if last_quote is None and order.reason in ("LIQUIDITY_PULL", "DATA_LOSS") and self.broker.mode == "paper":
+        if last_quote is None and order.reason in ("LIQUIDITY_PULL", "DATA_LOSS", "DEV_SOLD") and self.broker.mode == "paper":
             trade = pf.close(order.mint, 0.0, f"{order.reason}: no route, marked total loss")
             return self._finish(trade, order, pos)
         self.emit("error", f"EXIT BLOCKED ({order.reason}): {err}; Risk will re-issue it", order.mint, pos.symbol)

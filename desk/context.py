@@ -48,6 +48,7 @@ class Desk:
     controller: object = None                                     # Controller: read-only checks + proposals
     gmgn: object = None                                           # optional GMGN client (read-only)
     funders: dict[str, str] = field(default_factory=dict)        # Filter: mint -> dev's SOL funder (GMGN)
+    devwatch: object = None                                       # Filter/Risk: creator sales (desk/devwatch.py)
     exec_stats: deque = field(default_factory=lambda: deque(maxlen=200))  # Executor: recent fill timings
     restart_pending: bool = False     # a restart was requested (desk/app.py restart_watch): no new entries
     restart: bool = False             # the desk is stopping to be started again at once (exit code 75)

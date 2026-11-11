@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS controller_runs (
 CREATE TABLE IF NOT EXISTS rug_ledger (wallet TEXT PRIMARY KEY, mint TEXT, reason TEXT, ts REAL);
 CREATE TABLE IF NOT EXISTS rugged_names (key TEXT PRIMARY KEY, mint TEXT, symbol TEXT, reason TEXT, ts REAL);
 CREATE TABLE IF NOT EXISTS token_links (link TEXT, mint TEXT, ts REAL, PRIMARY KEY (link, mint));
+CREATE TABLE IF NOT EXISTS dev_groups (mint TEXT PRIMARY KEY, data TEXT, ts REAL);
 """
 
 
@@ -165,6 +166,18 @@ class Store:
         """Which mint claims which channel (X account, website, Telegram). Never deleted."""
         for k in links:
             self.db.execute("INSERT OR IGNORE INTO token_links(link,mint,ts) VALUES(?,?,?)", (k, mint, time.time()))
+
+    def dev_group(self, mint: str) -> dict | None:
+        """Creator + linked wallets of a token and what they held (desk/devwatch.py). Never deleted."""
+        rows = self.q("SELECT data FROM dev_groups WHERE mint=?", (mint,))
+        try:
+            return json.loads(rows[0]["data"]) if rows else None
+        except ValueError:
+            return None
+
+    def save_dev_group(self, mint: str, data: dict) -> None:
+        self.db.execute("INSERT INTO dev_groups(mint,data,ts) VALUES(?,?,?) ON CONFLICT(mint) DO UPDATE SET "
+                        "data=excluded.data, ts=excluded.ts", (mint, json.dumps(data), time.time()))
 
     def link_mints(self, link: str) -> list[str]:
         return [r["mint"] for r in self.q("SELECT mint FROM token_links WHERE link=?", (link,))]
