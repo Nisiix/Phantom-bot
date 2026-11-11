@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from dataclasses import fields
 
+from .exits import position_lock_level
 from .models import Position
 from .store import Store
 
@@ -80,5 +81,20 @@ class Portfolio:
             "tx_in": pos.tx_in, "tx_out": tx_out,
             "data": {**(extra or {}), **({"regime": pos.regime} if pos.regime else {})},
         }
+        # Exit record for the Controller (learning data: kept in trades_archive on a paper reset): which rule
+        # closed it, the marked % that triggered it vs the realized %, and the profit lock's levels.
+        realized = trade["pnl_pct"]
+        trade["data"]["exit"] = {
+            "kind": reason.split(":")[0].strip(), "trigger_pnl_pct": pos.trigger_pnl_pct,
+            "realized_pnl_pct": realized, "peak_pnl_pct": pos.peak_pnl_pct,
+            "held_s": trade["exit_ts"] - pos.entry_ts,
+            "lock": {"armed": bool(pos.lock_armed_on), "armed_on_pct": pos.lock_armed_on,
+                     "armed_after_s": (pos.lock_armed_ts - pos.entry_ts) if pos.lock_armed_ts else None,
+                     "first_touch_s": pos.lock_touch_s, "at_pct": pos.lock_at, "buffer_pct": pos.lock_buffer,
+                     "keep_pct": pos.lock_keep * 100,
+                     "level_pct": position_lock_level(pos) if pos.lock_armed_on else None},
+        }
+        if pos.exit_rules:
+            trade["data"]["exit_rules"] = pos.exit_rules
         self.store.add_trade(trade)
         return trade

@@ -370,6 +370,14 @@ class Executor(Agent):
             rt_cost_pct=cost, p_up=qv.p["up"], p_down=qv.p["down"], p_neither=qv.p["neither"], ev_pct=qv.ev_pct,
             regime=self.desk.market.snapshot() if self.desk.market is not None else {},
         )
+        r = self.cfg.risk
+        pos.exit_rules = {"stop_pct": r.exit_stop_pct or r.hard_stop_pct, "trail_activate_pct": r.trail_activate_pct,
+                          "trail_distance_pct": r.trail_distance_pct, "max_hold_minutes": r.max_hold_minutes,
+                          "profit_lock_activate_pct": r.profit_lock_activate_pct,
+                          "profit_lock_fast_activate_pct": r.profit_lock_fast_activate_pct,
+                          "profit_lock_fast_minutes": r.profit_lock_fast_minutes,
+                          "profit_lock_pct": r.profit_lock_pct, "profit_lock_keep_pct": r.profit_lock_keep_pct,
+                          "sell_buffer_pct": self.risk.sell_buffer() if hasattr(self.risk, "sell_buffer") else None}
         pos.peak_value_sol = pos.mark_value_sol
         pos.last_price_ts = now()
         pos.last_liquidity_usd = snap.liquidity_usd

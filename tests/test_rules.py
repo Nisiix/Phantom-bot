@@ -105,7 +105,7 @@ def test_hard_stop_triggers_at_minus_6():
 
 
 def test_trailing_only_after_plus_12():
-    r = RiskCfg()
+    r = RiskCfg(profit_lock_activate_pct=0)      # trailing alone (the profit lock has its own tests)
     p = position(1.0, 1.11, peak=1.11)          # +11%: not armed
     assert exit_decision(p, r, time.time(), 80_000)[0] is None and not p.trailing_active
     p.mark_value_sol = 1.02                      # dropped from +11% to +2%: no trail exit (not armed)

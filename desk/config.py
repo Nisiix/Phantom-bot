@@ -151,6 +151,16 @@ class RiskCfg:
     liquidity_drop_exit_pct: float = 35.0
     max_hold_minutes: float = 0
     price_poll_seconds: float = 2.0
+    # PROFIT LOCK (user's rule 2026-11-11, see desk/exits.py): once the trade is up profit_lock_activate_pct
+    # NET (or profit_lock_fast_activate_pct if it got there within profit_lock_fast_minutes), the stop moves to
+    # profit_lock_pct NET, so the trade still ends in profit. All levels are net of costs and are raised by the
+    # sell buffer (sale fees/slippage; Risk uses its measured slippage when that is larger). 0 = off.
+    profit_lock_activate_pct: float = 5.0
+    profit_lock_fast_activate_pct: float = 6.0
+    profit_lock_fast_minutes: float = 3.0
+    profit_lock_pct: float = 2.5
+    profit_lock_sell_buffer_pct: float = 1.0
+    profit_lock_keep_pct: float = 50.0     # lock keeps this share of the net peak profit (0 = fixed lock)
 
 
 @dataclass
@@ -329,6 +339,18 @@ def enforce_hard_limits(cfg: Config) -> None:
           "trailing may only start after +12%")
     clamp(r, "trail_distance_pct", lambda v: 0 < v < HARD_TRAIL_ACTIVATE_PCT, 6.0,
           "trail distance must be between 0 and 12%")
+    clamp(r, "profit_lock_activate_pct", lambda v: v == 0 or 2.0 <= v <= 50.0, 5.0,
+          "profit lock must be 0 (off) or arm between +2% and +50%")
+    if r.profit_lock_activate_pct > 0:
+        clamp(r, "profit_lock_fast_activate_pct", lambda v: v == 0 or r.profit_lock_activate_pct <= v <= 50.0,
+              r.profit_lock_activate_pct, "fast profit-lock threshold must be >= profit_lock_activate_pct")
+        clamp(r, "profit_lock_pct", lambda v: 0.5 <= v <= r.profit_lock_activate_pct - 1.0,
+              max(0.5, min(2.5, r.profit_lock_activate_pct - 1.0)),
+              "profit lock must sell at least +0.5% net and at least 1 point under its arming level")
+        clamp(r, "profit_lock_sell_buffer_pct", lambda v: 0.5 <= v <= 10.0, 1.0,
+              "profit lock sell buffer must be 0.5-10% (it covers the sale's fees)")
+        clamp(r, "profit_lock_keep_pct", lambda v: 0 <= v <= 90, 50.0, "profit lock keep share must be 0-90%")
+        clamp(r, "profit_lock_fast_minutes", lambda v: 0 <= v <= 60, 3.0, "profit lock fast window must be 0-60 min")
     clamp(f, "max_top10_pct", lambda v: 0 < v <= HARD_MAX_TOP10_PCT, HARD_MAX_TOP10_PCT,
           "top-10 holder ceiling can never exceed 20%")
     clamp(f, "young_volume_liquidity_ratio", lambda v: 0.25 <= v <= 5.0, 0.5,

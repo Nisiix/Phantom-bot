@@ -208,6 +208,15 @@ class Position:
     p_neither: float = 0.0
     ev_pct: float = 0.0
     regime: dict = field(default_factory=dict)   # market regime at entry (measurement only)
+    # Profit lock (desk/exits.py) and exit bookkeeping, stored with the trade for the Controller.
+    lock_touch_s: float | None = None    # seconds after the buy when the arming level was first reached
+    lock_armed_on: float = 0.0           # net % that armed the lock (0 = not armed)
+    lock_armed_ts: float = 0.0
+    lock_at: float = 0.0                 # net % the lock sells at
+    lock_buffer: float = 0.0             # sell buffer in use when it armed
+    lock_keep: float = 0.0               # share of the net peak the lock keeps (0 = fixed at lock_at)
+    trigger_pnl_pct: float | None = None # marked net % when Risk issued the exit (slippage = this - realized)
+    exit_rules: dict = field(default_factory=dict)   # exit settings at entry (stop, trailing, time, lock)
 
     @property
     def pnl_pct(self) -> float:

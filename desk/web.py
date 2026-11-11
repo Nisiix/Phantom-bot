@@ -13,6 +13,7 @@ import time
 import webbrowser
 from pathlib import Path
 
+from .exits import position_lock_level
 from .recap import build_recap, live_gate_status
 from .store import Store
 
@@ -75,8 +76,10 @@ class Dashboard:
         positions = [{
             "symbol": p.symbol, "mint": p.mint, "cost": p.cost_sol, "value": p.mark_value_sol,
             "pnl_pct": p.pnl_pct, "peak_pct": p.peak_pnl_pct, "trailing": p.trailing_active,
-            "stop_pct": ((p.peak_value_sol * (1 - d.cfg.risk.trail_distance_pct / 100)) / p.cost_sol - 1) * 100
-            if p.trailing_active and p.cost_sol else (d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct),
+            "stop_pct": max(((p.peak_value_sol * (1 - d.cfg.risk.trail_distance_pct / 100)) / p.cost_sol - 1) * 100
+                            if p.trailing_active and p.cost_sol else (d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct),
+                            (position_lock_level(p) + p.lock_buffer) if p.lock_armed_on else -100.0),
+            "profit_lock": position_lock_level(p) if p.lock_armed_on else None,
             "age_min": (t - p.entry_ts) / 60, "score": p.score, "ev_pct": p.ev_pct, "reason": p.entry_reason,
         } for p in pf.positions.values()]
         trades = d.store.q("SELECT symbol,mint,entry_ts,exit_ts,cost_sol,pnl_sol,pnl_pct,peak_pnl_pct,score,"

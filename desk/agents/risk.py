@@ -3,6 +3,9 @@
 Exits (checked every couple of seconds on executable value, i.e. after exit costs):
   * HARD STOP at -6%                       (no exceptions, no "give it a minute")
   * TRAILING STOP armed only after +12%;   then exit if value falls trail_distance% below the peak
+  * PROFIT LOCK: after +5% net (+6% on a fast move) the stop moves to max(+2.5%, 50% of the peak) net, sale fees
+    included, and rises with the peak
+    (desk/exits.py; levels raised by the sell buffer = configured minimum or measured exit slippage)
   * LIQUIDITY PULL: pool liquidity drops liquidity_drop_exit_pct% vs. entry -> emergency exit
   * DATA LOSS: no price for 60s and no sell quote -> emergency exit
   * optional time stop
@@ -20,12 +23,15 @@ import time
 from datetime import datetime, timezone
 
 from ..clients.jupiter import SOL_MINT
+from ..exits import LockRule, lock_rule, lock_step, position_lock_level
 from ..models import ExitOrder, Position
 from .base import Agent
 
 
-def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None) -> tuple[str | None, str]:
-    """Pure rule evaluation. Also arms the trailing stop. Returns (reason, detail)."""
+def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None,
+                  lock: LockRule | None = None) -> tuple[str | None, str]:
+    """Pure rule evaluation. Also arms the trailing stop and the profit lock. Returns (reason, detail).
+    lock: the profit-lock rule with Risk's current sell buffer (default: from cfg)."""
     pnl = pos.pnl_pct
     stop = getattr(cfg, "exit_stop_pct", 0) or cfg.hard_stop_pct    # paper stop trial, else the hard stop
     if pnl <= stop:
@@ -38,6 +44,17 @@ def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None) -> 
             locked = (trail_level / pos.cost_sol - 1) * 100
             return "TRAILING_STOP", (f"value fell {cfg.trail_distance_pct}% from peak "
                                      f"(peak {pos.peak_pnl_pct:+.1f}%, now {pnl:+.1f}%, trail ~{locked:+.1f}%)")
+    lock = lock_rule(cfg) if lock is None else lock
+    if lock.enabled and not pos.lock_armed_on:
+        pos.lock_touch_s, armed = lock_step(lock, pos.peak_pnl_pct, t - pos.entry_ts, pos.lock_touch_s, 0.0)
+        if armed:
+            pos.lock_armed_on, pos.lock_armed_ts, pos.lock_at, pos.lock_buffer = armed, t, lock.at, lock.buffer
+            pos.lock_keep = lock.keep
+    if pos.lock_armed_on:
+        keep = position_lock_level(pos)
+        if pnl <= keep + pos.lock_buffer:
+            return "PROFIT_LOCK", (f"profit lock: value back to {pnl:+.2f}% from peak {pos.peak_pnl_pct:+.1f}% "
+                                   f"(keeps +{keep:.1f}% net + {pos.lock_buffer:.1f}% sale costs)")
     if liquidity_usd is not None and pos.entry_liquidity_usd > 0:
         drop = (1 - liquidity_usd / pos.entry_liquidity_usd) * 100
         if drop >= cfg.liquidity_drop_exit_pct:
@@ -45,6 +62,27 @@ def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None) -> 
     if cfg.max_hold_minutes and (t - pos.entry_ts) / 60 >= cfg.max_hold_minutes:
         return "TIME_STOP", f"held {(t - pos.entry_ts) / 60:.0f} min"
     return None, ""
+
+
+# Exits in the profit zone, where the sale slippage measured is comparable to a profit-lock sale (a hard stop
+# during a rug gaps far below its trigger and would blow the buffer up).
+STOP_EXITS = ("TRAILING_STOP", "PROFIT_LOCK")
+
+
+def exit_slip(data) -> float | None:
+    """Slippage of a stop exit, from a trade's data (dict or JSON): marked % at the trigger minus realized %."""
+    if isinstance(data, str):
+        try:
+            import json
+            data = json.loads(data or "{}")
+        except ValueError:
+            return None
+    if not isinstance(data, dict):
+        return None
+    ex = data.get("exit") or {}
+    if ex.get("kind") not in STOP_EXITS or ex.get("trigger_pnl_pct") is None or ex.get("realized_pnl_pct") is None:
+        return None
+    return max(0.0, float(ex["trigger_pnl_pct"]) - float(ex["realized_pnl_pct"]))
 
 
 class Risk(Agent):
@@ -66,6 +104,15 @@ class Risk(Agent):
             self.history.setdefault(t["mint"], {"ts": t["exit_ts"] or 0.0, "pnl_sol": t["pnl_sol"] or 0.0})
         self.exiting: dict[str, float] = {}
         self.trail_announced: set[str] = set()
+        self.lock_announced: set[str] = set()
+        # Sale slippage measured on our stop exits (marked value at the trigger minus realized), newest last.
+        self.sell_slips: list[float] = []
+        for tr in desk.store.q("SELECT data FROM trades UNION ALL SELECT data FROM trades_archive") \
+                if hasattr(desk.store, "q") else []:
+            slip = exit_slip(tr.get("data"))
+            if slip is not None:
+                self.sell_slips.append(slip)
+        self.sell_slips = self.sell_slips[-30:]
         self._last_lag_warn = 0.0
         self._last_quote: dict[str, float] = {}
         self._last_equity = 0.0
@@ -101,8 +148,23 @@ class Risk(Agent):
             return False, f"max open positions ({self.cfg.executor.max_open_positions})"
         return True, "approved"
 
+    def sell_buffer(self) -> float:
+        """Sale costs added to every profit-lock level: the configured minimum, or the median slippage of our
+        last stop exits when that is larger (so the lock still ends in profit after fees). Capped at 10%."""
+        base = self.r.profit_lock_sell_buffer_pct
+        if len(self.sell_slips) >= 5:
+            xs = sorted(self.sell_slips)
+            base = max(base, xs[len(xs) // 2])
+        return min(10.0, base)
+
+    def lock(self) -> LockRule:
+        return lock_rule(self.r, self.sell_buffer())
+
     def record_result(self, trade: dict) -> None:
         t = time.time()
+        slip = exit_slip(trade.get("data"))
+        if slip is not None:
+            self.sell_slips = (self.sell_slips + [slip])[-30:]
         self.history[trade["mint"]] = {"ts": t, "pnl_sol": trade["pnl_sol"]}
         if trade["pnl_sol"] < 0:
             self.last_loss_ts = t
@@ -192,7 +254,8 @@ class Risk(Agent):
         # fetched for all due positions at once instead of one after the other.
         due, quoted = [], set()
         for mint, pos in items:
-            near = pos.pnl_pct <= (self.r.exit_stop_pct or self.r.hard_stop_pct) + 2 or pos.trailing_active
+            near = pos.pnl_pct <= (self.r.exit_stop_pct or self.r.hard_stop_pct) + 2 or pos.trailing_active \
+                or bool(pos.lock_armed_on)
             if mint not in self.exiting and t - self._last_quote.get(mint, 0) >= (6 if near else 12):
                 self._last_quote[mint] = t
                 due.append(pos)
@@ -216,8 +279,9 @@ class Risk(Agent):
                 pos.hit_down_ts = t
             if mint in self.exiting:
                 continue
-            reason, detail = exit_decision(pos, self.r, t, liq)
-            if reason in ("HARD_STOP", "TRAILING_STOP") and mint not in quoted:
+            lock = self.lock()
+            reason, detail = exit_decision(pos, self.r, t, liq, lock)
+            if reason in ("HARD_STOP", "TRAILING_STOP", "PROFIT_LOCK") and mint not in quoted:
                 # The mark came from DexScreener, whose price lags / jumps between pairs (seen in paper: a
                 # "-7.98%" stop sold at -2.42% three seconds after entry). Confirm on a real Jupiter sell
                 # quote before selling; if Jupiter can't quote, the DexScreener stop stands (safety first).
@@ -226,7 +290,7 @@ class Risk(Agent):
                     self._last_quote[mint] = t
                     pos.mark_value_sol = v
                     pos.last_price_ts = t
-                    reason, detail = exit_decision(pos, self.r, t, liq)
+                    reason, detail = exit_decision(pos, self.r, t, liq, lock)
                     if reason is None:
                         self.state.bump("false_stop_avoided")
             if reason == "LIQUIDITY_PULL":
@@ -237,12 +301,21 @@ class Risk(Agent):
                     full = None
                 if full is not None:
                     pos.last_liquidity_usd = full.liquidity_usd
-                    reason, detail = exit_decision(pos, self.r, t, full.liquidity_usd)
+                    reason, detail = exit_decision(pos, self.r, t, full.liquidity_usd, lock)
             if reason is None and t - pos.last_price_ts > 60:
                 reason, detail = "DATA_LOSS", "no price and no sell quote for 60s"
             if pos.trailing_active and mint not in self.trail_announced:
                 self.trail_announced.add(mint)
                 self.emit("risk", f"trailing stop ARMED at peak {pos.peak_pnl_pct:+.1f}%", mint, pos.symbol)
+            if pos.lock_armed_on and mint not in self.lock_announced:
+                self.lock_announced.add(mint)
+                self.emit("risk", f"profit lock ARMED at {pos.peak_pnl_pct:+.1f}% (target +{pos.lock_armed_on:g}% net"
+                                  f"{', fast move' if pos.lock_armed_on > self.r.profit_lock_activate_pct else ''}): "
+                                  f"stop moved to +{position_lock_level(pos):.1f}% net, rising with the peak "
+                                  f"({pos.lock_keep * 100:.0f}% of it, min +{pos.lock_at:g}%; "
+                                  f"{pos.lock_buffer:.1f}% for sale costs)", mint, pos.symbol)
+            if reason:
+                pos.trigger_pnl_pct = pos.pnl_pct
             pf.persist(pos)
             if reason:
                 self.exiting[mint] = t

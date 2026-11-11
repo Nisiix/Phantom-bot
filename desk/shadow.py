@@ -29,6 +29,7 @@ import statistics
 import time
 from dataclasses import dataclass, field
 
+from .exits import lock_rule, lock_step, lock_trigger
 from .quant import LABELS
 
 MODEL_UP, MODEL_DOWN = 60.0, -30.0
@@ -62,15 +63,17 @@ class Shadow:
     sim_peak: float = 0.0     # peak net return of the simulated position
     sim_trail: bool = False
     sim_ret: float | None = None
+    sim_lock_touch: float | None = None   # profit lock of the simulated position (desk/exits.py)
+    sim_lock: float = 0.0
     path: list = field(default_factory=list)   # analyst stage: [(seconds since start, raw % move)] for the Controller
 
 
 def update_shadow(s: Shadow, price: float, t: float, stop: float, up: float, trail_dist: float,
-                  max_hold_min: float = 0, exit_stop: float | None = None) -> None:
+                  max_hold_min: float = 0, exit_stop: float | None = None, lock=None) -> None:
     """Advance one shadow with a new price observation (pure logic, unit-tested).
     max_hold_min: Risk's time exit ([risk] max_hold_minutes, 0 = none), so the simulated position follows the
     same exit rules as a real one. exit_stop: the stop the simulated position exits at when it differs from
-    the label barrier `stop` (paper stop trial)."""
+    the label barrier `stop` (paper stop trial). lock: the profit lock (desk/exits.py LockRule)."""
     sim_stop = stop if exit_stop is None else exit_stop
     raw = (price / s.ref_price - 1) * 100
     net = raw - s.cost_pct
@@ -98,6 +101,10 @@ def update_shadow(s: Shadow, price: float, t: float, stop: float, up: float, tra
                 s.sim_trail = True
             if s.sim_trail and val <= (1 + s.sim_peak / 100) * (1 - trail_dist / 100):
                 s.sim_open, s.sim_ret = False, net
+            elif lock is not None and lock.enabled:
+                s.sim_lock_touch, s.sim_lock = lock_step(lock, s.sim_peak, t - s.start, s.sim_lock_touch, s.sim_lock)
+                if s.sim_lock and net <= lock_trigger(lock, s.sim_peak):
+                    s.sim_open, s.sim_ret = False, net
 
 
 def finalize_shadow(s: Shadow) -> None:
@@ -266,7 +273,7 @@ class ShadowTracker:
                     if snap and snap.price_usd > 0:
                         update_shadow(s, snap.price_usd, t, r.hard_stop_pct, r.trail_activate_pct,
                                       r.trail_distance_pct, float(r.max_hold_minutes or 0),
-                                      r.exit_stop_pct or r.hard_stop_pct)
+                                      r.exit_stop_pct or r.hard_stop_pct, lock_rule(r))
                         if s.stage == "analyst":   # the price path lets the Controller replay other exit rules
                             s.path.append((int(t - s.start), round(s.last, 2)))
                     if t - s.start >= self.horizon:
@@ -335,7 +342,7 @@ def shadow_to_outcome(row: dict, weight: float, cfg=None) -> dict | None:
                 return None
             r = cfg.risk
             net = simulate_exit(path, cost, r.exit_stop_pct or r.hard_stop_pct, r.trail_activate_pct,
-                                r.trail_distance_pct, float(r.max_hold_minutes))
+                                r.trail_distance_pct, float(r.max_hold_minutes), lock_rule(r))
             from .quant import path_label
             label = path_label(path, cost, r.trail_activate_pct, r.hard_stop_pct, cfg.quant.horizon_minutes * 60)
     if net is None or not label:

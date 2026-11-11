@@ -40,6 +40,7 @@ import time
 from datetime import datetime, timezone
 
 from .entry import MAX_WINDOW_MINUTES, entry_path, settings as entry_settings
+from .exits import OFF, LockRule, lock_rule, lock_step, lock_trigger
 from .market import is_crash
 
 SITUATIONS = {
@@ -312,7 +313,7 @@ def parse_rows(raw: list[dict], young_minutes: float, cfg=None, skipped: dict | 
             epath = entry_path(path, entry_settings(cfg.entry))
             ret = 0.0 if not epath else simulate_exit(
                 epath, cost, r_.exit_stop_pct or r_.hard_stop_pct, r_.trail_activate_pct, r_.trail_distance_pct,
-                float(r_.max_hold_minutes))
+                float(r_.max_hold_minutes), lock_rule(r_))
         if r.get("score") is not None:
             f.setdefault("score", r["score"])
         rows.append({"ts": r["start_ts"], "mint": mint, "ret": ret,
@@ -325,9 +326,11 @@ def parse_rows(raw: list[dict], young_minutes: float, cfg=None, skipped: dict | 
 
 # ── replays ──
 def simulate_exit(path: list[tuple[float, float]], cost: float, stop: float, trail_on: float, trail_dist: float,
-                  max_hold_min: float = 0) -> float:
-    """Net % of the desk exit policy on a recorded price path (raw % moves from the decision price)."""
+                  max_hold_min: float = 0, lock: LockRule = OFF) -> float:
+    """Net % of the desk exit policy on a recorded price path (raw % moves from the decision price).
+    lock: the profit lock (desk/exits.py), same arming/sell levels as Risk."""
     peak, trail, last = 0.0, False, -cost
+    touch, armed = None, 0.0
     for sec, raw in path:
         net = raw - cost
         last = net
@@ -340,6 +343,10 @@ def simulate_exit(path: list[tuple[float, float]], cost: float, stop: float, tra
             trail = True
         if trail and 1 + net / 100 <= (1 + peak / 100) * (1 - trail_dist / 100):
             return clip_ret(net)
+        if lock.enabled:
+            touch, armed = lock_step(lock, peak, sec, touch, armed)
+            if armed and net <= lock_trigger(lock, peak):
+                return clip_ret(net)
     return clip_ret(last)
 
 
@@ -447,19 +454,51 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
     dists = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
     holds = [0.0, 15.0, 30.0, 45.0]
     cur_r = {"hard_stop_pct": exit_stop, "trail_activate_pct": r.trail_activate_pct,
-             "trail_distance_pct": r.trail_distance_pct, "max_hold_minutes": float(r.max_hold_minutes)}
+             "trail_distance_pct": r.trail_distance_pct, "max_hold_minutes": float(r.max_hold_minutes),
+             "profit_lock_activate_pct": float(r.profit_lock_activate_pct),
+             "profit_lock_fast_activate_pct": float(r.profit_lock_fast_activate_pct),
+             "profit_lock_pct": float(r.profit_lock_pct), "profit_lock_keep_pct": float(r.profit_lock_keep_pct)}
+    # Profit lock (user's rule: arm around +5/+6% net, sell around +2/+3% net): the Controller tries other
+    # arming / selling levels, keeping the lock always in profit (sell >= +1.5% net, 1+ point under arming).
+    lock_on = sorted({float(r.profit_lock_activate_pct), 0.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0})
+    lock_fast = sorted({float(r.profit_lock_fast_activate_pct), 5.0, 6.0, 8.0, 10.0, 12.0})
+    lock_at = sorted({float(r.profit_lock_pct), 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0})
+    # keep = share of the peak profit locked (0 = fixed break-even-plus-fees lock, the user's "not always" variant)
+    lock_keep = sorted({float(r.profit_lock_keep_pct), 0.0, 30.0, 40.0, 50.0, 60.0, 70.0})
+    buffer = float(r.profit_lock_sell_buffer_pct)
+
+    def lock_ok(v):
+        on = v["profit_lock_activate_pct"]
+        return on == 0 or (v["profit_lock_pct"] <= on - 1.0 and v["profit_lock_fast_activate_pct"] >= on)
+
+    def r_lock(v):
+        return lock_rule({**v, "profit_lock_fast_minutes": r.profit_lock_fast_minutes}, buffer)
 
     def r_ret(v, rows=rows):
         # exits start where the current entry rule buys (epath); a token the rule doesn't buy counts 0
+        lk = r_lock(v)
         return [simulate_exit(x["epath"], x["cost"], v["hard_stop_pct"], v["trail_activate_pct"],
-                              v["trail_distance_pct"], v["max_hold_minutes"]) if x.get("epath") else 0.0
+                              v["trail_distance_pct"], v["max_hold_minutes"], lk) if x.get("epath") else 0.0
                 for x in rows]
     grid = [{**cur_r, "hard_stop_pct": s} for s in stops] + [{**cur_r, "trail_activate_pct": x} for x in trail_on] \
         + [{**cur_r, "trail_distance_pct": x} for x in dists] + [{**cur_r, "max_hold_minutes": x} for x in holds]
+    lock_grid = [{**cur_r, "profit_lock_activate_pct": x} for x in lock_on] \
+        + [{**cur_r, "profit_lock_fast_activate_pct": x} for x in lock_fast] \
+        + [{**cur_r, "profit_lock_pct": x} for x in lock_at] \
+        + [{**cur_r, "profit_lock_keep_pct": x} for x in lock_keep] \
+        + [{**cur_r, "profit_lock_activate_pct": on, "profit_lock_fast_activate_pct": fast, "profit_lock_pct": at}
+           for on, fast, at in ((4.0, 5.0, 2.0), (6.0, 8.0, 3.0), (8.0, 10.0, 4.0), (10.0, 12.0, 5.0))]
+    grid += [v for v in lock_grid if lock_ok(v)]
 
     def r_sample(rng):
-        return {"hard_stop_pct": rng.choice(stops), "trail_activate_pct": rng.choice(trail_on),
-                "trail_distance_pct": rng.choice(dists), "max_hold_minutes": rng.choice(holds)}
+        while True:
+            v = {"hard_stop_pct": rng.choice(stops), "trail_activate_pct": rng.choice(trail_on),
+                 "trail_distance_pct": rng.choice(dists), "max_hold_minutes": rng.choice(holds),
+                 "profit_lock_activate_pct": rng.choice(lock_on),
+                 "profit_lock_fast_activate_pct": rng.choice(lock_fast), "profit_lock_pct": rng.choice(lock_at),
+                 "profit_lock_keep_pct": rng.choice(lock_keep)}
+            if lock_ok(v):
+                return v
 
     def r_desc(v):
         return [f"[risk] {k} = {v[k]:g}" for k in cur_r if abs(v[k] - cur_r[k]) > 1e-9]
@@ -480,7 +519,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
             w_grid.append({**cur_r, "hard_stop_pct": st, "max_hold_minutes": hold})
 
     def w_sample(rng):
-        return {"hard_stop_pct": rng.choice(wide), "trail_activate_pct": rng.choice(w_trail),
+        return {**cur_r, "hard_stop_pct": rng.choice(wide), "trail_activate_pct": rng.choice(w_trail),
                 "trail_distance_pct": rng.choice(w_dists), "max_hold_minutes": rng.choice(w_holds)}
     spaces.append(Space(WIDE_STOPS, rows, cur_r, r_ret, w_grid, w_sample, r_desc,
                         note + ", con percorso di prezzo; stop più larghi del limite rigido: solo misura"))
@@ -495,7 +534,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         for x in rows:
             ep = entry_path(x["path"], v)
             out.append(simulate_exit(ep, x["cost"], stop_now, r.trail_activate_pct, r.trail_distance_pct,
-                                     float(r.max_hold_minutes)) if ep else 0.0)
+                                     float(r.max_hold_minutes), lock_rule(r)) if ep else 0.0)
         return out
     used = {"now": (), "dip": ("window_minutes", "dip_pct", "fallback"),
             "bounce": ("window_minutes", "dip_pct", "bounce_pct", "fallback"),
@@ -849,7 +888,7 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
               + (f", dal {datetime.fromtimestamp(since, timezone.utc):%Y-%m-%d %H:%M} UTC" if since else ""),
               *([f"- esclusi dai test: " + ", ".join(f"{n} {SKIP_TEXT.get(k, k)}" for k, n in sorted(
                   exp["skipped"].items()))] if exp.get("skipped") else []),
-              f"- ogni token è misurato con le regole di uscita attuali di Risk (stop, trailing e uscita a tempo) "
+              f"- ogni token è misurato con le regole di uscita attuali di Risk (stop, trailing, uscita a tempo e stop a profitto) "
               f"rigiocate sul suo percorso di prezzo",
               f"- {exp['tried']} configurazioni provate in questo ciclo, {trials_total} in totale in {rounds} cicli",
               f"- scelta sul {100 - cfg.controller.holdout_pct:.0f}% più vecchio dei dati, verifica sul "
@@ -894,3 +933,57 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
               "- Il percorso di prezzo è campionato ogni ~20 s: gli stop reali (ogni 2 s) possono uscire a prezzi "
               "leggermente diversi. Sono stime sul passato, non garanzie."]
     return "\n".join(lines)
+
+
+def profit_lock_section(trades: list[dict], cfg) -> list[str]:
+    """How the profit lock worked on our real trades (exit records stored with every trade since 2026-11-11,
+    kept in trades_archive on a paper reset). Read together with the Risk replays, which test other levels."""
+    r = cfg.risk
+    out = ["## Stop a profitto (blocco del guadagno)",
+           f"Regola attuale: dopo +{r.profit_lock_activate_pct:g}% netto (+{r.profit_lock_fast_activate_pct:g}% se "
+           f"raggiunto entro {r.profit_lock_fast_minutes:g} min dall'acquisto) lo stop sale a "
+           f"+{r.profit_lock_pct:g}% netto, o il {r.profit_lock_keep_pct:g}% del picco netto se più alto (sale col "
+           f"picco; 0 = stop fisso a pareggio con commissioni); ogni livello è alzato dei costi di vendita (minimo "
+           f"{r.profit_lock_sell_buffer_pct:g}%, o lo slittamento misurato se maggiore)."
+           if r.profit_lock_activate_pct > 0 else "Regola disattivata (profit_lock_activate_pct = 0)."]
+    recs = []
+    for t in trades:
+        d = t.get("data")
+        if isinstance(d, str):
+            try:
+                d = json.loads(d or "{}")
+            except ValueError:
+                continue
+        ex = (d or {}).get("exit") if isinstance(d, dict) else None
+        if isinstance(ex, dict) and ex.get("realized_pnl_pct") is not None:
+            recs.append(ex)
+    if not recs:
+        return out + ["- nessun trade registrato con la nuova regola per ora", ""]
+    armed = [x for x in recs if (x.get("lock") or {}).get("armed")]
+    by = {}
+    for x in armed:
+        by.setdefault(x.get("kind", "?"), []).append(float(x["realized_pnl_pct"]))
+    avg = lambda xs: sum(xs) / len(xs) if xs else 0.0   # noqa: E731
+    out.append(f"- {len(recs)} trade registrati, stop a profitto armato su {len(armed)}")
+    for kind, xs in sorted(by.items(), key=lambda kv: -len(kv[1])):
+        out.append(f"    - chiusi da {kind}: {len(xs)}, risultato medio {avg(xs):+.2f}% "
+                   f"(peggiore {min(xs):+.2f}%, in perdita {sum(v <= 0 for v in xs)})")
+    locks = [x for x in armed if x.get("kind") == "PROFIT_LOCK" and x.get("trigger_pnl_pct") is not None]
+    if locks:
+        slips = sorted(float(x["trigger_pnl_pct"]) - float(x["realized_pnl_pct"]) for x in locks)
+        bufs = [float((x.get("lock") or {}).get("buffer_pct") or 0) for x in locks]
+        out.append(f"- vendite dello stop a profitto: slittamento mediano {slips[len(slips) // 2]:.2f}% tra il "
+                   f"valore che le ha fatte scattare e l'incasso reale (margine usato {avg(bufs):.2f}%)")
+        if sum(float(x["realized_pnl_pct"]) <= 0 for x in locks) * 4 > len(locks):
+            out.append("    - ATTENZIONE: più di 1 vendita su 4 non è rimasta in profitto: alzare "
+                       "[risk] profit_lock_pct o profit_lock_sell_buffer_pct")
+    near = [x for x in recs if not (x.get("lock") or {}).get("armed")
+            and float(x.get("peak_pnl_pct") or 0) >= max(1.0, r.profit_lock_activate_pct - 2)
+            and float(x["realized_pnl_pct"]) < 0]
+    if near:
+        out.append(f"- {len(near)} trade sono saliti vicino alla soglia (picco ≥ +{max(1.0, r.profit_lock_activate_pct - 2):g}%) "
+                   f"senza armare lo stop e poi hanno chiuso in perdita: le prove su soglie più basse sono nella "
+                   f"sezione Risk")
+    out.append("- le soglie alternative (armare/vendere più in alto o più in basso) sono provate sui percorsi di "
+               "prezzo nella sezione Risk e compaiono tra le Proposte quando battono quelle attuali")
+    return out + [""]

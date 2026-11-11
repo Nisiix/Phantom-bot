@@ -15,7 +15,8 @@ from collections import Counter, deque
 
 from .. import controller_memory as mem
 from .. import model as ml
-from ..controller import build_report, health_checks, proposals, reason_category, run_experiments
+from ..controller import (build_report, health_checks, profit_lock_section, proposals, reason_category,
+                          run_experiments)
 from .base import Agent
 
 
@@ -284,9 +285,16 @@ class Controller(Agent):
             self.next_round = time.time() + self.c.interval_minutes * 60
             self.status("idle")
 
+    def _exit_records(self) -> list[dict]:
+        try:
+            return self.desk.store.q("SELECT data FROM trades UNION ALL SELECT data FROM trades_archive")
+        except Exception:  # noqa: BLE001 - report only
+            return []
+
     def write_report(self) -> str:
         self.report = build_report(self.health, self.exp, self.cfg, self.trials, self.rounds,
                                    mem.report_section(self.desk.store, self.cfg)) \
+            + "\n\n" + "\n".join(profit_lock_section(self._exit_records(), self.cfg)) \
             + ml.report_section(self.model_res, self.desk.model, self.cfg)
         self.report_ts = time.time()
         self.desk.store.kv_set("controller_last", {"report": self.report, "report_ts": self.report_ts,

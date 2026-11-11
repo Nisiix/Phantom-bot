@@ -140,6 +140,20 @@ daily_loss_limit_pct = 30.0          # live only: halt new entries for the day a
 liquidity_drop_exit_pct = 35.0       # emergency exit if pool liquidity drops this much
 max_hold_minutes = 45                # 0 = no time stop (45: Controller proposal 2026-11-10)
 price_poll_seconds = 2.0
+# PROFIT LOCK (user's rule 2026-11-11): once a trade is up +5% NET (+6% if it got there within 3 minutes of the
+# buy: a fast move gets a bit more room), the stop moves to at least +2.5% NET so the trade closes in profit.
+# NET = after buy fees, sale fees and sale slippage: every level is raised by the sell buffer (1% minimum; Risk
+# uses the slippage it measured on its last stop exits when that is larger). The Controller replays it and may
+# propose other values. profit_lock_activate_pct = 0 turns it off.
+profit_lock_activate_pct = 5.0
+profit_lock_fast_activate_pct = 6.0
+profit_lock_fast_minutes = 3.0
+profit_lock_pct = 2.5
+profit_lock_sell_buffer_pct = 1.0
+# User's choice 2026-11-11: the lock is PROPORTIONAL to the move, not a fixed break-even: it keeps this share of
+# the net peak profit and rises with it (peak +10% net -> sells at +5% net; +20% -> +10%), never below
+# profit_lock_pct. 0 = fixed lock at profit_lock_pct (break-even + fees), a variant the Controller measures.
+profit_lock_keep_pct = 50.0
 
 [recap]
 interval_hours = 4
