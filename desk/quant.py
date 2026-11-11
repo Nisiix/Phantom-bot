@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 LABELS = ("up", "down", "neither")
 # Buckets below 0.6 are never traded, but their shadow outcomes show whether the score ranks well.
@@ -89,6 +90,9 @@ class QuantModel:
     bucket_strength: float = 8.0
     outcomes: list[dict] = field(default_factory=list)
     cost_samples: list[float] = field(default_factory=list)   # measured round-trip costs (%)
+    # Tokens the Analyst approves are judged only on approved tokens (score >= min_score), rejected ones on
+    # rejected ones. 0 = one pool (old behaviour, tests).
+    min_score: float = 0.0
     blocked: int = 0
     evaluated: int = 0
     # Estimates are recomputed only when outcomes change (the shadow tracker adds thousands of rows,
@@ -102,16 +106,24 @@ class QuantModel:
     def add(self, row: dict) -> None:
         self.outcomes.append(row)
 
+    def _zone(self, score: float) -> list[dict]:
+        """Outcomes comparable to a token with this score: approved tokens for an approved one, else the rest."""
+        if self.min_score <= 0:
+            return self.outcomes
+        hi = score >= self.min_score
+        return [o for o in self.outcomes if ((o.get("score") or 0.0) >= self.min_score) == hi]
+
     @property
     def effective_samples(self) -> float:
-        return sum(o.get("weight", 1.0) for o in self.outcomes)
+        """Learning weight behind the verdicts QUANT can block (tokens the Analyst approved)."""
+        return sum(o.get("weight", 1.0) for o in self._zone(max(self.min_score, 1.0)))
 
     @property
     def enforcing(self) -> bool:
         return self.effective_samples >= self.min_samples_to_enforce
 
     # ── estimation ──
-    def _estimate(self, rows: list[dict], prior_p: dict, prior_r: dict, k: float) -> tuple[dict, dict]:
+    def _estimate(self, rows: list[dict], prior_p: dict, prior_r: dict, k: float, kr: float = 3.0) -> tuple[dict, dict]:
         n = {lb: 0 for lb in LABELS}
         s = {lb: 0.0 for lb in LABELS}
         for r in rows:
@@ -122,25 +134,29 @@ class QuantModel:
             s[r["label"]] += w * max(-100.0, min(300.0, r["gross_pct"] or 0.0))
         total = sum(n.values())
         p = {lb: (k * prior_p[lb] + n[lb]) / (k + total) for lb in LABELS}
-        # Mean gross return per scenario, shrunk toward the prior with 3 pseudo-observations.
-        r = {lb: (3 * prior_r[lb] + s[lb]) / (3 + n[lb]) for lb in LABELS}
+        # Mean gross return per scenario, shrunk toward the prior with kr pseudo-observations.
+        r = {lb: (kr * prior_r[lb] + s[lb]) / (kr + n[lb]) for lb in LABELS}
         return p, r
 
     def probabilities(self, score: float) -> tuple[dict, dict, int]:
         b = bucket_of(score)
-        key = (id(self.outcomes), len(self.outcomes), self.prior_strength, self.bucket_strength)
+        key = (id(self.outcomes), len(self.outcomes), self.prior_strength, self.bucket_strength, self.min_score)
         if self._cache.get("key") != key:
             self._cache.clear()
             self._cache["key"] = key
-        if b not in self._cache:
-            if "global" not in self._cache:
-                self._cache["global"] = self._estimate(self.outcomes, PRIOR_P, PRIOR_R, self.prior_strength)
-            gp, gr = self._cache["global"]
-            rows = [o for o in self.outcomes if bucket_of(o["score"]) == b]
-            p, _ = self._estimate(rows, gp, gr, self.bucket_strength)
-            self._cache[b] = (p, gr, len(rows))   # payoffs are pooled globally (too noisy per bucket)
-        p, gr, n = self._cache[b]
-        return dict(p), dict(gr), n
+        hi = self.min_score <= 0 or score >= self.min_score
+        ck = (b, hi)
+        if ck not in self._cache:
+            zone = self._zone(score)
+            if ("global", hi) not in self._cache:
+                self._cache[("global", hi)] = self._estimate(zone, PRIOR_P, PRIOR_R, self.prior_strength)
+            gp, gr = self._cache[("global", hi)]
+            rows = [o for o in zone if bucket_of(o["score"]) == b]
+            # Payoffs per bucket too, shrunk toward the zone average (a score bucket with few rows stays near it).
+            p, r = self._estimate(rows, gp, gr, self.bucket_strength, self.bucket_strength)
+            self._cache[ck] = (p, r, len(rows))
+        p, r, n = self._cache[ck]
+        return dict(p), dict(r), n
 
     def evaluate(self, score: float, cost_pct: float) -> QuantView:
         self.evaluated += 1
@@ -186,6 +202,62 @@ class QuantModel:
         if not self.enforcing:
             return f"QUANT warm-up {n:.0f}/{self.min_samples_to_enforce}"
         return f"QUANT enforcing (n={n:.0f}, blocked {self.blocked})"
+
+
+# ── what QUANT learns from ──
+def parse_since(value) -> float:
+    """quant.learn_since ("2026-11-10T09:03:00Z", a unix time, or "" = everything) -> unix seconds."""
+    if value in (None, "", 0):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        d = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.timestamp()
+
+
+def path_label(path: list, cost: float, up_pct: float, down_pct: float, horizon_s: float) -> str:
+    """Which barrier a recorded price path (seconds, raw % move) touched first, on net return."""
+    for sec, raw in path:
+        if sec > horizon_s:
+            break
+        net = raw - cost
+        if net >= up_pct:
+            return "up"
+        if net <= down_pct:
+            return "down"
+    return "neither"
+
+
+def usable_trade(o: dict, cfg) -> bool:
+    """A closed trade QUANT may learn from under the current rules."""
+    if o.get("ts", 0) < parse_since(cfg.quant.learn_since):
+        return False   # bought before the instant-rug protections: the bot would not take that trade now
+    pump_only = getattr(cfg.scout, "venues", "") == "pumpfun"
+    return not (pump_only and o.get("mint") and not str(o["mint"]).endswith("pump"))
+
+
+def learning_rows(stores, cfg) -> list[dict]:
+    """Trades + replayed Analyst follow-ups QUANT learns from (rows it can't use are skipped, never deleted)."""
+    from .shadow import shadow_to_outcome
+    rows = []
+    for st in stores:
+        rows += [{**o, "weight": 1.0, "source": "trade"} for o in st.outcomes() if usable_trade(o, cfg)]
+        for r in st.shadow_samples():
+            o = shadow_to_outcome(r, cfg.quant.shadow_weight, cfg)
+            if o is not None:
+                rows.append(o)
+    return rows
+
+
+def model_from_cfg(cfg) -> QuantModel:
+    q = cfg.quant
+    return QuantModel(min_samples_to_enforce=q.min_samples_to_enforce, min_ev_pct=q.min_ev_pct,
+                      prior_strength=q.prior_strength, min_score=cfg.analyst.min_score)
 
 
 def outcome_row(trade: dict, pos, label: str, mode: str) -> dict:

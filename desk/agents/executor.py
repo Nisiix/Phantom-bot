@@ -220,6 +220,7 @@ class Executor(Agent):
         cost = max(0.0, rt_loss)
         quant = self.desk.quant
         quant.cost_samples.append(cost)
+        quant.min_score = self.cfg.analyst.min_score     # follows Controller changes to the Analyst threshold
         qv = quant.evaluate(v.score, cost)
         if self.cfg.quant.enabled and not qv.passes:
             self.state.bump("ev_block")

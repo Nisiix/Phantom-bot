@@ -136,3 +136,71 @@ def test_shadow_neither_and_outcome_row():
            "sim_net_pct": s.sim_ret, "cost_pct": 2.0, "p_up": 0.3, "p_down": 0.5, "p_neither": 0.2}
     o = shadow_to_outcome(row, 0.5)
     assert o["weight"] == 0.5 and o["gross_pct"] == pytest.approx(3.0) and o["label"] == "neither"
+
+
+# ── QUANT judges each token on comparable tokens (fix 2026-11-11) ──
+def test_rejected_tokens_do_not_poison_approved_ones():
+    rows = [outcome("down", -90, score=0.45) for _ in range(60)]                      # rejected rugs
+    rows += [outcome("up", 20, score=0.70) for _ in range(25)] + [outcome("down", -8, score=0.70) for _ in range(15)]
+    old = QuantModel(min_samples_to_enforce=30)
+    old.load(rows)
+    new = QuantModel(min_samples_to_enforce=30, min_score=0.65)
+    new.load(rows)
+    assert not old.evaluate(0.70, 2).passes            # pooled: the rejected rugs made every token negative
+    v = new.evaluate(0.70, 2)
+    assert v.enforcing and v.passes and v.ev_pct > 0
+    assert not new.evaluate(0.45, 2).passes            # a low-score token is still judged on its peers
+
+
+def test_payoffs_follow_the_score_bucket():
+    q = QuantModel(min_score=0.6)
+    q.load([outcome("up", 40, score=0.85) for _ in range(30)] + [outcome("up", 2, score=0.62) for _ in range(30)])
+    _, r_hi, _ = q.probabilities(0.85)
+    _, r_lo, _ = q.probabilities(0.62)
+    assert r_hi["up"] > r_lo["up"] + 15
+
+
+def test_enforcing_counts_only_approved_outcomes():
+    q = QuantModel(min_samples_to_enforce=30, min_score=0.65)
+    q.load([outcome("down", -7, score=0.40) for _ in range(100)] + [outcome("up", 15, score=0.7) for _ in range(5)])
+    assert q.effective_samples == 5 and not q.enforcing
+
+
+def _cfg():
+    cfg = Config()
+    cfg.scout.venues = "pumpfun"
+    cfg.quant.learn_since = "2026-11-10T09:03:00Z"
+    cfg.risk.hard_stop_pct, cfg.risk.trail_activate_pct, cfg.risk.trail_distance_pct = -4, 25, 8
+    cfg.risk.max_hold_minutes = 45
+    enforce_hard_limits(cfg)
+    return cfg
+
+
+def _srow(path, mint="Abcpump", start=1_762_800_000.0):
+    import json
+    return {"start_ts": start, "end_ts": start + 3600, "mode": "paper", "mint": mint, "symbol": "T", "score": 0.7,
+            "desk_label": "up", "sim_net_pct": 50.0, "cost_pct": 2.0, "p_up": None, "p_down": None,
+            "p_neither": None, "path": json.dumps(path)}
+
+
+def test_shadow_outcome_uses_current_rules():
+    from desk.quant import parse_since
+    cfg = _cfg()
+    t = parse_since(cfg.quant.learn_since) + 60
+    path = [[10, 1.0], [60, -7.0], [120, 40.0]]
+    o = shadow_to_outcome(_srow(path, start=t), 0.5, cfg)
+    assert o["label"] == "down" and o["ret_net_pct"] == pytest.approx(-9.0)   # current -4% stop, not the old +50%
+    assert shadow_to_outcome(_srow(path, start=t - 7200), 0.5, cfg) is None    # before the rug protections
+    assert shadow_to_outcome(_srow(path, mint="Abcxyz", start=t), 0.5, cfg) is None   # copycat mint
+    frozen = [[i * 10, 2.0] for i in range(20)]
+    assert shadow_to_outcome(_srow(frozen, start=t), 0.5, cfg) is None         # frozen DexScreener price
+
+
+def test_old_trades_are_kept_but_not_learned_from():
+    from desk.quant import parse_since, usable_trade
+    cfg = _cfg()
+    t = parse_since(cfg.quant.learn_since)
+    assert not usable_trade({"ts": t - 10, "mint": "Apump"}, cfg)
+    assert usable_trade({"ts": t + 10, "mint": "Apump"}, cfg)
+    cfg.quant.learn_since = ""
+    assert usable_trade({"ts": 5, "mint": "Apump"}, cfg)

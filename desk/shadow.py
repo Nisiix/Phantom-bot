@@ -299,18 +299,51 @@ class ShadowTracker:
         # Analyst-scored, not actually traded -> a learning sample for QUANT (the real trade
         # outcome is recorded separately when a token is bought).
         if s.stage == "analyst" and s.score is not None and not s.traded:
-            self.desk.quant.add(shadow_to_outcome(row, self.cfg.quant.shadow_weight))
+            o = shadow_to_outcome(row, self.cfg.quant.shadow_weight, self.cfg)
+            if o is not None:
+                self.desk.quant.add(o)
         if s.model_label == "up" and s.decision in ("reject", "kill", "reject_score"):
             self.emit("info", f"shadow: skipped token hit +60% first (rejected for: {s.reason[:80]})",
                       s.mint, s.symbol)
 
 
-def shadow_to_outcome(row: dict, weight: float) -> dict:
+def shadow_to_outcome(row: dict, weight: float, cfg=None) -> dict | None:
+    """Analyst follow-up -> QUANT sample.
+
+    With cfg (the desk always passes it) the row is judged by the CURRENT rules: None when QUANT must not learn
+    from it (before quant.learn_since, copycat mint, frozen/glitched price path), otherwise its result is the
+    current Risk exits replayed on the price path and its label the current barriers."""
     p = {lb: row.get(f"p_{lb}") for lb in LABELS}
+    cost = float(row.get("cost_pct") or 0.0)
+    label, net = row["desk_label"], row["sim_net_pct"]
+    if cfg is not None:
+        from .controller import path_problem, simulate_exit
+        from .quant import parse_since
+        if (row.get("start_ts") or row.get("end_ts") or 0) < parse_since(cfg.quant.learn_since):
+            return None
+        mint = str(row.get("mint") or "")
+        if getattr(cfg.scout, "venues", "") == "pumpfun" and mint and not mint.endswith("pump"):
+            return None
+        path = None
+        if row.get("path"):
+            try:
+                path = [(float(a), float(b)) for a, b in json.loads(row["path"])]
+            except (TypeError, ValueError):
+                path = None
+        if path:
+            if path_problem(path):
+                return None
+            r = cfg.risk
+            net = simulate_exit(path, cost, r.exit_stop_pct or r.hard_stop_pct, r.trail_activate_pct,
+                                r.trail_distance_pct, float(r.max_hold_minutes))
+            from .quant import path_label
+            label = path_label(path, cost, r.trail_activate_pct, r.hard_stop_pct, cfg.quant.horizon_minutes * 60)
+    if net is None or not label:
+        return None
     return {
         "ts": row["end_ts"], "mode": row["mode"], "mint": row["mint"], "symbol": row["symbol"],
-        "score": row["score"], "label": row["desk_label"], "ret_net_pct": row["sim_net_pct"],
-        "rt_cost_pct": row["cost_pct"], "gross_pct": row["sim_net_pct"] + row["cost_pct"],
+        "score": row["score"], "label": label, "ret_net_pct": net,
+        "rt_cost_pct": cost, "gross_pct": net + cost,
         "p_up": p["up"], "p_down": p["down"], "p_neither": p["neither"], "ev_pct": None,
         "weight": weight, "source": "shadow",
     }

@@ -146,6 +146,10 @@ class QuantCfg:
     shadow_weight: float = 0.5
     shadow_min_liquidity_usd: float = 5000.0
     default_cost_pct: float = 2.5
+    # QUANT learns only from trades / follow-ups after this moment (UTC ISO time, "" = all). Default: when the
+    # instant-rug protections went live (graduation wait, holder-spread kill, rugged names); earlier trades
+    # describe tokens the bot no longer buys. The rows stay in the database.
+    learn_since: str = "2026-11-10T09:03:00Z"
     market_regime: bool = True        # record BTC/SOL/meme regime with every shadow row & trade (no blocking)
 
 
