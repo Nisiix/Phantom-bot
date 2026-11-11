@@ -104,6 +104,16 @@ class MarketSnapshot:
     websites: list[str] = field(default_factory=list)
     socials: dict[str, str] = field(default_factory=dict)
     pair_count: int = 1
+    # The pool every number above was observed on (pair_address) and what it trades against. The Executor buys
+    # in THIS pool: a token can have other pools (other DEX, USDC instead of SOL) with little or no liquidity.
+    quote_mint: str = ""
+    quote_symbol: str = ""
+    pair_liquidity_usd: float = 0.0
+    # Every Solana pool of the token: {"address", "dex", "quote_mint", "quote_symbol", "liquidity_usd"}.
+    pools: list[dict] = field(default_factory=list)
+
+    def pool(self, address: str) -> dict | None:
+        return next((p for p in self.pools if p.get("address") == address), None)
 
     @property
     def age_minutes(self) -> float:

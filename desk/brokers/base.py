@@ -29,6 +29,12 @@ class Broker:
     async def quote_buy(self, jup, mint: str, lamports: int, slippage_bps: int) -> dict | None:
         return await jup.quote(SOL_MINT, mint, lamports, slippage_bps)
 
+    async def quote_buy_pinned(self, jup, mint: str, lamports: int, slippage_bps: int,
+                               dexes: list[str]) -> dict | None:
+        """A buy quote restricted to the observed pool's DEX (desk/pools.py). Plain /swap/v1 quote in both modes:
+        Swap V2 orders can't be restricted to a DEX, so live sends this one through the /swap/v1 + RPC path."""
+        return await jup.quote(SOL_MINT, mint, lamports, slippage_bps, lane="exec", dexes=dexes)
+
     async def quote_sell(self, jup, mint: str, raw: int, slippage_bps: int | None) -> dict | None:
         # "exec" lane, like a live order: the sale never waits behind Risk's routine quotes (the risk lane spaces
         # its calls 2 s apart: measured 2026-11-11, a dumping token lost 13 points between the stop and the sale).

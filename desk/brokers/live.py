@@ -101,15 +101,21 @@ class LiveBroker(Broker):
         tx_b64, lvbh = await self.jup.swap_tx(quote, self.pubkey, self.max_priority)
         return await self.rpc.send_and_confirm(sign_swap(tx_b64, self.kp), lvbh)
 
+    @staticmethod
+    def _is_v2(q: dict) -> bool:
+        """A Swap V2 order carries its own transaction; a /swap/v1 quote (rpc mode, or a buy pinned to the
+        observed pool) is built and sent through the RPC path."""
+        return bool(q.get("transaction") and q.get("requestId"))
+
     def _route(self, q: dict) -> str:
-        if self.v2:
+        if self._is_v2(q):
             return f"jupiter-v2 {q.get('mode', '?')}/{q.get('router', '?')}"
         return "rpc metis"
 
     async def buy(self, mint: str, sol_amount: float, decimals: int, quote: dict) -> Fill:
         route = self._route(quote)
         try:
-            if self.v2:
+            if self._is_v2(quote):
                 ok, res, err = await self._execute_v2(quote)
                 sig = res.get("signature", "")
                 if not ok:
@@ -133,7 +139,7 @@ class LiveBroker(Broker):
     async def sell(self, mint: str, tokens: float, decimals: int, quote: dict) -> Fill:
         route = self._route(quote)
         try:
-            if self.v2:
+            if self._is_v2(quote):
                 ok, res, err = await self._execute_v2(quote)
                 sig = res.get("signature", "")
                 if not ok:

@@ -27,6 +27,7 @@ from ..clients.jupiter import SOL_MINT
 from ..config import HARD_MAX_POSITION_PCT, HARD_MIN_SCORE
 from ..models import ExitOrder, FilterPass, Position, Verdict, now
 from .. import rugnames
+from ..pools import pin_labels, route_check, route_text
 from ..entry import EntryPlan, plan_from, settings as entry_settings
 from ..portfolio import AveragingDownError
 from ..quant import label_outcome, outcome_row
@@ -297,6 +298,51 @@ class Executor(Agent):
             return self.reject(v, "market data vanished before execution")
         if not buy_q:
             return self.reject(v, "no Jupiter buy route")
+        # The pool: buy in the one the Filter/Analyst observed, in the currency it trades against (desk/pools.py).
+        pool_note = ""
+        observed = v.clearance.report.market
+        target = (observed.pair_address if observed is not None and observed.pair_address else "") or snap.pair_address
+        if snap.pools and target:
+            pool = snap.pool(target)
+            if pool is None:
+                return self.reject(v, f"observed pool {target[:6]}… is no longer listed for this token")
+            seen = (observed.pool(target) if observed is not None else None) or {}
+            seen_liq = float(seen.get("liquidity_usd") or (observed.pair_liquidity_usd if observed else 0) or 0)
+            liq = float(pool.get("liquidity_usd") or 0)
+            if liq < self.cfg.filter.min_liquidity_usd:
+                return self.reject(v, f"observed pool {pool.get('dex')} {target[:6]}… has only ${liq:,.0f} liquidity "
+                                      f"(< ${self.cfg.filter.min_liquidity_usd:,.0f})")
+            drop = self.cfg.entry.max_liq_drop_pct
+            if seen_liq > 0 and liq < seen_liq * (1 - drop / 100):
+                return self.reject(v, f"observed pool liquidity fell from ${seen_liq:,.0f} to ${liq:,.0f} "
+                                      f"(> {drop:g}% drop) since the analysis")
+            ok, why = route_check(buy_q, v.mint, target)
+            if not ok:
+                labels = pin_labels(pool, snap.pools)
+                if not labels:
+                    return self.reject(v, f"{why}; DEX '{pool.get('dex')}' unknown, can't force the observed pool")
+                try:
+                    pinned = await self.broker.quote_buy_pinned(self.desk.jup, v.mint, int(size * 1e9),
+                                                                self.e.slippage_bps, labels)
+                except Exception as e:  # noqa: BLE001
+                    pinned, e_txt = None, f"{e.__class__.__name__}: {e}"
+                else:
+                    e_txt = "no route"
+                ok2, why2 = route_check(pinned, v.mint, target) if pinned else (False, e_txt)
+                if not ok2:
+                    return self.reject(v, f"{why}; restricted to {', '.join(labels)}: {why2}")
+                buy_q, pool_note = pinned, " (route forced on the observed pool)"
+                ref_q = None
+                try:
+                    ref_q = await self.desk.jup.quote(SOL_MINT, v.mint, REF_QUOTE_LAMPORTS, self.e.slippage_bps,
+                                                      dexes=labels)
+                except Exception:  # noqa: BLE001 - optional
+                    pass
+            if ref_q is not None and not route_check(ref_q, v.mint, target)[0]:
+                ref_q = None                       # a reference price from another pool would skew the impact
+            sym = {v.mint: v.symbol, pool.get("quote_mint") or "": pool.get("quote_symbol") or "?"}
+            pool_note = (f"pool {pool.get('dex')} {target[:6]}… vs {pool.get('quote_symbol') or '?'} "
+                         f"(${liq:,.0f}){pool_note}; route {route_text(buy_q, sym)}")
         est_bps = buy_q.get("slippageBps")
         if est_bps is not None and int(est_bps) > self.e.slippage_bps:
             return self.reject(v, f"Jupiter's slippage estimate {int(est_bps)} bps > cap {self.e.slippage_bps} bps "
@@ -360,7 +406,7 @@ class Executor(Agent):
         reason = (f"score {v.score:.2f} | {'; '.join(v.rationale[:5])} |{' timing: ' + timing + ' |' if timing else ''} filters: "
                   + ", ".join(f"{c.name}={c.value}" for c in rep.checks)
                   + f" | size {size:.4f} SOL = {self.e.max_position_pct}% of {cash:.3f} | impact {impact:.2f}% "
-                    f"| round-trip {rt_loss:.2f}% | {qv.short()}{' | ' + mv.short() if mv else ''} | exec {fill.route}: checks "
+                    f"| round-trip {rt_loss:.2f}% |{' ' + pool_note + ' |' if pool_note else ''} {qv.short()}{' | ' + mv.short() if mv else ''} | exec {fill.route}: checks "
                     f"{speed['checks_ms']} ms + swap {speed['swap_ms']} ms")
         pos = Position(
             mint=v.mint, symbol=v.symbol, tokens=fill.tokens, decimals=decimals, cost_sol=fill.sol,

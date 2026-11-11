@@ -107,6 +107,11 @@ priority_fee_max_lamports = 200000   # "rpc" execution only (Jupiter V2 sets fee
 # slippage, RFQ market makers, Jupiter lands it MEV-protected, exact fill returned). "rpc": legacy
 # /swap/v1 sent through SOLANA_RPC_URL with our own fast rebroadcast loop (pair it with a private RPC).
 execution = "jupiter_v2"
+# Pool & currency (2026-11-12): the buy goes through the pool the Filter/Analyst observed. If that pool trades
+# against another currency (USDC, ...), Jupiter swaps SOL -> that currency -> token in ONE transaction (sells do
+# the reverse, always ending in SOL). If Jupiter routes elsewhere, the quote is redone restricted to that pool's DEX;
+# if it still can't use the pool, or the pool has < [filter] min_liquidity_usd or lost > [entry] max_liq_drop_pct
+# since the analysis, no buy. Such a forced buy is sent via /swap/v1 + RPC in live (V2 orders can't be pinned).
 # Exit retries: if a sell fails it is retried IMMEDIATELY at these slippages (bps) to make sure we get out.
 exit_slippage_ladder_bps = [800, 1500, 3000]
 

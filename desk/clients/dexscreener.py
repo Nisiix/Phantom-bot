@@ -38,10 +38,14 @@ def snapshot_from_pairs(mint: str, pairs: list[dict]) -> MarketSnapshot | None:
         return None
     pairs.sort(key=lambda p: _f((p.get("liquidity") or {}).get("usd")), reverse=True)
     main = pairs[0]
-    # Prefer the deepest SOL-quoted pair as the "main" pair for pricing.
+    # Prefer the deepest SOL-quoted pair as the "main" pair (no SOL -> USDC conversion needed to buy it), but only
+    # when it is a real pool: at least half as deep as the deepest one. Before 2026-11-12 any SOL pair won, so a
+    # dust SOL pool could become the "observed" pool while the token's real liquidity sat in a USDC pool.
+    deepest = _f((main.get("liquidity") or {}).get("usd"))
     for p in pairs:
         if (p.get("quoteToken") or {}).get("address") == SOL:
-            main = p
+            if _f((p.get("liquidity") or {}).get("usd")) >= 0.5 * deepest:
+                main = p
             break
 
     def tx(p, w, side):
@@ -89,6 +93,13 @@ def snapshot_from_pairs(mint: str, pairs: list[dict]) -> MarketSnapshot | None:
         websites=websites,
         socials=socials,
         pair_count=len(pairs),
+        quote_mint=quote or "",
+        quote_symbol=(main.get("quoteToken") or {}).get("symbol") or "",
+        pair_liquidity_usd=_f((main.get("liquidity") or {}).get("usd")),
+        pools=[{"address": p.get("pairAddress") or "", "dex": p.get("dexId") or "",
+                "quote_mint": (p.get("quoteToken") or {}).get("address") or "",
+                "quote_symbol": (p.get("quoteToken") or {}).get("symbol") or "",
+                "liquidity_usd": _f((p.get("liquidity") or {}).get("usd"))} for p in pairs],
     )
 
 

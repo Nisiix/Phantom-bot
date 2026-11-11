@@ -22,18 +22,22 @@ class Jupiter:
         self.http = http
 
     async def quote(self, input_mint: str, output_mint: str, amount_raw: int, slippage_bps: int,
-                    lane: str = "") -> dict | None:
+                    lane: str = "", dexes: list[str] | None = None) -> dict | None:
+        """dexes: only route through these DEX labels (used to keep a buy on the observed pool, desk/pools.py)."""
         if amount_raw <= 0:
             return None
+        params = {
+            "inputMint": input_mint,
+            "outputMint": output_mint,
+            "amount": str(int(amount_raw)),
+            "slippageBps": str(int(slippage_bps)),
+            "restrictIntermediateTokens": "true",
+        }
+        if dexes:
+            params["dexes"] = ",".join(dexes)
         q = await self.http.get(
             f"{BASE}/swap/v1/quote",
-            params={
-                "inputMint": input_mint,
-                "outputMint": output_mint,
-                "amount": str(int(amount_raw)),
-                "slippageBps": str(int(slippage_bps)),
-                "restrictIntermediateTokens": "true",
-            },
+            params=params,
             retries=2,
             lane=lane,
         )
