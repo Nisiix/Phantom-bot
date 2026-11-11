@@ -129,7 +129,7 @@ class Terminal:
         for p in pf.positions.values():
             pnl = p.pnl_pct
             stop = (f"trail {p.peak_pnl_pct - r.trail_distance_pct * (1 + p.peak_pnl_pct / 100):+.1f}%"
-                    if p.trailing_active else f"hard {r.hard_stop_pct:+.0f}%")
+                    if p.trailing_active else f"hard {r.exit_stop_pct or r.hard_stop_pct:+.0f}%")
             tb.add_row(p.symbol[:10], f"{p.cost_sol:.3f}", f"{p.mark_value_sol:.3f}",
                        Text(f"{pnl:+.2f}%", style="green" if pnl >= 0 else "red"),
                        f"{p.peak_pnl_pct:+.1f}%", stop, f"{(time.time() - p.entry_ts) / 60:.0f}m")

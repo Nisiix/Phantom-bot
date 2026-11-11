@@ -304,7 +304,7 @@ def parse_rows(raw: list[dict], young_minutes: float, cfg=None, skipped: dict | 
             if why:
                 skip(why)
                 continue
-            ret = simulate_exit(path, cost, r_.hard_stop_pct, r_.trail_activate_pct, r_.trail_distance_pct,
+            ret = simulate_exit(path, cost, r_.exit_stop_pct or r_.hard_stop_pct, r_.trail_activate_pct, r_.trail_distance_pct,
                                 float(r_.max_hold_minutes))
         if r.get("score") is not None:
             f.setdefault("score", r["score"])
@@ -429,12 +429,16 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
     # ── Risk (exit rules replayed on price paths) ──
     with_path = [x for x in analyst_rows if x["path"]]
     rows, note = bought(with_path)
-    stops = [s for s in (-6.0, -5.0, -4.0, -3.0) if s >= r.hard_stop_pct]
+    exit_stop = r.exit_stop_pct or r.hard_stop_pct
+    # Paper stop trial (exit stop wider than the hard limit, user's choice): the stop is the user's experiment,
+    # the Controller doesn't move it; it still tests trailing and the time exit around it.
+    stops = [exit_stop] if exit_stop < r.hard_stop_pct else \
+        [s for s in (-6.0, -5.0, -4.0, -3.0) if s >= r.hard_stop_pct]
     trail_on = sorted({max(12.0, r.trail_activate_pct), 12.0, 15.0, 20.0, 25.0, 30.0, 40.0})
     trail_on = [x for x in trail_on if x >= 12.0]
     dists = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
     holds = [0.0, 15.0, 30.0, 45.0]
-    cur_r = {"hard_stop_pct": r.hard_stop_pct, "trail_activate_pct": r.trail_activate_pct,
+    cur_r = {"hard_stop_pct": exit_stop, "trail_activate_pct": r.trail_activate_pct,
              "trail_distance_pct": r.trail_distance_pct, "max_hold_minutes": float(r.max_hold_minutes)}
 
     def r_ret(v, rows=rows):
@@ -685,6 +689,9 @@ def within_hard_limits(cfg, changes: list[str]) -> bool:
         key, val = rest.split(" = ", 1)
         if (sec, key) == ("analyst", "weights"):
             continue                        # score weights: no hard limit (validated when config.toml is loaded)
+        if (sec, key) == ("risk", "hard_stop_pct") and cfg.risk.exit_stop_pct and \
+                cfg.risk.exit_stop_pct < cfg.risk.hard_stop_pct:
+            return False                    # paper stop trial running: the stop is the user's experiment
         obj = getattr(test, sec, None)
         if obj is None or not hasattr(obj, key):
             return False

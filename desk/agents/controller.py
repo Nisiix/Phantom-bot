@@ -88,7 +88,7 @@ class Controller(Agent):
         return {
             "t": t,
             "cfg": {"max_open": cfg.executor.max_open_positions, "max_pos_pct": cfg.executor.max_position_pct,
-                    "hard_stop": cfg.risk.hard_stop_pct, "trail_activate": cfg.risk.trail_activate_pct,
+                    "hard_stop": cfg.risk.exit_stop_pct or cfg.risk.hard_stop_pct, "trail_activate": cfg.risk.trail_activate_pct,
                     "min_score": cfg.analyst.min_score},
             "agents": {n: {"status": s.status, "heartbeat": s.heartbeat, "errors": s.errors, "last": s.last,
                            "counters": dict(s.counters)} for n, s in d.hub.agents.items()},

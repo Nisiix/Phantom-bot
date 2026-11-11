@@ -15,6 +15,7 @@ from pathlib import Path
 HARD_MAX_POSITION_PCT = 8.0      # never more than 8% of current balance per trade
 HARD_MIN_SCORE = 0.6             # Analyst score under 0.6 = no trade
 HARD_STOP_PCT = -6.0             # hard stop at -6%
+PAPER_STOP_FLOOR_PCT = -30.0     # paper-only trial of wider stops (user's choice 2026-11-11): never wider than this
 HARD_TRAIL_ACTIVATE_PCT = 12.0   # trail winners only after +12%
 HARD_MAX_TOP10_PCT = 20.0
 HARD_MIN_VOLUME_H1_USD = 50_000.0
@@ -117,6 +118,12 @@ class ExecutorCfg:
 @dataclass
 class RiskCfg:
     hard_stop_pct: float = -6.0
+    # Paper-only trial of a stop wider than the -6% hard limit (user's choice 2026-11-11, from the Controller's
+    # "Stop più larghi" measure). 0 = off. Ignored in live: there the -6% hard limit always applies.
+    paper_hard_stop_pct: float = 0.0
+    # The stop Risk actually exits at (set on every load by enforce_hard_limits, not a config.toml key):
+    # paper_hard_stop_pct in paper when set, else hard_stop_pct. QUANT labels keep using hard_stop_pct.
+    exit_stop_pct: float = 0.0
     trail_activate_pct: float = 12.0
     trail_distance_pct: float = 6.0
     cooldown_after_loss_minutes: float = 20
@@ -291,6 +298,10 @@ def enforce_hard_limits(cfg: Config) -> None:
           "analyst threshold can never be below 0.6")
     clamp(r, "hard_stop_pct", lambda v: HARD_STOP_PCT <= v < 0, HARD_STOP_PCT,
           "hard stop can never be looser than -6%")
+    clamp(r, "paper_hard_stop_pct", lambda v: v == 0 or PAPER_STOP_FLOOR_PCT <= v < 0, 0.0,
+          "paper stop trial must be 0 (off) or between -30% and 0")
+    r.exit_stop_pct = r.paper_hard_stop_pct if (cfg.mode == "paper" and r.paper_hard_stop_pct < 0) \
+        else r.hard_stop_pct
     clamp(r, "trail_activate_pct", lambda v: v >= HARD_TRAIL_ACTIVATE_PCT, HARD_TRAIL_ACTIVATE_PCT,
           "trailing may only start after +12%")
     clamp(r, "trail_distance_pct", lambda v: 0 < v < HARD_TRAIL_ACTIVATE_PCT, 6.0,

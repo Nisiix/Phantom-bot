@@ -76,7 +76,7 @@ class Dashboard:
             "symbol": p.symbol, "mint": p.mint, "cost": p.cost_sol, "value": p.mark_value_sol,
             "pnl_pct": p.pnl_pct, "peak_pct": p.peak_pnl_pct, "trailing": p.trailing_active,
             "stop_pct": ((p.peak_value_sol * (1 - d.cfg.risk.trail_distance_pct / 100)) / p.cost_sol - 1) * 100
-            if p.trailing_active and p.cost_sol else d.cfg.risk.hard_stop_pct,
+            if p.trailing_active and p.cost_sol else (d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct),
             "age_min": (t - p.entry_ts) / 60, "score": p.score, "ev_pct": p.ev_pct, "reason": p.entry_reason,
         } for p in pf.positions.values()]
         trades = d.store.q("SELECT symbol,mint,entry_ts,exit_ts,cost_sol,pnl_sol,pnl_pct,peak_pnl_pct,score,"
@@ -104,7 +104,7 @@ class Dashboard:
                         "max_open": d.cfg.executor.max_open_positions},
             "gates": {"day_halted": r.day_halted, "pause_left": max(0.0, r.pause_until - t),
                       "cooldown_left": cd_left},
-            "rules": {"max_pos_pct": d.cfg.executor.max_position_pct, "stop": d.cfg.risk.hard_stop_pct,
+            "rules": {"max_pos_pct": d.cfg.executor.max_position_pct, "stop": d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct,
                       "daily_limit": d.cfg.risk.daily_loss_limit_pct,
                       "trail": d.cfg.risk.trail_activate_pct, "min_score": d.cfg.analyst.min_score},
             "quant": {"status": q.status(), "enforcing": q.enforcing, "samples": q.effective_samples,

@@ -86,6 +86,10 @@ The Controller (Controllore) runs inside the desk with two read-only jobs:
   price path. Paths that can't be trusted are left out: a flat price for the whole hour (DexScreener stops
   updating a pool once its liquidity is pulled, so a rug reads as +2% or +475%) and absurd readings. With
   `venues = "pumpfun"`, copycat mints the Filter now blocks for good are left out too.
+* **Paper stop trial** (`[risk] paper_hard_stop_pct`, your choice of 2026-11-11: -25): in paper only, Risk exits
+  at this wider stop instead of `hard_stop_pct`, to test what the "Stop più larghi" measure suggests. Live always
+  keeps the -6% hard limit. While the trial runs the Controller does not move the stop (it still tunes trailing
+  and the time exit); QUANT labels keep using `hard_stop_pct`. Set it to 0 to end the trial.
 
 The report is in `data/reports/controller_<mode>_latest.md`, in the dashboard (section Controllore, also
 shown in the 3D view) and on demand with `python run.py controller`. All of it uses local data only, so it

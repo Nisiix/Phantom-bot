@@ -27,8 +27,9 @@ from .base import Agent
 def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None) -> tuple[str | None, str]:
     """Pure rule evaluation. Also arms the trailing stop. Returns (reason, detail)."""
     pnl = pos.pnl_pct
-    if pnl <= cfg.hard_stop_pct:
-        return "HARD_STOP", f"P&L {pnl:+.2f}% <= {cfg.hard_stop_pct}%"
+    stop = getattr(cfg, "exit_stop_pct", 0) or cfg.hard_stop_pct    # paper stop trial, else the hard stop
+    if pnl <= stop:
+        return "HARD_STOP", f"P&L {pnl:+.2f}% <= {stop}%"
     if not pos.trailing_active and pos.peak_pnl_pct >= cfg.trail_activate_pct:
         pos.trailing_active = True
     if pos.trailing_active:
@@ -123,7 +124,7 @@ class Risk(Agent):
     async def run(self) -> None:
         self.status("working")
         self._rollover(force=not self.day)
-        self.emit("info", f"Risk online: stop {self.r.hard_stop_pct}%, trail after +{self.r.trail_activate_pct}% "
+        self.emit("info", f"Risk online: stop {self.r.exit_stop_pct or self.r.hard_stop_pct}%, trail after +{self.r.trail_activate_pct}% "
                           f"({self.r.trail_distance_pct}% distance), daily limit -{self.r.daily_loss_limit_pct}%")
         await self.supervised("risk", self.loop)
 
@@ -190,7 +191,7 @@ class Risk(Agent):
         # fetched for all due positions at once instead of one after the other.
         due, quoted = [], set()
         for mint, pos in items:
-            near = pos.pnl_pct <= self.r.hard_stop_pct + 2 or pos.trailing_active
+            near = pos.pnl_pct <= (self.r.exit_stop_pct or self.r.hard_stop_pct) + 2 or pos.trailing_active
             if mint not in self.exiting and t - self._last_quote.get(mint, 0) >= (6 if near else 12):
                 self._last_quote[mint] = t
                 due.append(pos)

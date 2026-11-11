@@ -395,3 +395,25 @@ def test_shadow_simulation_takes_the_time_exit():
     update_shadow(s, 2.5, 2700, -4, 25, 8, 45)       # +148% net at the 45-min mark: sold there
     update_shadow(s, 0.01, 3000, -4, 25, 8, 45)
     assert not s.sim_open and abs(s.sim_ret - 148.0) < 1e-9
+
+
+def test_paper_stop_trial_is_paper_only_and_not_moved_by_the_controller():
+    from desk.agents.risk import exit_decision
+    from desk.config import enforce_hard_limits
+    cfg = Config()
+    cfg.risk.hard_stop_pct, cfg.risk.paper_hard_stop_pct = -4.0, -25.0
+    enforce_hard_limits(cfg)
+    assert cfg.risk.exit_stop_pct == -25.0 and cfg.risk.hard_stop_pct == -4.0 and not cfg.warnings
+    assert exit_decision(position(value=0.9), cfg.risk, 0, None)[0] is None     # -10% holds in the paper trial
+    assert exit_decision(position(value=0.74), cfg.risk, 0, None)[0] == "HARD_STOP"
+    assert not within_hard_limits(cfg, ["[risk] hard_stop_pct = -5"])  # the Controller leaves the trial alone
+    assert within_hard_limits(cfg, ["[risk] trail_activate_pct = 30"])
+    live = Config()
+    live.mode = "live"
+    live.risk.hard_stop_pct, live.risk.paper_hard_stop_pct = -4.0, -25.0
+    enforce_hard_limits(live)
+    assert live.risk.exit_stop_pct == -4.0                            # never in live
+    bad = Config()
+    bad.risk.paper_hard_stop_pct = -60.0
+    enforce_hard_limits(bad)
+    assert bad.risk.paper_hard_stop_pct == 0.0 and bad.risk.exit_stop_pct == bad.risk.hard_stop_pct

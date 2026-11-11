@@ -66,10 +66,12 @@ class Shadow:
 
 
 def update_shadow(s: Shadow, price: float, t: float, stop: float, up: float, trail_dist: float,
-                  max_hold_min: float = 0) -> None:
+                  max_hold_min: float = 0, exit_stop: float | None = None) -> None:
     """Advance one shadow with a new price observation (pure logic, unit-tested).
     max_hold_min: Risk's time exit ([risk] max_hold_minutes, 0 = none), so the simulated position follows the
-    same exit rules as a real one."""
+    same exit rules as a real one. exit_stop: the stop the simulated position exits at when it differs from
+    the label barrier `stop` (paper stop trial)."""
+    sim_stop = stop if exit_stop is None else exit_stop
     raw = (price / s.ref_price - 1) * 100
     net = raw - s.cost_pct
     s.last = raw
@@ -89,7 +91,7 @@ def update_shadow(s: Shadow, price: float, t: float, stop: float, up: float, tra
         # Simulated desk position: value multiple = 1 + net/100
         val = 1 + net / 100
         s.sim_peak = max(s.sim_peak, net)
-        if net <= stop or (max_hold_min and t - s.start >= max_hold_min * 60):
+        if net <= sim_stop or (max_hold_min and t - s.start >= max_hold_min * 60):
             s.sim_open, s.sim_ret = False, net
         else:
             if s.sim_peak >= up:
@@ -263,7 +265,8 @@ class ShadowTracker:
                     snap = snaps.get(s.mint)
                     if snap and snap.price_usd > 0:
                         update_shadow(s, snap.price_usd, t, r.hard_stop_pct, r.trail_activate_pct,
-                                      r.trail_distance_pct, float(r.max_hold_minutes or 0))
+                                      r.trail_distance_pct, float(r.max_hold_minutes or 0),
+                                      r.exit_stop_pct or r.hard_stop_pct)
                         if s.stage == "analyst":   # the price path lets the Controller replay other exit rules
                             s.path.append((int(t - s.start), round(s.last, 2)))
                     if t - s.start >= self.horizon:
