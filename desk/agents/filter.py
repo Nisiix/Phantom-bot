@@ -18,7 +18,9 @@ Instant-rug guards (2026-11-10, after 16 of 32 paper trades lost 60-100% within 
     (rug rate measured: 52% under 30 min after graduation, 0 of 9 after 60 min);
   * holder spread: top10 seen above spread_top10_high_pct in the last hour and now under max_top10_pct means the
     supply was moved to fake wallets right before the dump -> permanent kill;
-  * rugged names: relaunches of a name/symbol that rugged recently (fresh dev wallet each time) -> permanent kill.
+  * rugged names: a token named like one that rugged recently is held back unless its identity proves it is a
+    different project (desk/identity.py: own website showing its contract, own X account, DexScreener profile,
+    no channel borrowed from the rugged token); the same dev wallet as the rugged token -> permanent kill.
 
 Optional GMGN layer (GMGN_API_KEY): honeypot flag, GMGN rug label, insider / bundler / sniper
 shares, wash trading, serial-launcher dev, dev's SOL funder in our rug ledger, and holder
@@ -40,6 +42,7 @@ from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
 from ..onchain_lp import OnchainLP
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
 from ..research import market_features, rug_features
+from .. import identity
 from ..rugnames import RuggedNames, seed_from_trades
 from .base import Agent
 
@@ -176,6 +179,8 @@ class Filter(Agent):
         self._seq = 0
         rpc_url = self.cfg.secrets.rpc_url or ""
         self.rugged = RuggedNames(desk.store, self.f.rugged_name_days)
+        self.site_probe = identity.SiteProbe()
+        self._links_seen: set[str] = set()
         try:
             seed_from_trades(desk.store, self.f.rugged_name_loss_pct)
         except Exception:  # noqa: BLE001 - the ledger also fills from live observations
@@ -262,11 +267,23 @@ class Filter(Agent):
                                                                "no DEX pair indexed yet")])
         self.desk.market_seen[cand.mint] = (time.time(), snap.volume_h1, snap.liquidity_usd)
         checks = self._market_checks(snap)
+        self._note_links(cand.mint, snap)
         hit = self.rugged.match(cand.mint, snap.symbol or cand.symbol, snap.name or cand.name)
+        name_check = None
         if hit:
-            checks.append(Check("rugged_name", False, hit["symbol"] or hit["key"], "new name",
-                                f"relaunch of a name that rugged: {hit['symbol'] or hit['key']} "
-                                f"({str(hit['mint'])[:6]}…, {hit['reason'][:60]})", permanent=True))
+            same_dev = bool(cand.creator and hit.get("creator") and cand.creator == hit["creator"])
+            if same_dev or not self.f.rugged_name_identity:
+                checks.append(Check("rugged_name", False, hit["symbol"] or hit["key"], "new name",
+                                    f"relaunch of a name that rugged: {hit['symbol'] or hit['key']} "
+                                    f"({str(hit['mint'])[:6]}…, {hit['reason'][:60]})"
+                                    + (f", same dev {cand.creator[:6]}" if same_dev else ""), permanent=True))
+            else:
+                # Same name, maybe a different project: the deep stage checks its identity (desk/identity.py).
+                # Listed here only if the token fails something else anyway, and never as a kill: the real
+                # team often pays its DexScreener profile / publishes the site later, so it is re-checked.
+                name_check = Check("rugged_name", False, hit["symbol"] or hit["key"], "different project",
+                                   f"same name as rugged {hit['symbol'] or hit['key']} ({str(hit['mint'])[:6]}…, "
+                                   f"{hit['reason'][:60]}); identity not checked yet")
         if self.cfg.scout.venues == "pumpfun":
             # pump.fun-only desk: tokens born elsewhere (Raydium LaunchLab, Meteora, ...) that reach us through
             # DexScreener profiles never get RugCheck / RPC time. Not permanent: it is a scope choice, not a risk.
@@ -287,6 +304,8 @@ class Filter(Agent):
             # Only the graduation wait fails: still run the deep checks every few minutes, so the holder-spread
             # guard sees the top10 while the supply is still concentrated (it moves to fake wallets later).
             return None
+        if failed and name_check is not None:
+            checks.append(name_check)
         if failed:
             # Cheap market checks failed: stop here, don't burn RugCheck quota.
             return FilterReport(cand.mint, sym, False, checks, market=snap)
@@ -425,6 +444,14 @@ class Filter(Agent):
         if rug_reasons and creator:
             self.desk.store.add_rugger(creator, cand.mint, rug_reasons[0][:120])
 
+        # 6. Same name as a rugged token: relaunch / copycat, or a different (real) project?
+        ident = None
+        hit = self.rugged.match(cand.mint, snap.symbol or cand.symbol, snap.name or cand.name)
+        if hit:
+            ident = await self._identity(cand.mint, creator, hit, snap, (rc.get("tokenMeta") or {}).get("uri"))
+            checks.append(Check("rugged_name", ident["ok"], hit["symbol"] or hit["key"], "different project",
+                                ident["detail"], permanent=ident["permanent"]))
+
         # Extras
         if f.reject_dangerous_token2022:
             ext = rc.get("token_extensions") or {}
@@ -468,9 +495,38 @@ class Filter(Agent):
             "metadata_uri": (rc.get("tokenMeta") or {}).get("uri"),
             "decimals": token.get("decimals"),
             "gmgn": gm,
+            "identity": ident and {k: ident[k] for k in ("ok", "score", "detail")},
         }
         return FilterReport(cand.mint, sym, passed, checks, market=snap, rug=rug_facts, creator=creator,
                             source=cand.source)
+
+    def _note_links(self, mint: str, snap: MarketSnapshot) -> None:
+        """Remember which channels (X account, website, Telegram) each token claims, once per mint: a copycat
+        that borrows the channels of a token that later rugs is recognised by them (desk/identity.py)."""
+        if mint in self._links_seen or not (snap.websites or snap.socials):
+            return
+        self._links_seen.add(mint)
+        if len(self._links_seen) > 50000:
+            self._links_seen.clear()
+        try:
+            self.desk.store.add_token_links(mint, identity.link_keys(identity.channels(snap.websites, snap.socials)))
+        except Exception:  # noqa: BLE001 - evidence only
+            pass
+
+    async def _identity(self, mint: str, creator: str | None, hit: dict, snap: MarketSnapshot,
+                        metadata_uri: str | None) -> dict:
+        if not self.f.rugged_name_identity:
+            return {"ok": False, "permanent": True, "score": 0, "channels": {},
+                    "detail": f"relaunch of a name that rugged: {hit['symbol'] or hit['key']} "
+                              f"({str(hit['mint'])[:6]}…, {hit['reason'][:60]})"}
+        try:
+            return await asyncio.wait_for(
+                identity.verify(self.desk.store, self.site_probe, mint, creator, hit, snap.websites, snap.socials,
+                                metadata_uri, self.f.identity_min_score), timeout=20)
+        except Exception as e:  # noqa: BLE001 - unproven = held back, re-checked on the next pass
+            return {"ok": False, "permanent": False, "score": 0, "channels": {},
+                    "detail": f"same name as rugged {hit['symbol'] or hit['key']}; identity check failed "
+                              f"({e.__class__.__name__})"}
 
     def _early_release(self, mint: str, snap: MarketSnapshot, checks: list[Check], t10: float | None,
                        holders: float, dev_pct: float | None) -> None:

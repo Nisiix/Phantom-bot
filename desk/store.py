@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS controller_runs (
   id INTEGER PRIMARY KEY, ts REAL, trials INTEGER, health TEXT, proposals TEXT, report TEXT);
 CREATE TABLE IF NOT EXISTS rug_ledger (wallet TEXT PRIMARY KEY, mint TEXT, reason TEXT, ts REAL);
 CREATE TABLE IF NOT EXISTS rugged_names (key TEXT PRIMARY KEY, mint TEXT, symbol TEXT, reason TEXT, ts REAL);
+CREATE TABLE IF NOT EXISTS token_links (link TEXT, mint TEXT, ts REAL, PRIMARY KEY (link, mint));
 """
 
 
@@ -54,9 +55,10 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
-        for col in ("source", "features", "path"):
+        for table, col in (("shadow", "source"), ("shadow", "features"), ("shadow", "path"),
+                           ("rugged_names", "creator")):
             try:
-                self.db.execute(f"ALTER TABLE shadow ADD COLUMN {col} TEXT")
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
             except sqlite3.OperationalError:
                 pass  # column already exists
 
@@ -142,12 +144,30 @@ class Store:
         rows = self.q("SELECT * FROM rug_ledger WHERE wallet=?", (wallet,))
         return rows[0] if rows else None
 
-    def add_rugged_name(self, key: str, mint: str, symbol: str, reason: str, ts: float | None = None) -> None:
+    def add_rugged_name(self, key: str, mint: str, symbol: str, reason: str, ts: float | None = None,
+                        creator: str | None = None) -> None:
         """Name/symbol of a token that rugged (never deleted; the Filter only matches recent ones)."""
-        self.db.execute("INSERT INTO rugged_names(key,mint,symbol,reason,ts) VALUES(?,?,?,?,?) "
+        self.db.execute("INSERT INTO rugged_names(key,mint,symbol,reason,ts,creator) VALUES(?,?,?,?,?,?) "
                         "ON CONFLICT(key) DO UPDATE SET mint=excluded.mint, symbol=excluded.symbol, "
-                        "reason=excluded.reason, ts=MAX(rugged_names.ts, excluded.ts)",
-                        (key, mint, symbol, reason, ts or time.time()))
+                        "reason=excluded.reason, ts=MAX(rugged_names.ts, excluded.ts), "
+                        "creator=COALESCE(excluded.creator, rugged_names.creator)",
+                        (key, mint, symbol, reason, ts or time.time(), creator))
+
+    def rugged_mints(self) -> set[str]:
+        """Every mint that ever rugged by name (ledger) - used to spot copycats borrowing a rugged identity."""
+        t = time.time()
+        if t - getattr(self, "_rugged_mints_ts", 0) > 30:
+            self._rugged_mints = {r["mint"] for r in self.q("SELECT DISTINCT mint FROM rugged_names")}
+            self._rugged_mints_ts = t
+        return self._rugged_mints
+
+    def add_token_links(self, mint: str, links: list[str]) -> None:
+        """Which mint claims which channel (X account, website, Telegram). Never deleted."""
+        for k in links:
+            self.db.execute("INSERT OR IGNORE INTO token_links(link,mint,ts) VALUES(?,?,?)", (k, mint, time.time()))
+
+    def link_mints(self, link: str) -> list[str]:
+        return [r["mint"] for r in self.q("SELECT mint FROM token_links WHERE link=?", (link,))]
 
     def rugged_names(self, since: float) -> dict[str, dict]:
         return {r["key"]: r for r in self.q("SELECT * FROM rugged_names WHERE ts>=?", (since,))}

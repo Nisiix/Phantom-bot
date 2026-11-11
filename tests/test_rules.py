@@ -600,17 +600,133 @@ def test_rugged_name_relaunch_is_killed(tmp_path):
     from desk.agents.filter import Filter
     from desk.models import Candidate
     desk = make_desk(tmp_path)
-    rugnames.record(desk.store, "OLDMINT", "GTA6", "GTA 6", "our trade lost -97%")
+    rugnames.record(desk.store, "OLDMINT", "GTA6", "GTA 6", "our trade lost -97%", creator="BADDEV")
     f = Filter(desk)
     for sym, name in (("GTA6", "Grand Theft"), ("GTA 6", "x"), ("GTA6COIN", "GTA 6 Coin")):
+        # a name match alone is no longer a kill: held back until its identity is checked
         rep = f.screen(Candidate("NEW"), snap(mint="NEW", symbol=sym, name=name))
         hit = next(c for c in rep.checks if c.name == "rugged_name")
-        assert not hit.passed and hit.permanent
+        assert not hit.passed and not hit.permanent
+        # same dev wallet as the rugged token: a relaunch, killed for good
+        rep = f.screen(Candidate("NEW", creator="BADDEV"), snap(mint="NEW", symbol=sym, name=name))
+        hit = next(c for c in rep.checks if c.name == "rugged_name")
+        assert not hit.passed and hit.permanent and "same dev" in hit.detail
+    # old rule still available
+    f.f.rugged_name_identity = False
+    rep = f.screen(Candidate("NEW"), snap(mint="NEW", symbol="GTA6", name="x"))
+    assert next(c for c in rep.checks if c.name == "rugged_name").permanent
+    f.f.rugged_name_identity = True
     assert f.screen(Candidate("NEWpump"), snap(mint="NEWpump", symbol="DOGE", name="Doge")) is None
+    # a name match on an otherwise clean token goes on to the deep (identity) checks
+    assert f.screen(Candidate("NEWpump"), snap(mint="NEWpump", symbol="GTA6", name="GTA 6")) is None
     # old entries stop matching after rugged_name_days
     desk.store.db.execute("UPDATE rugged_names SET ts=?", (time.time() - 8 * 86400,))
     f.rugged.invalidate()
     assert f.rugged.match("NEW", "GTA6", "GTA 6") is None
+
+
+def test_rugged_name_ignores_generic_words(tmp_path):
+    from desk import rugnames
+    desk = make_desk(tmp_path)
+    rugnames.record(desk.store, "BRAIN", "\U0001f9e0", "\U0001f9e0COIN", "liquidity pulled")   # key "coin"
+    rugnames.record(desk.store, "AUD", "AUDCTY", "AudaCity", "liquidity pulled")
+    led = desk.store.rugged_names(0)
+    assert "coin" not in led and "audacity" in led
+    # a key stored before the stop-list never matches either
+    desk.store.add_rugged_name("meme", "OLD", "MEME", "liquidity pulled")
+    led = desk.store.rugged_names(0)
+    assert rugnames.match(led, "N", "DACITY", "Dacity Coin") is None
+    assert rugnames.match(led, "N", "MEME", "Meme") is None
+    assert rugnames.match(led, "N", "DACITY", "GTAVI AudaCity")["symbol"] == "AUDCTY"
+
+
+class _Probe:
+    """SiteProbe stand-in: site -> (shows the mint?, X handles linked)."""
+    def __init__(self, sites=None, meta=None):
+        self.sites, self.meta = sites or {}, meta or {}
+
+    async def metadata(self, uri):
+        return self.meta.get(uri, {})
+
+    async def site(self, url, mint):
+        from desk.identity import own_site
+        ca_mint, xs = self.sites.get(own_site(url), (None, set()))
+        return {"ok": own_site(url) in self.sites, "ca": ca_mint == mint, "x": xs}
+
+
+def _identity_filter(tmp_path, probe):
+    from desk import rugnames
+    desk, f = _filter_with_rugcheck(tmp_path, 1.0)
+    rugnames.record(desk.store, "FAKEpump", "AUDCTY", "AudaCity", "liquidity pulled", creator="FAKEDEV")
+    desk.store.add_token_links("FAKEpump", ["x:gtaviaudacity"])      # the fake linked the real X account
+    f.site_probe = probe
+    f.rugged.invalidate()
+    return desk, f
+
+
+def test_identity_lets_the_real_project_through(tmp_path):
+    from desk.models import Candidate
+    real = "REALpump"
+    probe = _Probe({"gtaviaudacity.live": (real, {"gtaviaudacity"})})
+    desk, f = _identity_filter(tmp_path, probe)
+    s = snap(mint=real, symbol="DACITY", name="GTAVI AudaCity", websites=["https://gtaviaudacity.live"],
+             socials={"twitter": "https://x.com/GTAVIAudaCity", "telegram": "https://t.me/GTAVIAudaCityPortal"})
+    rep = asyncio.run(f.deep(Candidate(real), s))
+    chk = next(c for c in rep.checks if c.name == "rugged_name")
+    # X shared with the rugged fake, but the site shows OUR contract: the fake borrowed the real channels
+    assert chk.passed, chk.detail
+    assert "contract address on gtaviaudacity.live" in chk.detail and rep.passed
+    assert rep.rug["identity"]["ok"]
+
+
+def test_identity_blocks_copycats(tmp_path):
+    from desk.models import Candidate
+    probe = _Probe({"gtaviaudacity.live": ("REALpump", {"gtaviaudacity"})})
+    desk, f = _identity_filter(tmp_path, probe)
+
+    def run(mint, creator="DEV", **kw):
+        desk.rug.report = _rc_with_creator(desk.rug.report, creator)
+        rep = asyncio.run(f.deep(Candidate(mint), snap(mint=mint, symbol="DACITY", name="AudaCity", **kw)))
+        return next(c for c in rep.checks if c.name == "rugged_name")
+
+    # copycat linking the real site and X: the site shows the real contract, not the copycat's
+    c = run("COPYpump", websites=["https://gtaviaudacity.live"], socials={"twitter": "https://x.com/GTAVIAudaCity"})
+    assert not c.passed and not c.permanent
+    # no channels at all
+    c = run("BAREpump", websites=[], socials={})
+    assert not c.passed and "no own website" in c.detail
+    # only a link to somebody else's post + no profile proof
+    c = run("POSTpump", websites=[], socials={"twitter": "https://x.com/solana/status/123"})
+    assert not c.passed and "no own website" in c.detail
+    # same dev wallet as the rugged token: relaunch, killed for good
+    c = run("RELApump", creator="FAKEDEV", websites=[], socials={})
+    assert not c.passed and c.permanent
+
+
+def _rc_with_creator(report, creator):
+    base = getattr(report, "__wrapped__", report)
+
+    async def rep(mint):
+        r = await base(mint)
+        r["creator"] = creator
+        return r
+    rep.__wrapped__ = base
+    return rep
+
+
+def test_identity_link_parsing():
+    from desk.identity import channels, own_site, x_link
+    assert x_link("https://x.com/GTAVIAudaCity") == ("account", "gtaviaudacity")
+    assert x_link("https://twitter.com/Helius/status/2120161793834406166") == ("post", "helius")
+    assert x_link("https://x.com/i/communities/1994900457320583239")[0] == "community"
+    assert own_site("https://gtaviaudacity.live") == "gtaviaudacity.live"
+    assert own_site("https://www.zoobasel.ch/de/aktuelles/news/1527/x/") is None
+    assert own_site("https://tinyurl.com/y9knm4pa") is None
+    assert own_site("https://pump.fun/coin/abc") is None
+    ch = channels([], {"twitter": "https://x.com/x/status/1"}, {"twitter": "https://x.com/RealOne",
+                                                                 "website": "realone.xyz"})
+    assert ch["x"] == "realone" and ch["x_kind"] == "account" and ch["site"] == "realone.xyz"
+    assert ch["profile"] is True
 
 
 def test_rugged_names_seeded_from_past_trades(tmp_path):

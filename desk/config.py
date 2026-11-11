@@ -80,6 +80,8 @@ class FilterCfg:
                                             # over fake wallets -> permanent kill
     rugged_name_days: float = 7.0           # relaunches of a name/symbol that rugged in the last N days are killed
     rugged_name_loss_pct: float = 60.0      # a trade losing >= this within an hour counts as a rug of its name
+    rugged_name_identity: bool = True       # same name as a rugged token: let a proven different project through
+    identity_min_score: float = 3.0         # points needed: CA on own site 2, DexScreener profile 1, own X 1, site links X 1
 
 
 @dataclass

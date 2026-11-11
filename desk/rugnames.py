@@ -2,7 +2,13 @@
 
 Seen in paper (2026-11-10): the same hype names were relaunched again and again on new mints (GTA 6 on 8 mints,
 Rockstar on 6), each time with a fresh, "clean" dev wallet, so the wallet rug ledger never caught them. Once a
-name or symbol has rugged, its relaunches within [filter] rugged_name_days are killed by the Filter.
+name or symbol has rugged, its relaunches within [filter] rugged_name_days are held back by the Filter.
+
+2026-11-11: a name match alone is no longer a kill. Fake tokens are often launched with a coming project's name
+before (or right after) the real launch; when they rug, the real token must not be blocked with them. The Filter
+now checks the token's identity (desk/identity.py: dev wallet, own website / X account / Telegram, contract
+address on the site) and lets a proven different project through. Generic words ("coin", "meme", ...) never
+match: 1,723 of the 3,894 name rejects up to 2026-11-11 came from a rugged token called "🧠COIN".
 """
 from __future__ import annotations
 
@@ -11,6 +17,15 @@ import time
 
 MIN_KEY_LEN = 3          # shorter keys ("AI", "X") would match far too much
 SUBSTRING_KEY_LEN = 4    # a rugged key this long also matches inside a longer name ("gta6" in "gta6coin")
+# Words that say nothing about which project a token is: never a ledger key.
+GENERIC = frozenset((
+    "coin", "coins", "token", "tokens", "meme", "memes", "memecoin", "fomo", "moon", "pump", "pumps", "cat", "cats",
+    "dog", "dogs", "inu", "doge", "pepe", "frog", "the", "sol", "solana", "baby", "king", "queen", "official",
+    "real", "ring", "rings", "cap", "gem", "gems", "based", "chad", "money", "cash", "gold", "life", "love",
+    "world", "time", "new", "test", "ai", "agent", "bot", "app", "fun", "lol", "wtf", "yes", "not", "dao",
+    "inc", "club", "army", "community", "cto", "sun", "star", "fire", "game", "games", "girl", "boy", "man",
+    "bull", "bear", "bonk",
+))
 
 
 def norm(text: str | None) -> str:
@@ -18,12 +33,13 @@ def norm(text: str | None) -> str:
 
 
 def name_keys(symbol: str | None, name: str | None) -> set[str]:
-    return {k for k in (norm(symbol), norm(name)) if len(k) >= MIN_KEY_LEN}
+    return {k for k in (norm(symbol), norm(name)) if len(k) >= MIN_KEY_LEN and k not in GENERIC}
 
 
-def record(store, mint: str, symbol: str | None, name: str | None, reason: str, ts: float | None = None) -> None:
+def record(store, mint: str, symbol: str | None, name: str | None, reason: str, ts: float | None = None,
+           creator: str | None = None) -> None:
     for k in name_keys(symbol, name):
-        store.add_rugged_name(k, mint, symbol or "", reason[:160], ts)
+        store.add_rugged_name(k, mint, symbol or "", reason[:160], ts, creator)
 
 
 def match(ledger: dict[str, dict], mint: str, symbol: str | None, name: str | None) -> dict | None:
@@ -32,7 +48,7 @@ def match(ledger: dict[str, dict], mint: str, symbol: str | None, name: str | No
     if not keys:
         return None
     for lk, row in ledger.items():
-        if row.get("mint") == mint:
+        if row.get("mint") == mint or lk in GENERIC:
             continue
         if lk in keys or (len(lk) >= SUBSTRING_KEY_LEN and any(lk in k for k in keys)):
             return row

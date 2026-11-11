@@ -356,7 +356,8 @@ class Executor(Agent):
         if trade["pnl_pct"] <= -f.rugged_name_loss_pct and trade["exit_ts"] - trade["entry_ts"] <= 3600:
             # Instant rug: the same hype name comes back on a new mint with a fresh dev wallet.
             rugnames.record(self.desk.store, trade["mint"], trade["symbol"], None,
-                            f"our trade lost {trade['pnl_pct']:.0f}% ({order.reason})")
+                            f"our trade lost {trade['pnl_pct']:.0f}% ({order.reason})",
+                            creator=self.desk.creators.get(trade["mint"]))
         # QUANT learning sample: which barrier did this trade touch first within the horizon?
         label = label_outcome(pos.entry_ts, trade["exit_ts"], pos.hit_up_ts, pos.hit_down_ts, trade["pnl_pct"],
                               self.cfg.quant.horizon_minutes * 60, self.cfg.risk.hard_stop_pct)

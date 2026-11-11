@@ -331,7 +331,8 @@ class Scout(Agent):
         if funder:
             self.desk.store.add_rugger(funder, mint, "funded a rugging dev: " + reason)
         self.desk.blacklist[mint] = "rugged: " + reason
-        rugnames.record(self.desk.store, mint, w.cand.symbol, w.cand.name, "liquidity pulled: " + reason)
+        rugnames.record(self.desk.store, mint, w.cand.symbol, w.cand.name, "liquidity pulled: " + reason,
+                        creator=creator)
         self.emit("warn", f"RUG observed ({reason}); dev {('added to rug ledger: ' + creator[:6]) if creator else 'unknown'}",
                   mint, w.cand.symbol)
 
