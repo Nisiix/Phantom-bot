@@ -50,9 +50,14 @@ require_freeze_revoked = true      # freeze authority = can freeze your tokens (
 reject_dangerous_token2022 = true  # permanent delegate, transfer fees, non-transferable
 reject_rugcheck_danger = true      # any "danger"-level RugCheck risk
 min_liquidity_usd = 20000.0
-# ── new tokens only (user's rule 2026-11-11) ──
+# ── new tokens only (user's rule 2026-11-11: catch new, valid tokens that can still grow to ~$200k market cap or
+# more; a token that already ran is out). Measured on 725 60-minute follow-ups (exit-study, 2026-11-11):
+#   age  < 1 h: median best rise +40%, 24% reached +100%   | 1-3 days: +8%, 0%   | > 3 days: +4%, 4%
+#   market cap < $200k: +40/+47%, 23-29% reached +100%     | $200-500k (after the Filter): +48%, 29%
+#   $500k-1M: +6%                                          | > $1M: +5%, 3%
+# So the ceiling sits at $500k, not $200k: tokens between $200k and $500k still ran like the smaller ones.
 max_age_hours = 72.0               # token older than 3 days (since its oldest DEX pair): not considered. 0 = off
-max_market_cap_usd = 0.0           # market cap already above this: the first run is gone. 0 = off
+max_market_cap_usd = 500000.0      # market cap already above this: the first run is gone. 0 = off
 serial_dev_min_launches = 3        # dev with >= N prior launches...
 serial_dev_dead_ratio = 0.8        # ...of which >= 80% died (< $10k mcap) = rug-linked
 # ── engine ──
@@ -172,10 +177,15 @@ profit_lock_sell_buffer_pct = 1.0
 # last profit_lock_speed_seconds). Under profit_lock_keep_from_pct the stop stays at the fixed profit_lock_pct
 # (a share of a small peak closed trades too early: measured). The trailing stop still applies: the higher of
 # the two levels sells. keep_pct = 0 turns the share off, keep_fast_pct = 0 the speed part.
-profit_lock_keep_from_pct = 30.0
+# Measured 2026-11-11 12:02 UTC (exit-study, 42 price paths): starting at +30% changes nothing on the approved
+# tokens (the 8% trailing is already above it); starting at +20% with a 70% share: +0.85 pts/token on approved
+# tokens, +1.13 on all ([-0.6, +2.8], uncertain), no extra losing trade; from +15% a bit more but more early
+# exits; an 80% share was worse (-1.3). The speed part showed no gain on 20-second price samples (-0.1/-0.3,
+# noise), so it is kept mild: 80% only on a violent rise (60 points per minute). The Controller keeps tuning.
+profit_lock_keep_from_pct = 20.0
 profit_lock_keep_pct = 70.0
-profit_lock_keep_fast_pct = 85.0
-profit_lock_speed_full = 30.0
+profit_lock_keep_fast_pct = 80.0
+profit_lock_speed_full = 60.0
 profit_lock_speed_seconds = 60.0
 # Fee rule: the lock also waits until the NET profit is at least this many times the trade's round-trip fees
 # (1 = "profit = 100% of the fees"). With today's fees (median 2.5%, max 3.1%) the +8% level decides; it only
