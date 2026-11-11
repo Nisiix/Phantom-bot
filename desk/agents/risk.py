@@ -8,7 +8,8 @@ Exits (checked every couple of seconds on executable value, i.e. after exit cost
     peak it rises with the price (70% of the peak, up to 85% when the rise is fast) and never comes down
     (desk/exits.py; levels raised by the sell buffer = configured minimum or measured exit slippage)
   * while a position is pumping Risk checks the price every second and a real sell quote every ~3 s
-  * LIQUIDITY PULL: pool liquidity drops liquidity_drop_exit_pct% vs. entry -> emergency exit
+  * LIQUIDITY PULL: pool liquidity drops liquidity_drop_exit_pct% vs. entry -> emergency exit (0 = off: user's
+    choice 2026-11-11, no exit at a loss at all)
   * DATA LOSS: no price and no sell quote for data_loss_exit_seconds -> emergency exit (0 = off: user's choice
     2026-11-11, the desk keeps holding while the feeds are silent)
   * optional time stop (forced off when loss_stop = false)
@@ -65,7 +66,7 @@ def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None,
         if pnl <= keep + pos.lock_buffer:
             return "PROFIT_LOCK", (f"profit lock: value back to {pnl:+.2f}% from peak {pos.peak_pnl_pct:+.1f}% "
                                    f"(keeps +{keep:.1f}% net + {pos.lock_buffer:.1f}% sale costs)")
-    if liquidity_usd is not None and pos.entry_liquidity_usd > 0:
+    if cfg.liquidity_drop_exit_pct > 0 and liquidity_usd is not None and pos.entry_liquidity_usd > 0:
         drop = (1 - liquidity_usd / pos.entry_liquidity_usd) * 100
         if drop >= cfg.liquidity_drop_exit_pct:
             return "LIQUIDITY_PULL", f"pool liquidity down {drop:.0f}% since entry"

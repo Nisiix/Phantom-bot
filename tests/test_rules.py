@@ -923,3 +923,5 @@ def test_no_loss_stop_holds_losers_but_keeps_profit_and_rug_exits():
     p.mark_value_sol = 1.40 * 0.90
     assert exit_decision(p, r, t, 80_000)[0] in ("TRAILING_STOP", "PROFIT_LOCK")
     assert exit_decision(position(1.0, 0.7), r, t, 40_000)[0] == "LIQUIDITY_PULL"   # rug: pool pulled
+    r.liquidity_drop_exit_pct = 0                   # user's choice: liquidity exit off too
+    assert exit_decision(position(1.0, 0.7), r, t, 1_000)[0] is None
