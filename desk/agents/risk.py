@@ -46,7 +46,8 @@ def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None,
                                      f"(peak {pos.peak_pnl_pct:+.1f}%, now {pnl:+.1f}%, trail ~{locked:+.1f}%)")
     lock = lock_rule(cfg) if lock is None else lock
     if lock.enabled and not pos.lock_armed_on:
-        pos.lock_touch_s, armed = lock_step(lock, pos.peak_pnl_pct, t - pos.entry_ts, pos.lock_touch_s, 0.0)
+        pos.lock_touch_s, armed = lock_step(lock, pos.peak_pnl_pct, t - pos.entry_ts, pos.lock_touch_s, 0.0,
+                                               pos.rt_cost_pct)
         if armed:
             pos.lock_armed_on, pos.lock_armed_ts, pos.lock_at, pos.lock_buffer = armed, t, lock.at, lock.buffer
             pos.lock_keep = lock.keep

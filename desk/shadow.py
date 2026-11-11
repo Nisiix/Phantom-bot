@@ -102,7 +102,8 @@ def update_shadow(s: Shadow, price: float, t: float, stop: float, up: float, tra
             if s.sim_trail and val <= (1 + s.sim_peak / 100) * (1 - trail_dist / 100):
                 s.sim_open, s.sim_ret = False, net
             elif lock is not None and lock.enabled:
-                s.sim_lock_touch, s.sim_lock = lock_step(lock, s.sim_peak, t - s.start, s.sim_lock_touch, s.sim_lock)
+                s.sim_lock_touch, s.sim_lock = lock_step(lock, s.sim_peak, t - s.start, s.sim_lock_touch, s.sim_lock,
+                                                            s.cost_pct)
                 if s.sim_lock and net <= lock_trigger(lock, s.sim_peak):
                     s.sim_open, s.sim_ret = False, net
 

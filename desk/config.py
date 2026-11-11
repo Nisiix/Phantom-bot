@@ -165,6 +165,7 @@ class RiskCfg:
     profit_lock_pct: float = 2.5
     profit_lock_sell_buffer_pct: float = 1.0
     profit_lock_keep_pct: float = 50.0     # lock keeps this share of the net peak profit (0 = fixed lock)
+    profit_lock_fee_multiple: float = 0.0  # arm only once net profit >= this x the trade's round-trip fees too
 
 
 @dataclass
@@ -355,6 +356,7 @@ def enforce_hard_limits(cfg: Config) -> None:
               "profit lock sell buffer must be 0.5-10% (it covers the sale's fees)")
         clamp(r, "profit_lock_keep_pct", lambda v: 0 <= v <= 90, 50.0, "profit lock keep share must be 0-90%")
         clamp(r, "profit_lock_fast_minutes", lambda v: 0 <= v <= 60, 3.0, "profit lock fast window must be 0-60 min")
+        clamp(r, "profit_lock_fee_multiple", lambda v: 0 <= v <= 5, 1.0, "profit lock fee multiple must be 0-5")
     clamp(f, "max_top10_pct", lambda v: 0 < v <= HARD_MAX_TOP10_PCT, HARD_MAX_TOP10_PCT,
           "top-10 holder ceiling can never exceed 20%")
     clamp(f, "young_volume_liquidity_ratio", lambda v: 0.25 <= v <= 5.0, 0.5,

@@ -35,6 +35,7 @@ class LockRule(NamedTuple):
     at: float = 0.0          # net % profit the lock sells at
     buffer: float = 0.0      # sale cost added to every level
     keep: float = 0.0        # fraction of the net peak profit the lock keeps (0 = fixed lock at `at`)
+    fee_mult: float = 0.0    # also arm only once the net profit is >= fee_mult x the trade's round-trip fees
 
     @property
     def enabled(self) -> bool:
@@ -54,20 +55,30 @@ def lock_rule(r, buffer: float | None = None) -> LockRule:
                     fast_s=float(g("profit_lock_fast_minutes", 0.0) or 0.0) * 60,
                     at=float(g("profit_lock_pct", 0.0) or 0.0),
                     buffer=float(buffer if buffer is not None else (g("profit_lock_sell_buffer_pct", 0.0) or 0.0)),
-                    keep=float(g("profit_lock_keep_pct", 0.0) or 0.0) / 100)
+                    keep=float(g("profit_lock_keep_pct", 0.0) or 0.0) / 100,
+                    fee_mult=float(g("profit_lock_fee_multiple", 0.0) or 0.0))
 
 
-def lock_step(rule: LockRule, peak: float, sec: float, touch_s: float | None, armed_on: float) \
-        -> tuple[float | None, float]:
+def arm_level(rule: LockRule, cost: float = 0.0) -> float:
+    """Net % the lock needs before it can arm on a trade whose round-trip fees are `cost` %: the configured
+    level, or fee_mult x the fees when that is higher (user's rule 2026-11-11: arm only once the profit has
+    covered the fees, so expensive tokens get more room; cheap ones, fees < 3%, use the plain level ~+7%)."""
+    return max(rule.on, rule.fee_mult * max(0.0, cost))
+
+
+def lock_step(rule: LockRule, peak: float, sec: float, touch_s: float | None, armed_on: float,
+              cost: float = 0.0) -> tuple[float | None, float]:
     """Advance the lock with the current net peak (%) at `sec` seconds since the buy.
-    Returns (touch_s, armed_on): touch_s = when the peak first reached `on` (+buffer), armed_on = the net level
-    that armed it (0 = not armed yet)."""
+    cost = the trade's round-trip fees (%), for the fee rule (arm_level).
+    Returns (touch_s, armed_on): touch_s = when the peak first reached the arming level (+buffer), armed_on = the
+    net level that armed it (0 = not armed yet)."""
     if armed_on or not rule.enabled:
         return touch_s, armed_on
-    if touch_s is None and peak >= rule.on + rule.buffer:
+    on = arm_level(rule, cost)
+    if touch_s is None and peak >= on + rule.buffer:
         touch_s = sec
     if touch_s is not None:
-        need = rule.fast_on if (rule.fast_s > 0 and touch_s <= rule.fast_s) else rule.on
+        need = max(on, rule.fast_on) if (rule.fast_s > 0 and touch_s <= rule.fast_s) else on
         if peak >= need + rule.buffer:
             return touch_s, need
     return touch_s, 0.0

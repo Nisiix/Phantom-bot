@@ -377,6 +377,7 @@ class Executor(Agent):
                           "profit_lock_fast_activate_pct": r.profit_lock_fast_activate_pct,
                           "profit_lock_fast_minutes": r.profit_lock_fast_minutes,
                           "profit_lock_pct": r.profit_lock_pct, "profit_lock_keep_pct": r.profit_lock_keep_pct,
+                          "profit_lock_fee_multiple": r.profit_lock_fee_multiple,
                           "sell_buffer_pct": self.risk.sell_buffer() if hasattr(self.risk, "sell_buffer") else None}
         pos.peak_value_sol = pos.mark_value_sol
         pos.last_price_ts = now()

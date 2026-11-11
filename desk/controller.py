@@ -68,6 +68,11 @@ SKIP_TEXT = {"copycat": "copycat (mint non creato da pump.fun, ora bloccati dal 
              "glitch": "con una lettura di prezzo assurda"}
 
 
+# The Controller never arms the profit lock under this net % (user's rule 2026-11-11: avoid early exits caused
+# by the wide swings right after a launch; their own figure was about +7%, measured choice below that: +6%).
+LOCK_MIN_ON = 6.0
+
+
 def clip_ret(x: float) -> float:
     return max(RET_MIN, min(RET_MAX, x))
 
@@ -344,7 +349,7 @@ def simulate_exit(path: list[tuple[float, float]], cost: float, stop: float, tra
         if trail and 1 + net / 100 <= (1 + peak / 100) * (1 - trail_dist / 100):
             return clip_ret(net)
         if lock.enabled:
-            touch, armed = lock_step(lock, peak, sec, touch, armed)
+            touch, armed = lock_step(lock, peak, sec, touch, armed, cost)
             if armed and net <= lock_trigger(lock, peak):
                 return clip_ret(net)
     return clip_ret(last)
@@ -468,19 +473,25 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
              "trail_distance_pct": r.trail_distance_pct, "max_hold_minutes": float(r.max_hold_minutes),
              "profit_lock_activate_pct": float(r.profit_lock_activate_pct),
              "profit_lock_fast_activate_pct": float(r.profit_lock_fast_activate_pct),
-             "profit_lock_pct": float(r.profit_lock_pct), "profit_lock_keep_pct": float(r.profit_lock_keep_pct)}
+             "profit_lock_pct": float(r.profit_lock_pct), "profit_lock_keep_pct": float(r.profit_lock_keep_pct),
+             "profit_lock_fee_multiple": float(r.profit_lock_fee_multiple)}
     # Profit lock (user's rule: arm around +5/+6% net, sell around +2/+3% net): the Controller tries other
     # arming / selling levels, keeping the lock always in profit (sell >= +1.5% net, 1+ point under arming).
-    lock_on = sorted({float(r.profit_lock_activate_pct), 0.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0})
-    lock_fast = sorted({float(r.profit_lock_fast_activate_pct), 5.0, 6.0, 8.0, 10.0, 12.0})
+    lock_on = sorted({float(r.profit_lock_activate_pct), 0.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0})
+    lock_fast = sorted({float(r.profit_lock_fast_activate_pct), 5.0, 6.0, 7.0, 8.0, 10.0, 12.0})
     lock_at = sorted({float(r.profit_lock_pct), 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0})
+    # fee rule (user 2026-11-11): the lock also waits until the net profit is this many times the trade's fees
+    lock_fee = sorted({float(r.profit_lock_fee_multiple), 0.0, 1.0, 1.5, 2.0, 3.0})
     # keep = share of the peak profit locked (0 = fixed break-even-plus-fees lock, the user's "not always" variant)
     lock_keep = sorted({float(r.profit_lock_keep_pct), 0.0, 30.0, 40.0, 50.0, 60.0, 70.0})
     buffer = float(r.profit_lock_sell_buffer_pct)
 
     def lock_ok(v):
+        # User 2026-11-11: never arm early (the first hours swing a lot), so the Controller keeps arming at
+        # LOCK_MIN_ON or more; turning the lock off stays possible (that never closes a trade early).
         on = v["profit_lock_activate_pct"]
-        return on == 0 or (v["profit_lock_pct"] <= on - 1.0 and v["profit_lock_fast_activate_pct"] >= on)
+        return on == 0 or (on >= LOCK_MIN_ON and v["profit_lock_pct"] <= on - 1.0
+                           and v["profit_lock_fast_activate_pct"] >= on)
 
     def r_lock(v):
         return lock_rule({**v, "profit_lock_fast_minutes": r.profit_lock_fast_minutes}, buffer)
@@ -497,6 +508,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         + [{**cur_r, "profit_lock_fast_activate_pct": x} for x in lock_fast] \
         + [{**cur_r, "profit_lock_pct": x} for x in lock_at] \
         + [{**cur_r, "profit_lock_keep_pct": x} for x in lock_keep] \
+        + [{**cur_r, "profit_lock_fee_multiple": x} for x in lock_fee] \
         + [{**cur_r, "profit_lock_activate_pct": on, "profit_lock_fast_activate_pct": fast, "profit_lock_pct": at}
            for on, fast, at in ((4.0, 5.0, 2.0), (6.0, 8.0, 3.0), (8.0, 10.0, 4.0), (10.0, 12.0, 5.0))]
     grid += [v for v in lock_grid if lock_ok(v)]
@@ -507,7 +519,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
                  "trail_distance_pct": rng.choice(dists), "max_hold_minutes": rng.choice(holds),
                  "profit_lock_activate_pct": rng.choice(lock_on),
                  "profit_lock_fast_activate_pct": rng.choice(lock_fast), "profit_lock_pct": rng.choice(lock_at),
-                 "profit_lock_keep_pct": rng.choice(lock_keep)}
+                 "profit_lock_keep_pct": rng.choice(lock_keep), "profit_lock_fee_multiple": rng.choice(lock_fee)}
             if lock_ok(v):
                 return v
 
@@ -1024,6 +1036,9 @@ def profit_lock_section(trades: list[dict], cfg) -> list[str]:
            f"+{r.profit_lock_pct:g}% netto, o il {r.profit_lock_keep_pct:g}% del picco netto se più alto (sale col "
            f"picco; 0 = stop fisso a pareggio con commissioni); ogni livello è alzato dei costi di vendita (minimo "
            f"{r.profit_lock_sell_buffer_pct:g}%, o lo slittamento misurato se maggiore)."
+           + (f" Si arma solo quando il guadagno netto è almeno {r.profit_lock_fee_multiple:g} volte le commissioni "
+              f"andata/ritorno del trade, se questo è più alto della soglia."
+              if r.profit_lock_fee_multiple > 0 else "")
            if r.profit_lock_activate_pct > 0 else "Regola disattivata (profit_lock_activate_pct = 0)."]
     recs = []
     for t in trades:

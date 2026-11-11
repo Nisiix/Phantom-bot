@@ -8,6 +8,7 @@
   python run.py wallet          check the wallet key in .env (shows address + balance, never the key)
   python run.py research        which signals separated winners from losers (from the 60-min shadow data)
   python run.py controller      Controller report now: tests other settings on the logged data (proposals only)
+  python run.py exit-study      where the profit lock should arm and sell, measured on the logged price paths
   python run.py reset-paper     paper account back to the starting balance, profit stats zeroed (backup kept;
                                 the 60-min follow-up data the Controller and QUANT learn from is kept)
   python run.py pages           publish the dashboard to GitHub Pages now (the desk must be running;
@@ -130,7 +131,7 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description="Phantom Desk")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper", "pages", "model"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper", "pages", "model", "exit-study"])
     ap.add_argument("--mode", choices=["paper", "live"], help="override mode from config.toml")
     ap.add_argument("--headless", action="store_true", help="plain log output instead of the live terminal")
     ap.add_argument("--config", help="path to config.toml")
@@ -176,6 +177,16 @@ def main() -> int:
 
     if args.command == "controller":
         print(controller_report(cfg))
+        return 0
+
+    if args.command == "exit-study":
+        from desk.exit_study import run_study
+        text = run_study(cfg, Store(cfg.data_dir / f"{cfg.mode}.db"))
+        out = cfg.data_dir / "reports" / "exit_study.md"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        print(text)
+        print(f"\n(saved to {out})")
         return 0
 
     if args.command == "wallet":

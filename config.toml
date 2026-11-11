@@ -159,6 +159,9 @@ profit_lock_sell_buffer_pct = 1.0
 # the net peak profit and rises with it (peak +10% net -> sells at +5% net; +20% -> +10%), never below
 # profit_lock_pct. 0 = fixed lock at profit_lock_pct (break-even + fees), a variant the Controller measures.
 profit_lock_keep_pct = 50.0
+# Fee rule (user 2026-11-11): the lock also waits until the NET profit is this many times the trade's round-trip
+# fees (an expensive token gets more room before the stop moves up). 0 = off. `python run.py exit-study` measures it.
+profit_lock_fee_multiple = 0.0
 
 [recap]
 interval_hours = 4

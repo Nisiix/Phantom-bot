@@ -135,3 +135,27 @@ def test_controller_picks_lock_levels_only_if_no_less_safe():
     richer_riskier = [9.0, -4.0, -1.0, 30.0, -25.0, 2.0, 1.0, 4.0, 6.0, 8.0]  # more profit, one more loser
     assert no_less_safe(better_safer, base, idx)
     assert not no_less_safe(richer_riskier, base, idx)
+
+
+def test_fee_rule_waits_until_profit_covers_the_fees():
+    from desk.exits import arm_level
+    lk = lock_rule({"profit_lock_activate_pct": 7, "profit_lock_fast_activate_pct": 7, "profit_lock_pct": 4,
+                    "profit_lock_fee_multiple": 2}, buffer=1.0)
+    assert arm_level(lk, 2.0) == 7.0               # cheap fees: the plain +7% level
+    assert arm_level(lk, 5.0) == 10.0              # 5% fees: needs 2 x 5 = +10% net
+    assert lock_step(lk, 9.0, 600, None, 0.0, cost=5.0)[1] == 0.0
+    assert lock_step(lk, 11.1, 600, None, 0.0, cost=5.0)[1] == 10.0
+    assert lock_step(lk, 8.1, 600, None, 0.0, cost=2.0)[1] == 7.0
+
+
+def test_risk_uses_the_trade_fees():
+    r = RiskCfg(profit_lock_activate_pct=7, profit_lock_fast_activate_pct=7, profit_lock_pct=4,
+                profit_lock_keep_pct=0, profit_lock_fee_multiple=2)
+    p = pos(1.09, 1.09, age_s=600)
+    p.rt_cost_pct = 5.0                            # expensive token: +9% marked is not enough (needs 10 + 1)
+    assert exit_decision(p, r, time.time(), 80_000)[0] is None and not p.lock_armed_on
+    p.mark_value_sol = p.peak_value_sol = 1.111
+    exit_decision(p, r, time.time(), 80_000)
+    assert p.lock_armed_on == 10.0
+    p.mark_value_sol = 1.049                       # back under +4% net + 1% sale costs -> sell
+    assert exit_decision(p, r, time.time(), 80_000)[0] == "PROFIT_LOCK"
