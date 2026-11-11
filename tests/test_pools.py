@@ -149,7 +149,9 @@ def test_filter_rejects_pool_quoted_in_a_memecoin(tmp_path):
     bad = [c for c in flt._market_checks(meme) if c.name == "quote_currency"]
     assert bad and not bad[0].passed and "SPCX" in bad[0].detail
     usdc = snapshot_from_pairs("M", [pair("REAL", "meteora", USDC, 32_000)])
-    assert not [c for c in flt._market_checks(usdc) if c.name == "quote_currency"]
+    assert [c for c in flt._market_checks(usdc) if c.name == "quote_currency"]          # SOL only (user rule)
+    sol = snapshot_from_pairs("M", [pair("REAL", "pumpswap", SOL_MINT, 32_000)])
+    assert not [c for c in flt._market_checks(sol) if c.name == "quote_currency"]
 
 
 def test_executor_refuses_memecoin_quoted_pool(tmp_path):

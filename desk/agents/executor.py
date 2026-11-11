@@ -322,7 +322,7 @@ class Executor(Agent):
         tq = ((snap.pool(target) or {}).get("quote_mint") if snap.pools and target else "") or snap.quote_mint
         if not quote_ok(tq, allowed):
             return self.reject(v, f"pool trades against {(snap.pool(target) or {}).get('quote_symbol') or tq[:6]}, "
-                                  f"not SOL / USDC / USDT")
+                                  f"not SOL: the desk buys only in SOL pools")
         if snap.pools and target:
             pool = snap.pool(target)
             if pool is None:

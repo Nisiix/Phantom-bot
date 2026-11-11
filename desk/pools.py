@@ -21,9 +21,10 @@ from __future__ import annotations
 SOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
-# Currencies a token's main pool may trade against (user rule 2026-11-12, after BERNIE). A pool quoted in another
-# memecoin (BERNIE/SPCX) carries that coin's risk too, and its few dust SOL copies show made-up prices.
-DEFAULT_QUOTES = [SOL_MINT, USDC_MINT, USDT_MINT]
+# Currencies a token's main pool may trade against. User rule 2026-11-12, after BERNIE (real pool against SPCX, a
+# memecoin, plus dust SOL copies with made-up prices): the agent always buys in SOL, never on pools quoted in
+# another currency. The SOL -> currency conversion route below stays for a wider list set in config.toml.
+DEFAULT_QUOTES = [SOL_MINT]
 
 
 def quote_ok(quote_mint: str, allowed: list[str]) -> bool:

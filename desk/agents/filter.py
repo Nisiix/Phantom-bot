@@ -355,9 +355,9 @@ class Filter(Agent):
         if snap.quote_mint and not quote_ok(snap.quote_mint, list(f.allowed_quote_mints)):
             # BERNIE (2026-11-11): its only real pool traded against SPCX, another memecoin, next to dust SOL
             # copies with made-up prices. Not permanent: a SOL / USDC pool may become the main one later.
-            checks.append(Check("quote_currency", False, snap.quote_symbol or snap.quote_mint[:6], "SOL / USDC / USDT",
-                                f"main pool trades against {snap.quote_symbol or snap.quote_mint[:6]}, not SOL / "
-                                f"USDC / USDT (a memecoin quote adds that coin's risk)"))
+            checks.append(Check("quote_currency", False, snap.quote_symbol or snap.quote_mint[:6], "SOL",
+                                f"main pool trades against {snap.quote_symbol or snap.quote_mint[:6]}, not SOL "
+                                f"(the desk buys only in SOL pools)"))
         grad = self.graduation_age(snap)
         if f.graduation_wait_minutes > 0 and grad is not None:
             ok = grad >= f.graduation_wait_minutes

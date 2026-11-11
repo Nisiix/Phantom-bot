@@ -69,7 +69,7 @@ class FilterCfg:
     reject_dangerous_token2022: bool = True
     reject_rugcheck_danger: bool = True
     min_liquidity_usd: float = 20_000.0
-    # The main pool must trade against one of these (SOL, USDC, USDT). Empty list = off.
+    # The main pool must trade against one of these (default: SOL only, user rule 2026-11-12). Empty list = off.
     allowed_quote_mints: list = field(default_factory=lambda: list(DEFAULT_QUOTES))
     serial_dev_min_launches: int = 3
     serial_dev_dead_ratio: float = 0.8

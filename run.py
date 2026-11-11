@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 import time
 
@@ -89,7 +90,7 @@ def controller_report(cfg) -> str:
                         report_section(store, cfg))
 
 
-def reset_paper(cfg) -> str:
+def reset_paper(cfg, balance_sol: float | None = None) -> str:
     """Paper account back to paper_starting_balance_sol with zeroed profit statistics.
 
     NEVER removes learning data (the bot's historical memory): shadow follow-ups and price paths, QUANT outcomes,
@@ -117,13 +118,38 @@ def reset_paper(cfg) -> str:
     store.kv_set("risk_state", {"history": risk.get("history", {})})
     for key in ("cash_sol", "starting_cash", "realized_sol", "last_recap_ts"):
         store.db.execute("DELETE FROM kv WHERE key=?", (key,))
-    store.kv_set("starting_cash", cfg.paper_starting_balance_sol)
-    store.kv_set("cash_sol", cfg.paper_starting_balance_sol)
+    bal = float(balance_sol) if balance_sol else cfg.paper_starting_balance_sol
+    store.kv_set("starting_cash", bal)
+    store.kv_set("cash_sol", bal)
     store.kv_set("realized_sol", 0.0)
     store.kv_set("paper_reset_ts", time.time())
-    return (f"Paper account reset to {cfg.paper_starting_balance_sol:g} SOL: removed {n_trades} trades, "
+    return (f"Paper account reset to {bal:g} SOL: removed {n_trades} trades, "
             f"{n_pos} open positions and the equity curve. Backup: {backup.name}. "
             "Learning data (60-min follow-ups, QUANT outcomes) kept; the live-gate record keeps every trade.")
+
+
+def pending_reset(cfg) -> None:
+    """Paper reset requested with `restart --reset-paper-usd`: done here, before the desk starts, only with no
+    open position (otherwise left pending for the next start)."""
+    from desk.app import reset_pending
+    flag = reset_pending(cfg)
+    if cfg.mode != "paper" or not flag.exists():
+        return
+    try:
+        usd = float(json.loads(flag.read_text(encoding="utf-8") or "{}").get("usd") or 0)
+    except (OSError, ValueError):
+        usd = 0.0
+    store = Store(cfg.data_dir / "paper.db")
+    if store.q("SELECT COUNT(*) AS n FROM positions")[0]["n"]:
+        print("Paper reset pending: positions still open, reset postponed to the next start.", file=sys.stderr)
+        return
+    sol_usd = float(store.kv_get("sol_usd", 0.0) or 0.0)
+    if usd <= 0 or sol_usd <= 0:
+        print(f"Paper reset pending but no capital / SOL price (usd={usd}, sol_usd={sol_usd}): skipped.", file=sys.stderr)
+        flag.unlink(missing_ok=True)
+        return
+    print(reset_paper(cfg, round(usd / sol_usd, 4)) + f" (= ${usd:,.0f} at ${sol_usd:,.2f}/SOL)", file=sys.stderr)
+    flag.unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -134,7 +160,11 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description="Phantom Desk")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper", "pages", "model", "exit-study", "restart"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper", "pages", "model", "exit-study", "restart", "sell"])
+    ap.add_argument("mints", nargs="*", help="sell: mint address(es) of open positions to sell now")
+    ap.add_argument("--reset-paper-usd", type=float, default=0.0,
+                    help="restart: once no position is open, restart with the paper account reset to this capital in "
+                         "USD (converted to SOL at the last SOL price; learning data kept)")
     ap.add_argument("--mode", choices=["paper", "live"], help="override mode from config.toml")
     ap.add_argument("--headless", action="store_true", help="plain log output instead of the live terminal")
     ap.add_argument("--config", help="path to config.toml")
@@ -184,6 +214,21 @@ def main() -> int:
         print(controller_report(cfg))
         return 0
 
+    if args.command == "sell":
+        from desk.app import request_sell
+        if not args.mints:
+            print("Usage: python run.py sell <mint> [<mint> ...]")
+            return 1
+        flag = request_sell(cfg, args.mints)
+        print(f"Sell requested ({flag}) for {', '.join(m[:8] + '…' for m in args.mints)}: the running desk sells "
+              "within a few seconds (reason MANUAL). Nothing happens if no desk is running.")
+        return 0
+
+    if args.command == "restart" and args.reset_paper_usd > 0:
+        from desk.app import reset_pending
+        reset_pending(cfg).write_text(json.dumps({"usd": args.reset_paper_usd, "ts": time.time()}), encoding="utf-8")
+        args.now = False              # the reset needs every position closed: wait for them
+
     if args.command == "restart":
         from desk.app import request_restart
         store = Store(cfg.data_dir / f"{cfg.mode}.db")
@@ -218,6 +263,7 @@ def main() -> int:
         print(build_recap(store, pf, cfg.mode, t1 - cfg.recap.interval_hours * 3600, t1, quant=quant))
         return 0
 
+    pending_reset(cfg)
     try:
         if asyncio.run(run_desk(cfg, use_tui=not args.headless)):
             from desk.app import RESTART_CODE

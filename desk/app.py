@@ -189,6 +189,59 @@ async def restart_watch(desk: Desk, flag: Path, poll: float = 2.0) -> None:
             return
 
 
+# ── sell on the owner's request (2026-11-12) ──
+# `python run.py sell <mint>` leaves data/sell.flag; the running desk sells those positions through the normal exit
+# path (Jupiter quote, slippage ladder, trade + Risk memory + QUANT outcome recorded), reason MANUAL.
+def sell_flag(cfg: Config) -> Path:
+    return Path(cfg.data_dir) / "sell.flag"
+
+
+def request_sell(cfg: Config, mints: list[str]) -> Path:
+    flag = sell_flag(cfg)
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    old = []
+    try:
+        old = list(json.loads(flag.read_text(encoding="utf-8") or "{}").get("mints") or [])
+    except (OSError, ValueError):
+        pass
+    flag.write_text(json.dumps({"ts": time.time(), "mints": list(dict.fromkeys(old + mints))}), encoding="utf-8")
+    return flag
+
+
+async def sell_watch(desk: Desk, risk, flag: Path, poll: float = 2.0) -> None:
+    from .models import Event, ExitOrder
+    while not desk.stop.is_set():
+        await asyncio.sleep(poll)
+        if not flag.exists():
+            continue
+        try:
+            mints = list(json.loads(flag.read_text(encoding="utf-8") or "{}").get("mints") or [])
+        except (OSError, ValueError):
+            mints = []
+        try:
+            flag.unlink()
+        except OSError:
+            pass
+        for mint in mints:
+            pos = desk.portfolio.positions.get(mint)
+            if pos is None:
+                desk.hub.emit(Event("Desk", "warn", f"sell request: no open position for {mint[:8]}…"))
+                continue
+            if mint in risk.exiting:
+                continue
+            risk.exiting[mint] = time.time()
+            desk.hub.emit(Event("Risk", "exit", f"MANUAL: sold on the owner's request ({pos.pnl_pct:+.1f}%)",
+                                mint, pos.symbol))
+            await desk.exits.put(ExitOrder(mint, "MANUAL", "sold on the owner's request"))
+
+
+# ── paper reset at the next start (2026-11-12) ──
+# `python run.py restart --reset-paper-usd 1000` leaves data/reset_paper.pending: the desk restarts once no position
+# is open and, before starting again, resets the paper account to that capital (learning data kept, run.reset_paper).
+def reset_pending(cfg: Config) -> Path:
+    return Path(cfg.data_dir) / "reset_paper.pending"
+
+
 async def run_desk(cfg: Config, use_tui: bool = True) -> bool:
     """Runs the desk until stopped. Returns True when it stopped to be restarted at once (restart_watch)."""
     desk, broker = await build(cfg)
@@ -217,6 +270,7 @@ async def run_desk(cfg: Config, use_tui: bool = True) -> bool:
     ui = Terminal(desk, risk, logger)
     tasks.append(asyncio.create_task(ui.run() if use_tui and sys.stdout.isatty() else headless(desk), name="ui"))
     tasks.append(asyncio.create_task(restart_watch(desk, restart_flag(cfg)), name="restart-watch"))
+    tasks.append(asyncio.create_task(sell_watch(desk, risk, sell_flag(cfg)), name="sell-watch"))
     await desk.stop.wait()
     # Graceful shutdown: give the Logger a moment to flush, then cancel.
     await asyncio.sleep(1.5)
