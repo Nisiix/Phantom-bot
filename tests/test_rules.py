@@ -927,9 +927,10 @@ def test_no_loss_stop_holds_losers_but_keeps_profit_and_rug_exits():
     assert exit_decision(position(1.0, 0.7), r, t, 1_000)[0] is None
 
 
-def test_profit_lock_stays_on_without_loss_stop():
+@pytest.mark.parametrize("loss_stop", [False, True])
+def test_profit_lock_is_never_off(loss_stop):
     cfg = Config()
-    cfg.risk.loss_stop = False
+    cfg.risk.loss_stop = loss_stop
     cfg.risk.profit_lock_activate_pct = 0          # what the Controller applied on 2026-11-11 19:41 UTC
     enforce_hard_limits(cfg)
     assert cfg.risk.profit_lock_activate_pct == 8.0

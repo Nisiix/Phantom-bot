@@ -171,7 +171,7 @@ hot_poll_seconds = 1.0               # while a position is pumping (peak up 5+ p
 # previous +8%/+6% (uncertain, [-0.8, +3.6]), no extra losing trade. A higher bar for young tokens added losers.
 # NET = after buy fees, sale fees and sale slippage: every level is raised by the sell buffer (1% minimum; Risk
 # uses the slippage it measured on its last stop exits when that is larger). The Controller keeps tuning it (never
-# arming under +6%). profit_lock_activate_pct = 0 turns it off.
+# arming under +6%). It can never be turned off: base rule of the engine (user 2026-11-11).
 profit_lock_activate_pct = 8.0
 profit_lock_fast_activate_pct = 10.0
 profit_lock_fast_minutes = 3.0

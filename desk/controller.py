@@ -484,8 +484,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
     # Profit lock (user's rule: arm around +5/+6% net, sell around +2/+3% net): the Controller tries other
     # arming / selling levels, keeping the lock always in profit (sell >= +1.5% net, 1+ point under arming).
     lock_on = sorted({float(r.profit_lock_activate_pct), 0.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0})
-    if not r.loss_stop:          # user's rule: no stop at a loss, the stop in profit stays on
-        lock_on = [x for x in lock_on if x > 0]
+    lock_on = [x for x in lock_on if x > 0]     # base rule (user 2026-11-11): the stop in profit is never off
     lock_fast = sorted({float(r.profit_lock_fast_activate_pct), 5.0, 6.0, 7.0, 8.0, 10.0, 12.0})
     lock_at = sorted({float(r.profit_lock_pct), 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0})
     # fee rule (user 2026-11-11): the lock also waits until the net profit is this many times the trade's fees
@@ -506,11 +505,11 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
 
     def lock_ok(v):
         # User 2026-11-11: never arm early (the first hours swing a lot), so the Controller keeps arming at
-        # LOCK_MIN_ON or more; turning the lock off stays possible (that never closes a trade early).
+        # LOCK_MIN_ON or more; and never turn the lock off (base rule of the engine, user 2026-11-11).
         on = v["profit_lock_activate_pct"]
         kf = v["profit_lock_keep_fast_pct"]
-        if on == 0:
-            return bool(r.loss_stop)      # off only while a loss stop exists (user's rule 2026-11-11)
+        if on <= 0:
+            return False
         return (on >= LOCK_MIN_ON and v["profit_lock_pct"] <= on - 1.0
                            and v["profit_lock_fast_activate_pct"] >= on
                            and (kf == 0 or kf >= v["profit_lock_keep_pct"]))

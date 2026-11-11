@@ -64,9 +64,9 @@ def test_trailing_still_wins_above_the_lock():
 
 def test_lock_off_and_hard_limits():
     cfg = Config()
-    cfg.risk.profit_lock_activate_pct = 0
+    cfg.risk.profit_lock_activate_pct = 0          # base rule (user 2026-11-11): the lock is never off
     enforce_hard_limits(cfg)
-    assert not lock_rule(cfg.risk).enabled
+    assert lock_rule(cfg.risk).enabled and cfg.risk.profit_lock_activate_pct == 8.0
     cfg = Config()
     cfg.risk.profit_lock_pct = -1.0                # a "lock" at a loss is never allowed
     cfg.risk.profit_lock_sell_buffer_pct = 0.0     # nor a lock that ignores the sale costs

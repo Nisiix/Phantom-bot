@@ -381,13 +381,13 @@ def enforce_hard_limits(cfg: Config) -> None:
           "trailing may only start after +12%")
     clamp(r, "trail_distance_pct", lambda v: 0 < v < HARD_TRAIL_ACTIVATE_PCT, 6.0,
           "trail distance must be between 0 and 12%")
-    if not r.loss_stop:
-        # User's rule 2026-11-11: no stop at a loss, but the stop in profit stays. Without it a trade that rose
-        # and fell back would never be sold (the Controller turned it off at 19:41 UTC that day).
-        clamp(r, "profit_lock_activate_pct", lambda v: v > 0, 8.0,
-              "the profit lock can't be turned off while loss_stop = false (user's rule: keep the stop in profit)")
-    clamp(r, "profit_lock_activate_pct", lambda v: v == 0 or 2.0 <= v <= 50.0, 5.0,
-          "profit lock must be 0 (off) or arm between +2% and +50%")
+    # BASE RULE of the engine (user 2026-11-11): the stop in profit is never turned off, by anyone (the
+    # Controller turned it off at 19:41 UTC that day: with no stop at a loss a trade that rose and fell back
+    # would never have been sold).
+    clamp(r, "profit_lock_activate_pct", lambda v: v > 0, 8.0,
+          "the profit lock can never be turned off (base rule of the engine)")
+    clamp(r, "profit_lock_activate_pct", lambda v: 2.0 <= v <= 50.0, 5.0,
+          "profit lock must arm between +2% and +50%")
     if r.profit_lock_activate_pct > 0:
         clamp(r, "profit_lock_fast_activate_pct", lambda v: v == 0 or r.profit_lock_activate_pct <= v <= 50.0,
               r.profit_lock_activate_pct, "fast profit-lock threshold must be >= profit_lock_activate_pct")
