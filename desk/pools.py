@@ -19,6 +19,16 @@ to that pool's DEX (pin_labels) and checks again; if Jupiter still can't route t
 from __future__ import annotations
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
+USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+# Currencies a token's main pool may trade against (user rule 2026-11-12, after BERNIE). A pool quoted in another
+# memecoin (BERNIE/SPCX) carries that coin's risk too, and its few dust SOL copies show made-up prices.
+DEFAULT_QUOTES = [SOL_MINT, USDC_MINT, USDT_MINT]
+
+
+def quote_ok(quote_mint: str, allowed: list[str]) -> bool:
+    """True when the pool's quote currency is allowed (unknown quote = not judged)."""
+    return not quote_mint or not allowed or quote_mint in allowed
 
 # DexScreener dexId -> Jupiter route labels (GET /swap/v1/program-id-to-label, checked 2026-11-12).
 DEX_LABELS = {

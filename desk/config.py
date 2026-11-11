@@ -11,6 +11,8 @@ import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from .pools import DEFAULT_QUOTES
+
 # ── Non-negotiable rules (from the desk mandate) ─────────────────────────────
 HARD_MAX_POSITION_PCT = 8.0      # never more than 8% of current balance per trade
 HARD_MIN_SCORE = 0.6             # Analyst score under 0.6 = no trade
@@ -67,6 +69,8 @@ class FilterCfg:
     reject_dangerous_token2022: bool = True
     reject_rugcheck_danger: bool = True
     min_liquidity_usd: float = 20_000.0
+    # The main pool must trade against one of these (SOL, USDC, USDT). Empty list = off.
+    allowed_quote_mints: list = field(default_factory=lambda: list(DEFAULT_QUOTES))
     serial_dev_min_launches: int = 3
     serial_dev_dead_ratio: float = 0.8
     deep_workers: int = 3               # parallel deep checks (RugCheck keeps its own rate limit)

@@ -137,3 +137,24 @@ def test_live_pinned_quote_goes_through_rpc_path():
     finally:
         live.sign_swap = orig
     assert fill.ok and sent == ["swap_tx"] and fill.route == "rpc metis" and fill.tokens == 1500.0
+
+
+def test_filter_rejects_pool_quoted_in_a_memecoin(tmp_path):
+    """BERNIE: real pool against SPCX (a memecoin), only dust SOL copies."""
+    from desk.agents.filter import Filter
+    desk = make_desk(tmp_path)
+    flt = Filter(desk)
+    meme = snapshot_from_pairs("M", [pair("DUST", "meteora", SOL_MINT, 160), pair("REAL", "pumpswap", "SPCXmint", 32_000, "SPCX")])
+    assert meme.pair_address == "REAL" and meme.quote_symbol == "SPCX"
+    bad = [c for c in flt._market_checks(meme) if c.name == "quote_currency"]
+    assert bad and not bad[0].passed and "SPCX" in bad[0].detail
+    usdc = snapshot_from_pairs("M", [pair("REAL", "meteora", USDC, 32_000)])
+    assert not [c for c in flt._market_checks(usdc) if c.name == "quote_currency"]
+
+
+def test_executor_refuses_memecoin_quoted_pool(tmp_path):
+    meme = {**POOL, "quote_mint": "SPCXmint", "quote_symbol": "SPCX"}
+    desk, ex, v, _ = _setup(tmp_path, [meme, DUST], {"default": "P", "pinned": "P"})
+    asyncio.run(ex.handle_verdict(v))
+    assert "M" not in desk.portfolio.positions
+    assert "SPCX" in desk.store.db.execute("SELECT reason FROM decisions ORDER BY rowid DESC").fetchone()[0]

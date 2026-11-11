@@ -27,7 +27,7 @@ from ..clients.jupiter import SOL_MINT
 from ..config import HARD_MAX_POSITION_PCT, HARD_MIN_SCORE
 from ..models import ExitOrder, FilterPass, Position, Verdict, now
 from .. import rugnames
-from ..pools import pin_labels, route_check, route_text
+from ..pools import pin_labels, quote_ok, route_check, route_text
 from ..entry import EntryPlan, plan_from, settings as entry_settings
 from ..portfolio import AveragingDownError
 from ..quant import label_outcome, outcome_row
@@ -191,8 +191,10 @@ class Executor(Agent):
             return False
         plan = plan_from(entry_settings(self.cfg.entry))
         plan.max_liq_drop_pct = self.cfg.entry.max_liq_drop_pct
+        # ref_pair: every later price must come from this same pool. BERNIE (2026-11-11) was bought on a fake
+        # "-51.5% dip": the reference came from a dust SOL pool, the next tick from the real SPCX pool.
         self.plans[v.mint] = {"plan": plan, "t0": t, "ref_price": snap.price_usd, "ref_liq": snap.liquidity_usd,
-                              "verdict": v, "symbol": v.symbol, "armed_ts": 0.0}
+                              "ref_pair": snap.pair_address, "verdict": v, "symbol": v.symbol, "armed_ts": 0.0}
         self.state.bump("timing_wait")
         msg = f"approvato, aspetto il momento giusto: {self.rule_text()}"
         self.desk.store.add_decision(t, "executor", "wait", v.mint, v.symbol, msg, {"score": v.score,
@@ -223,6 +225,8 @@ class Executor(Agent):
                     self._end_plan(mint, p, f"{plan.why}, ma nessun segnale fresco dell'Analyst entro 150 s")
                 continue
             snap = snaps.get(mint)
+            if snap is not None and p.get("ref_pair") and snap.pair_address and snap.pair_address != p["ref_pair"]:
+                snap = None                       # another pool's price: not comparable with the reference
             if snap is None or snap.price_usd <= 0:
                 if t - p["t0"] > plan.window_s + 60:
                     self._end_plan(mint, p, "nessun prezzo durante l'attesa")
@@ -250,6 +254,18 @@ class Executor(Agent):
                 snaps = await self.desk.dex.snapshots(list(self.plans), fresh=True, lane="entry")
             except Exception:  # noqa: BLE001 - next tick retries
                 continue
+            snaps = dict(snaps or {})
+            # The batched feed returns ONE pair per token, not always the observed one: re-read those on the full
+            # pair list (whose main pair is chosen the same way as the reference's).
+            for mint, p in list(self.plans.items()):
+                s = snaps.get(mint)
+                if p.get("ref_pair") and (s is None or s.pair_address != p["ref_pair"]):
+                    try:
+                        full = await self.desk.dex.snapshot(mint, lane="entry")
+                    except Exception:  # noqa: BLE001
+                        full = None
+                    if full is not None:
+                        snaps[mint] = full
             for v in self.timing_step(snaps or {}, now()):
                 await self.desk.verdicts.put(v)  # back through handle_verdict: clearance + Risk checks again
 
@@ -302,6 +318,11 @@ class Executor(Agent):
         pool_note = ""
         observed = v.clearance.report.market
         target = (observed.pair_address if observed is not None and observed.pair_address else "") or snap.pair_address
+        allowed = list(self.cfg.filter.allowed_quote_mints)
+        tq = ((snap.pool(target) or {}).get("quote_mint") if snap.pools and target else "") or snap.quote_mint
+        if not quote_ok(tq, allowed):
+            return self.reject(v, f"pool trades against {(snap.pool(target) or {}).get('quote_symbol') or tq[:6]}, "
+                                  f"not SOL / USDC / USDT")
         if snap.pools and target:
             pool = snap.pool(target)
             if pool is None:

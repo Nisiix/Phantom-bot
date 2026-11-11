@@ -41,6 +41,7 @@ from ..clients.feeds import is_pump_copycat, is_pump_token
 from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
 from ..devwatch import linked_wallets
 from ..onchain_lp import OnchainLP
+from ..pools import quote_ok
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
 from ..research import market_features, rug_features
 from .. import identity
@@ -351,6 +352,12 @@ class Filter(Agent):
             Check("liquidity", snap.liquidity_usd >= f.min_liquidity_usd, round(snap.liquidity_usd),
                   f.min_liquidity_usd, f"${snap.liquidity_usd:,.0f}"),
         ]
+        if snap.quote_mint and not quote_ok(snap.quote_mint, list(f.allowed_quote_mints)):
+            # BERNIE (2026-11-11): its only real pool traded against SPCX, another memecoin, next to dust SOL
+            # copies with made-up prices. Not permanent: a SOL / USDC pool may become the main one later.
+            checks.append(Check("quote_currency", False, snap.quote_symbol or snap.quote_mint[:6], "SOL / USDC / USDT",
+                                f"main pool trades against {snap.quote_symbol or snap.quote_mint[:6]}, not SOL / "
+                                f"USDC / USDT (a memecoin quote adds that coin's risk)"))
         grad = self.graduation_age(snap)
         if f.graduation_wait_minutes > 0 and grad is not None:
             ok = grad >= f.graduation_wait_minutes

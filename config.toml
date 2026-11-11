@@ -50,6 +50,10 @@ require_freeze_revoked = true      # freeze authority = can freeze your tokens (
 reject_dangerous_token2022 = true  # permanent delegate, transfer fees, non-transferable
 reject_rugcheck_danger = true      # any "danger"-level RugCheck risk
 min_liquidity_usd = 20000.0
+# Main pool currency (2026-11-12, after BERNIE: real pool against SPCX, a memecoin, plus dust SOL copies with
+# made-up prices). The main pool must trade against SOL, USDC or USDT; anything else is not bought. [] = off.
+allowed_quote_mints = ["So11111111111111111111111111111111111111112", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                       "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]
 # ── new tokens only (user's rule 2026-11-11: catch new, valid tokens that can still grow to ~$200k market cap or
 # more; a token that already ran is out). Measured on 725 60-minute follow-ups (exit-study, 2026-11-11):
 #   age  < 1 h: median best rise +40%, 24% reached +100%   | 1-3 days: +8%, 0%   | > 3 days: +4%, 4%

@@ -210,3 +210,21 @@ def test_user_trial_is_measured_and_flagged_not_changed(tmp_path):
     cfg.controller.auto_apply = "always"
     load_overrides(cfg)
     assert cfg.entry.mode == "dip"
+
+
+def test_price_from_another_pool_is_not_a_dip(tmp_path):
+    """BERNIE 2026-11-11: reference from a dust SOL pool, next tick from the real pool = fake -51% "dip"."""
+    desk = make_desk(tmp_path)
+    desk.cfg.entry.mode, desk.cfg.entry.dip_pct = "dip", 3.0
+    dex = FakeDex()
+    desk.jup, desk.dex = FakeJup(), dex
+    ex = Executor(desk, PaperBroker(desk.portfolio), Risk(desk))
+
+    async def go():
+        await ex.handle_verdict(signed_verdict(desk))
+        p = ex.plans["M"]
+        other = {"M": snap(pair_address="OTHER", price_usd=0.0005)}       # -50%, but read on another pool
+        assert ex.timing_step(other, p["t0"] + 30) == []
+        assert p["plan"].state != "buy"
+    asyncio.run(go())
+    assert "M" not in desk.portfolio.positions
