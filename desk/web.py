@@ -105,7 +105,7 @@ class Dashboard:
             "gates": {"day_halted": r.day_halted, "pause_left": max(0.0, r.pause_until - t),
                       "cooldown_left": cd_left},
             "rules": {"max_pos_pct": d.cfg.executor.max_position_pct, "stop": d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct,
-                      "daily_limit": d.cfg.risk.daily_loss_limit_pct,
+                      "daily_limit": d.cfg.risk.daily_loss_limit_pct if d.cfg.is_live else 0.0,  # live only
                       "trail": d.cfg.risk.trail_activate_pct, "min_score": d.cfg.analyst.min_score},
             "quant": {"status": q.status(), "enforcing": q.enforcing, "samples": q.effective_samples,
                       "needed": q.min_samples_to_enforce, "blocked": q.blocked,

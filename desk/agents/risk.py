@@ -125,7 +125,8 @@ class Risk(Agent):
         self.status("working")
         self._rollover(force=not self.day)
         self.emit("info", f"Risk online: stop {self.r.exit_stop_pct or self.r.hard_stop_pct}%, trail after +{self.r.trail_activate_pct}% "
-                          f"({self.r.trail_distance_pct}% distance), daily limit -{self.r.daily_loss_limit_pct}%")
+                          f"({self.r.trail_distance_pct}% distance), daily limit "
+                          + (f"-{self.r.daily_loss_limit_pct}%" if self.cfg.is_live else "off in paper (live only)"))
         await self.supervised("risk", self.loop)
 
     def _rollover(self, force: bool = False) -> None:

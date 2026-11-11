@@ -630,8 +630,8 @@ function renderKpis(s) {
   chip(day, withUsd(sgn(day) + "%", dayPnl), "oggi");
   k.append(
     tile("◉", "Saldo disponibile", sol(b.cash, 3) + " SOL", b.sol_usd ? usd(b.cash * b.sol_usd) + " liquidi" : null),
-    tile("⇅", "Oggi", sgn(day) + "%", (PX ? usdP(dayPnl) + " · " : "") + "stop giornaliero −" + s.rules.daily_limit + "%", cls(day),
-      day < 0 ? Math.abs(day) / s.rules.daily_limit * 100 : 0),
+    tile("⇅", "Oggi", sgn(day) + "%", (PX ? usdP(dayPnl) + " · " : "") + (s.rules.daily_limit ? "stop giornaliero −" + s.rules.daily_limit + "%" : "nessuno stop giornaliero in paper (solo live)"), cls(day),
+      s.rules.daily_limit && day < 0 ? Math.abs(day) / s.rules.daily_limit * 100 : null),
     tile("▣", "Posizioni aperte", b.open + " / " + b.max_open, "max " + s.rules.max_pos_pct + "% del saldo per trade", null, b.open / Math.max(1, b.max_open) * 100),
     tile("∑", "QUANT", s.quant.enforcing ? "Attivo" : "In rodaggio", s.quant.enforcing
       ? "bloccati " + s.quant.blocked + " segnali" : Math.round(s.quant.samples) + " / " + s.quant.needed + " esiti raccolti",
