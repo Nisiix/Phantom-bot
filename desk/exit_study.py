@@ -22,7 +22,7 @@ from itertools import product
 from statistics import mean, median
 
 from .controller import clip_ret, parse_rows
-from .exits import LockRule, lock_rule, lock_step, lock_trigger
+from .exits import LockRule, lock_level, lock_rule, lock_step, rise_speed
 
 EARLY_PTS = 10.0     # a lock sale is "premature" if the token later went this many points above the sale
 
@@ -31,7 +31,7 @@ def replay(path, cost: float, stop: float, trail_on: float, trail_dist: float, m
            lock: LockRule) -> tuple[float, str, float]:
     """Same exit order as controller.simulate_exit. Returns (net %, exit kind, max net % reached after the exit)."""
     peak, trail, last = 0.0, False, -cost
-    touch, armed = None, 0.0
+    touch, armed, level, hist = None, 0.0, 0.0, []
     kind, out, at = "END", None, len(path)
     for i, (sec, raw) in enumerate(path):
         net = raw - cost
@@ -49,10 +49,13 @@ def replay(path, cost: float, stop: float, trail_on: float, trail_dist: float, m
             kind, out, at = "TRAIL", net, i
             break
         if lock.enabled:
+            speed = rise_speed(hist, sec, peak, lock.speed_s) if lock.speed_full > 0 else 0.0
             touch, armed = lock_step(lock, peak, sec, touch, armed, cost)
-            if armed and net <= lock_trigger(lock, peak):
-                kind, out, at = "LOCK", net, i
-                break
+            if armed:
+                level = max(level, lock_level(lock, peak, speed))
+                if net <= level + lock.buffer:
+                    kind, out, at = "LOCK", net, i
+                    break
     if out is None:
         out = last
     after = max((raw - cost for _, raw in path[at + 1:]), default=out)
@@ -163,6 +166,89 @@ def real_trades(store, analyst_raw: list[dict]) -> list[str]:
     return out or ["- nessun trade chiuso da stop a profitto o trailing"]
 
 
+def _bucket(v, edges, labels):
+    for e, lab in zip(edges, labels):
+        if v < e:
+            return lab
+    return labels[-1]
+
+
+def new_token_section(store, cfg) -> list[str]:
+    """Do newer / smaller tokens rise more? Every 60-min follow-up (Filter and Analyst stage), by token age and
+    by market cap when the desk saw it. User's ask 2026-11-11: only tokens created in the last 3 days that can
+    still reach ~$200k market cap; tokens that already ran are out."""
+    since = time.time() - cfg.controller.lookback_days * 86400
+    raw = store.q("SELECT stage,mint,max_pct,ret_end_pct,sim_net_pct,features FROM shadow WHERE features IS NOT NULL "
+                  "AND end_ts IS NOT NULL AND start_ts>=?", (since,))
+    pump_only = getattr(cfg.scout, "venues", "") == "pumpfun"
+    rows = []
+    for r in raw:
+        if pump_only and not (r["mint"] or "").endswith("pump"):
+            continue
+        try:
+            f = json.loads(r["features"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        if r["max_pct"] is None or r["max_pct"] > 5000:
+            continue
+        rows.append({"stage": r["stage"], "age": f.get("age_min"), "mcap": f.get("mcap"),
+                     "max": float(r["max_pct"]), "end": float(r["ret_end_pct"] or 0.0),
+                     "sim": clip_ret(float(r["sim_net_pct"] or 0.0))})
+    out = ["## Token nuovi: età e market cap quando il bot li ha visti (tutti i follow-up a 60 minuti)",
+           "Per ogni gruppo: quanti token, salita massima mediana nell'ora, quanti hanno toccato +30% e +100%, "
+           "quanti hanno chiuso l'ora sotto -50%, risultato medio simulato con le regole d'uscita."]
+
+    def table(title, key, edges, labels, data):
+        groups: dict[str, list] = {}
+        for x in data:
+            v = x[key]
+            lab = "sconosciuto" if not isinstance(v, (int, float)) or v <= 0 else _bucket(v, edges, labels)
+            groups.setdefault(lab, []).append(x)
+        out.append(f"- {title}:")
+        for lab in list(labels) + ["sconosciuto"]:
+            g = groups.get(lab)
+            if not g:
+                continue
+            n = len(g)
+            out.append(f"    - {lab}: {n} token | salita massima mediana {median(x['max'] for x in g):+.1f}% | "
+                       f"+30%: {sum(1 for x in g if x['max'] >= 30) / n:.0%} | +100%: "
+                       f"{sum(1 for x in g if x['max'] >= 100) / n:.0%} | sotto -50% a fine ora: "
+                       f"{sum(1 for x in g if x['end'] <= -50) / n:.0%} | simulato {mean(x['sim'] for x in g):+.2f}%")
+    for stage, name in (("filter", "visti dal Filter"), ("analyst", "valutati dall'Analyst")):
+        data = [x for x in rows if x["stage"] == stage]
+        if len(data) < 10:
+            continue
+        out.append(f"### {name} ({len(data)})")
+        table("per età", "age", (60, 240, 1440, 4320), ("meno di 1 h", "1-4 h", "4-24 h", "1-3 giorni", "più di 3 giorni"), data)
+        table("per market cap", "mcap", (50e3, 100e3, 200e3, 500e3, 1e6),
+              ("meno di $50k", "$50-100k", "$100-200k", "$200-500k", "$500k-1M", "più di $1M"), data)
+    return out
+
+
+def exit_gaps(store) -> list[str]:
+    """Real stop exits: the level, the value when Risk fired, what the sale realized and how long it took."""
+    out = ["## Trade reali: dallo stop alla vendita (dove si perde il profitto dei pump)"]
+    trades = store.q("SELECT symbol,entry_ts,pnl_pct,peak_pnl_pct,exit_reason,data FROM trades UNION ALL "
+                     "SELECT symbol,entry_ts,pnl_pct,peak_pnl_pct,exit_reason,data FROM trades_archive "
+                     "ORDER BY entry_ts")
+    n = 0
+    for t in trades:
+        try:
+            d = json.loads(t["data"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        ex, sp = d.get("exit") or {}, d.get("exec") or {}
+        if ex.get("trigger_pnl_pct") is None:
+            continue
+        n += 1
+        out.append(f"- {t['symbol']} {time.strftime('%m-%d %H:%M', time.gmtime(t['entry_ts']))} UTC "
+                   f"{ex.get('kind')}: picco {t['peak_pnl_pct']:+.1f}% | valore allo scatto "
+                   f"{ex['trigger_pnl_pct']:+.1f}% | incassato {t['pnl_pct']:+.2f}% | dallo scatto alla vendita "
+                   f"{sp.get('trigger_to_fill_ms', '?')} ms (vendita {sp.get('exit_ms', '?')} ms) | "
+                   f"{(t['exit_reason'] or '')[:110]}")
+    return out if n else out + ["- nessun trade con i dati di uscita registrati"]
+
+
 def run_study(cfg, store) -> str:
     since = time.time() - cfg.controller.lookback_days * 86400
     cols = "start_ts,mint,score,decision,sim_net_pct,cost_pct,features,path"
@@ -209,7 +295,25 @@ def run_study(cfg, store) -> str:
         safe.sort(key=lambda s: -s[0])
         lines += ["", "Migliori varianti che non aggiungono trade in perdita né peggiorano il 10% peggiore "
                       "(differenza rispetto all'attuale, intervallo 95%):"]
-        for _, name, m, mu, lo, hi in safe[:15]:
+        for _, name, m, mu, lo, hi in safe[:8]:
+            lines.append(f"- {name}: {mu:+.2f} [{lo:+.2f}, {hi:+.2f}] | {_fmt(m)}")
+        # Stop that rises with the price (user 2026-11-11: +30% -> +20%, +100% -> +70%, more on a fast rise),
+        # on top of the current arming / floor. Compared with the current rule, pair by pair.
+        lines += ["", "Stop che sale col prezzo (quota del picco tenuta da un certo picco in su; più alta se la "
+                      "salita è veloce), sopra la regola attuale:"]
+        pump = []
+        for frm, keep, kfast, spd in product((15.0, 20.0, 30.0, 40.0), (0.6, 0.7, 0.8), (0.0, 0.8, 0.85, 0.9),
+                                             (15.0, 30.0, 60.0)):
+            if kfast and kfast <= keep or (not kfast and spd != 30.0):
+                continue
+            rule = cur._replace(keep=keep, keep_from=frm, keep_fast=kfast, speed_full=spd if kfast else 0.0)
+            m = evaluate(data, r, lambda x, rule=rule: rule)
+            mu, lo, hi = _paired(m["res"], base["res"])
+            pump.append((mu, f"da +{frm:g}% tiene il {keep * 100:g}%"
+                             + (f", fino al {kfast * 100:g}% a {spd:g} punti/min" if kfast else ""), m, lo, hi))
+        pump.sort(key=lambda s: -s[0])
+        user = [x for x in pump if x[1] == "da +30% tiene il 70%"]
+        for mu, name, m, lo, hi in user + pump[:6] + pump[-2:]:
             lines.append(f"- {name}: {mu:+.2f} [{lo:+.2f}, {hi:+.2f}] | {_fmt(m)}")
         # Young vs old: the same best few, split by token age
         young = [x for x in data if isinstance(x["f"].get("age_min"), (int, float)) and x["f"]["age_min"] < young_h * 60]
@@ -236,5 +340,7 @@ def run_study(cfg, store) -> str:
         lines.append("")
     lines += ["## Trade reali chiusi in profitto: cosa ha fatto il prezzo dopo la vendita"]
     lines += real_trades(store, raw)
+    lines += [""] + exit_gaps(store)
+    lines += [""] + new_token_section(store, cfg)
     lines += ["", "Stime sul passato (percorsi campionati ogni ~20 s), non garanzie."]
     return "\n".join(x for x in lines if x is not None)

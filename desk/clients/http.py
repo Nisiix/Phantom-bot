@@ -67,6 +67,7 @@ HOST_LIMITS = {
     "api.rugcheck.xyz": 12,
     "lite-api.jup.ag": 25,               # entry quotes
     "lite-api.jup.ag#risk": 30,          # exit-value quotes for open positions
+    "lite-api.jup.ag#stop": 30,          # the one quote that confirms a stop before selling: never queued
     "lite-api.jup.ag#exec": 60,          # live orders/executes: rare, but never wait behind quotes
     "api.geckoterminal.com": 8,
     "api.mainnet-beta.solana.com": 90,

@@ -30,7 +30,9 @@ class Broker:
         return await jup.quote(SOL_MINT, mint, lamports, slippage_bps)
 
     async def quote_sell(self, jup, mint: str, raw: int, slippage_bps: int | None) -> dict | None:
-        return await jup.quote(mint, SOL_MINT, raw, slippage_bps or 300, lane="risk")
+        # "exec" lane, like a live order: the sale never waits behind Risk's routine quotes (the risk lane spaces
+        # its calls 2 s apart: measured 2026-11-11, a dumping token lost 13 points between the stop and the sale).
+        return await jup.quote(mint, SOL_MINT, raw, slippage_bps or 300, lane="exec")
 
     async def buy(self, mint: str, sol_amount: float, decimals: int, quote: dict) -> Fill:  # pragma: no cover
         raise NotImplementedError

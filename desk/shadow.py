@@ -29,7 +29,7 @@ import statistics
 import time
 from dataclasses import dataclass, field
 
-from .exits import lock_rule, lock_step, lock_trigger
+from .exits import lock_level, lock_rule, lock_step, rise_speed
 from .quant import LABELS
 
 MODEL_UP, MODEL_DOWN = 60.0, -30.0
@@ -65,6 +65,8 @@ class Shadow:
     sim_ret: float | None = None
     sim_lock_touch: float | None = None   # profit lock of the simulated position (desk/exits.py)
     sim_lock: float = 0.0
+    sim_lock_level: float = 0.0           # highest net level the lock reached (it only goes up)
+    sim_hist: list = field(default_factory=list)   # (seconds, peak) samples for the speed of the rise
     path: list = field(default_factory=list)   # analyst stage: [(seconds since start, raw % move)] for the Controller
 
 
@@ -102,10 +104,13 @@ def update_shadow(s: Shadow, price: float, t: float, stop: float, up: float, tra
             if s.sim_trail and val <= (1 + s.sim_peak / 100) * (1 - trail_dist / 100):
                 s.sim_open, s.sim_ret = False, net
             elif lock is not None and lock.enabled:
+                speed = rise_speed(s.sim_hist, t - s.start, s.sim_peak, lock.speed_s) if lock.speed_full > 0 else 0.0
                 s.sim_lock_touch, s.sim_lock = lock_step(lock, s.sim_peak, t - s.start, s.sim_lock_touch, s.sim_lock,
                                                             s.cost_pct)
-                if s.sim_lock and net <= lock_trigger(lock, s.sim_peak):
-                    s.sim_open, s.sim_ret = False, net
+                if s.sim_lock:
+                    s.sim_lock_level = max(s.sim_lock_level, lock_level(lock, s.sim_peak, speed))
+                    if net <= s.sim_lock_level + lock.buffer:
+                        s.sim_open, s.sim_ret = False, net
 
 
 def finalize_shadow(s: Shadow) -> None:

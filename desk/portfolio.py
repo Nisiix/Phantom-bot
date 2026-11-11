@@ -92,7 +92,8 @@ class Portfolio:
                      "armed_after_s": (pos.lock_armed_ts - pos.entry_ts) if pos.lock_armed_ts else None,
                      "first_touch_s": pos.lock_touch_s, "at_pct": pos.lock_at, "buffer_pct": pos.lock_buffer,
                      "keep_pct": pos.lock_keep * 100,
-                     "level_pct": position_lock_level(pos) if pos.lock_armed_on else None},
+                     "level_pct": position_lock_level(pos) if pos.lock_armed_on else None,
+                     "max_speed_pts_min": pos.lock_speed},
         }
         if pos.exit_rules:
             trade["data"]["exit_rules"] = pos.exit_rules

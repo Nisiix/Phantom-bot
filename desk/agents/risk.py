@@ -3,9 +3,10 @@
 Exits (checked every couple of seconds on executable value, i.e. after exit costs):
   * HARD STOP at -6%                       (no exceptions, no "give it a minute")
   * TRAILING STOP armed only after +12%;   then exit if value falls trail_distance% below the peak
-  * PROFIT LOCK: after +5% net (+6% on a fast move) the stop moves to max(+2.5%, 50% of the peak) net, sale fees
-    included, and rises with the peak
+  * PROFIT LOCK: after +8% net (+10% on a fast move) the stop moves to +4% net, sale fees included; from a +30%
+    peak it rises with the price (70% of the peak, up to 85% when the rise is fast) and never comes down
     (desk/exits.py; levels raised by the sell buffer = configured minimum or measured exit slippage)
+  * while a position is pumping Risk checks the price every second and a real sell quote every ~3 s
   * LIQUIDITY PULL: pool liquidity drops liquidity_drop_exit_pct% vs. entry -> emergency exit
   * DATA LOSS: no price for 60s and no sell quote -> emergency exit
   * optional time stop
@@ -23,15 +24,17 @@ import time
 from datetime import datetime, timezone
 
 from ..clients.jupiter import SOL_MINT
-from ..exits import LockRule, lock_rule, lock_step, position_lock_level
+from ..exits import LockRule, lock_level, lock_rule, lock_step, position_lock_level, rise_speed
 from ..models import ExitOrder, Position
 from .base import Agent
 
 
 def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None,
-                  lock: LockRule | None = None) -> tuple[str | None, str]:
+                  lock: LockRule | None = None, speed: float = 0.0) -> tuple[str | None, str]:
     """Pure rule evaluation. Also arms the trailing stop and the profit lock. Returns (reason, detail).
-    lock: the profit-lock rule with Risk's current sell buffer (default: from cfg)."""
+    lock: the profit-lock rule with Risk's current sell buffer (default: from cfg).
+    speed: how fast the position's peak is rising (% points per minute, exits.rise_speed), for the stop that
+    rises with the price."""
     pnl = pos.pnl_pct
     stop = getattr(cfg, "exit_stop_pct", 0) or cfg.hard_stop_pct    # paper stop trial, else the hard stop
     if pnl <= stop:
@@ -52,6 +55,10 @@ def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None,
             pos.lock_armed_on, pos.lock_armed_ts, pos.lock_at, pos.lock_buffer = armed, t, lock.at, lock.buffer
             pos.lock_keep = lock.keep
     if pos.lock_armed_on:
+        if lock.enabled:
+            # The stop rises with the price (never falls): a share of the peak, larger when the rise is fast.
+            pos.lock_level = max(pos.lock_level, lock_level(lock, pos.peak_pnl_pct, speed))
+            pos.lock_speed = max(pos.lock_speed, speed)
         keep = position_lock_level(pos)
         if pnl <= keep + pos.lock_buffer:
             return "PROFIT_LOCK", (f"profit lock: value back to {pnl:+.2f}% from peak {pos.peak_pnl_pct:+.1f}% "
@@ -64,6 +71,9 @@ def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None,
         return "TIME_STOP", f"held {(t - pos.entry_ts) / 60:.0f} min"
     return None, ""
 
+
+# A position whose peak rises at least this fast (% points per minute) is "hot": checked more often.
+HOT_SPEED = 5.0
 
 # Exits in the profit zone, where the sale slippage measured is comparable to a profit-lock sale (a hard stop
 # during a rug gaps far below its trigger and would blow the buffer up).
@@ -116,6 +126,9 @@ class Risk(Agent):
         self.sell_slips = self.sell_slips[-30:]
         self._last_lag_warn = 0.0
         self._last_quote: dict[str, float] = {}
+        self._peaks: dict[str, list] = {}     # mint -> (seconds since the buy, peak %) samples: speed of the rise
+        self._speed: dict[str, float] = {}    # mint -> % points per minute the peak is rising now
+        self._hot = False                     # a position is pumping or has a stop armed: check faster
         self._last_equity = 0.0
         self._last_solpx = 0.0
 
@@ -230,8 +243,22 @@ class Risk(Agent):
             self.state.counters["open"] = len(pf.positions)
             if not pf.positions:
                 self.status("idle")
-            if not await self.sleep(self.r.price_poll_seconds):
+            if not await self.sleep(self.poll_seconds()):
                 return
+
+    def poll_seconds(self) -> float:
+        """Seconds between two price checks. While a position is pumping ("hot") Risk checks twice as often (1 s
+        by default): a violent pump turns into a violent dump within seconds. The floor is the DexScreener budget
+        of the positions lane (60 calls/min: one batched call for all positions)."""
+        base = self.r.price_poll_seconds
+        if self._hot and self.desk.portfolio.positions:
+            return max(1.0, min(base, self.r.hot_poll_seconds))
+        return base
+
+    def is_hot(self, pos: Position) -> bool:
+        """Pumping now: its peak gained HOT_SPEED points per minute or more over the last minute. It stays hot
+        for about a minute after the last new high, which is when the dump starts."""
+        return self._speed.get(pos.mint, 0.0) >= HOT_SPEED
 
     async def mark_positions(self, t: float) -> None:
         pf = self.desk.portfolio
@@ -253,11 +280,16 @@ class Risk(Agent):
                     pos.last_price_ts = t
         # Executable truth: a real Jupiter sell quote every ~12s (or ~6s when near a stop),
         # fetched for all due positions at once instead of one after the other.
+        # Hot positions (pumping right now) get it every ~3 s: DexScreener lags when the price moves fast. The
+        # cadence widens with the number of hot positions to stay inside Jupiter's risk lane (30/min).
         due, quoted = [], set()
+        n_hot = sum(1 for _, p in items if self.is_hot(p))
+        hot_every = max(3.0, 2.5 * n_hot)
         for mint, pos in items:
             near = pos.pnl_pct <= (self.r.exit_stop_pct or self.r.hard_stop_pct) + 2 or pos.trailing_active \
                 or bool(pos.lock_armed_on)
-            if mint not in self.exiting and t - self._last_quote.get(mint, 0) >= (6 if near else 12):
+            every = hot_every if self.is_hot(pos) else 6 if near else 12
+            if mint not in self.exiting and t - self._last_quote.get(mint, 0) >= every:
                 self._last_quote[mint] = t
                 due.append(pos)
         if due:
@@ -281,17 +313,20 @@ class Risk(Agent):
             if mint in self.exiting:
                 continue
             lock = self.lock()
-            reason, detail = exit_decision(pos, self.r, t, liq, lock)
+            # How fast is the peak rising? (% points per minute; the stop keeps a larger share on a fast rise)
+            speed = rise_speed(self._peaks.setdefault(mint, []), t - pos.entry_ts, pos.peak_pnl_pct, lock.speed_s)
+            self._speed[mint] = speed
+            reason, detail = exit_decision(pos, self.r, t, liq, lock, speed)
             if reason in ("HARD_STOP", "TRAILING_STOP", "PROFIT_LOCK") and mint not in quoted:
                 # The mark came from DexScreener, whose price lags / jumps between pairs (seen in paper: a
                 # "-7.98%" stop sold at -2.42% three seconds after entry). Confirm on a real Jupiter sell
                 # quote before selling; if Jupiter can't quote, the DexScreener stop stands (safety first).
-                v = await self.quote_value(pos)
+                v = await self.quote_value(pos, lane="stop")     # its own lane: never waits behind routine quotes
                 if v is not None:
                     self._last_quote[mint] = t
                     pos.mark_value_sol = v
                     pos.last_price_ts = t
-                    reason, detail = exit_decision(pos, self.r, t, liq, lock)
+                    reason, detail = exit_decision(pos, self.r, t, liq, lock, speed)
                     if reason is None:
                         self.state.bump("false_stop_avoided")
             if reason == "LIQUIDITY_PULL":
@@ -302,7 +337,7 @@ class Risk(Agent):
                     full = None
                 if full is not None:
                     pos.last_liquidity_usd = full.liquidity_usd
-                    reason, detail = exit_decision(pos, self.r, t, full.liquidity_usd, lock)
+                    reason, detail = exit_decision(pos, self.r, t, full.liquidity_usd, lock, speed)
             if reason is None and t - pos.last_price_ts > 60:
                 reason, detail = "DATA_LOSS", "no price and no sell quote for 60s"
             if pos.trailing_active and mint not in self.trail_announced:
@@ -322,11 +357,12 @@ class Risk(Agent):
                 self.exiting[mint] = t
                 self.emit("exit", f"{reason}: {detail}", mint, pos.symbol, pnl_pct=pos.pnl_pct)
                 await self.desk.exits.put(ExitOrder(mint, reason, detail))
+        self._hot = any(self.is_hot(p) for m, p in pf.positions.items() if m not in self.exiting)
 
-    async def quote_value(self, pos: Position) -> float | None:
+    async def quote_value(self, pos: Position, lane: str = "risk") -> float | None:
         raw = int(pos.tokens * 10 ** pos.decimals)
         try:
-            q = await self.desk.jup.quote(pos.mint, SOL_MINT, raw, self.cfg.executor.slippage_bps, lane="risk")
+            q = await self.desk.jup.quote(pos.mint, SOL_MINT, raw, self.cfg.executor.slippage_bps, lane=lane)
         except Exception:  # noqa: BLE001
             return None
         if not q:
@@ -336,6 +372,8 @@ class Risk(Agent):
     def exit_done(self, mint: str) -> None:
         self.exiting.pop(mint, None)
         self._last_quote.pop(mint, None)
+        self._peaks.pop(mint, None)
+        self._speed.pop(mint, None)
 
     def exit_failed(self, mint: str) -> None:
         # Allow Risk to re-issue the exit on the next tick.

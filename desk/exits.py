@@ -17,6 +17,11 @@ live: slippage while the price is falling). That extra is the "sell buffer": eve
         +5% net, +20% -> +10%), and it rises with the peak. keep = 0 is the plain fixed lock at `lock`, kept as a
         variant the Controller measures.
 
+Second version (2026-11-11, measured with `python run.py exit-study`): arm at +8% (+10% fast), fixed +4% floor,
+fee rule (arm_level), and the STOP THAT RISES WITH THE PRICE for pumps: from a +30% peak the stop keeps 70% of
+the peak (+30% -> +20%, +100% -> +70%), up to 85% when the peak is rising fast (rise_speed, keep_share); the
+level only goes up. See lock_level.
+
 buffer = max(profit_lock_sell_buffer_pct, measured slippage of our last stop exits): Risk measures, on every
 stop / lock exit, how much lower the real sale ended than the value that triggered it, and uses that if worse.
 
@@ -36,6 +41,11 @@ class LockRule(NamedTuple):
     buffer: float = 0.0      # sale cost added to every level
     keep: float = 0.0        # fraction of the net peak profit the lock keeps (0 = fixed lock at `at`)
     fee_mult: float = 0.0    # also arm only once the net profit is >= fee_mult x the trade's round-trip fees
+    # Stop that rises with the price (user's rule 2026-11-11, "pump"): see lock_level.
+    keep_from: float = 0.0   # the keep share applies only from this net peak % (0 = from arming)
+    keep_fast: float = 0.0   # share kept instead when the price is rising very fast (0 = no speed rule)
+    speed_full: float = 0.0  # rise of the net peak, in points per minute, at which keep_fast is fully reached
+    speed_s: float = 60.0    # the rise is measured over this many seconds
 
     @property
     def enabled(self) -> bool:
@@ -56,7 +66,11 @@ def lock_rule(r, buffer: float | None = None) -> LockRule:
                     at=float(g("profit_lock_pct", 0.0) or 0.0),
                     buffer=float(buffer if buffer is not None else (g("profit_lock_sell_buffer_pct", 0.0) or 0.0)),
                     keep=float(g("profit_lock_keep_pct", 0.0) or 0.0) / 100,
-                    fee_mult=float(g("profit_lock_fee_multiple", 0.0) or 0.0))
+                    fee_mult=float(g("profit_lock_fee_multiple", 0.0) or 0.0),
+                    keep_from=float(g("profit_lock_keep_from_pct", 0.0) or 0.0),
+                    keep_fast=float(g("profit_lock_keep_fast_pct", 0.0) or 0.0) / 100,
+                    speed_full=float(g("profit_lock_speed_full", 0.0) or 0.0),
+                    speed_s=float(g("profit_lock_speed_seconds", 60.0) or 60.0))
 
 
 def arm_level(rule: LockRule, cost: float = 0.0) -> float:
@@ -84,16 +98,50 @@ def lock_step(rule: LockRule, peak: float, sec: float, touch_s: float | None, ar
     return touch_s, 0.0
 
 
-def lock_level(rule: LockRule, peak: float) -> float:
-    """Net % profit an armed lock keeps after the sale: the floor, or keep x the net peak if higher."""
-    return max(rule.at, rule.keep * (peak - rule.buffer))
+MIN_SPEED_S = 10.0    # no speed reading on less than this many seconds of history (one tick is not a trend)
 
 
-def lock_trigger(rule: LockRule, peak: float) -> float:
-    """Marked % value at which an armed lock sells (its level plus the sale costs)."""
-    return lock_level(rule, peak) + rule.buffer
+def rise_speed(hist: list, sec: float, peak: float, window: float = 60.0) -> float:
+    """How fast the trade's net peak is rising, in % points per minute over the last `window` seconds.
+    hist is the caller's own list of (sec, peak) samples: this appends the new one and drops the old ones.
+    A peak only goes up, so the speed is never negative; it falls back to 0 once the price stops making highs."""
+    hist.append((sec, peak))
+    while len(hist) > 2 and hist[1][0] <= sec - window:
+        hist.pop(0)
+    t0, p0 = hist[0]
+    dt = sec - t0
+    if dt < MIN_SPEED_S:
+        return 0.0
+    return max(0.0, (peak - p0) * 60.0 / dt)
+
+
+def keep_share(rule: LockRule, speed: float = 0.0) -> float:
+    """Share of the net peak the stop keeps: `keep`, rising towards `keep_fast` with the speed of the rise
+    (user: "the faster it goes up, the more the stop must go up": a violent pump is followed by a violent dump)."""
+    if rule.keep_fast > rule.keep and rule.speed_full > 0 and speed > 0:
+        return rule.keep + (rule.keep_fast - rule.keep) * min(1.0, speed / rule.speed_full)
+    return rule.keep
+
+
+def lock_level(rule: LockRule, peak: float, speed: float = 0.0) -> float:
+    """Net % profit an armed lock keeps after the sale: the floor `at`, or the keep share of the net peak if
+    higher. With keep_from the share starts only at that peak (below it the swings of a young token would close
+    the trade too early: measured 2026-11-11). User's figures: +30% -> stop +20%, +100% -> +70% (70% of the
+    peak), more when the rise is fast. Callers keep the highest level reached (the stop never goes down)."""
+    net_peak = peak - rule.buffer
+    share = keep_share(rule, speed)
+    if share <= 0 or net_peak < rule.keep_from:
+        return rule.at
+    return max(rule.at, share * net_peak)
+
+
+def lock_trigger(rule: LockRule, peak: float, speed: float = 0.0, level: float = 0.0) -> float:
+    """Marked % value at which an armed lock sells: its level (never under `level`, the highest one reached so
+    far) plus the sale costs."""
+    return max(level, lock_level(rule, peak, speed)) + rule.buffer
 
 
 def position_lock_level(pos) -> float:
-    """Net % an armed position's profit lock keeps now (settings frozen when it armed, current peak)."""
-    return max(pos.lock_at, pos.lock_keep * (pos.peak_pnl_pct - pos.lock_buffer))
+    """Net % an armed position's profit lock keeps now: the floor frozen when it armed, or the highest level
+    Risk has raised it to since (pos.lock_level, see agents/risk.py exit_decision)."""
+    return max(pos.lock_at, getattr(pos, "lock_level", 0.0) or 0.0)

@@ -298,6 +298,9 @@ class Filter(Agent):
             checks.append(Check("venue", ok, snap.dex_id or "?", "pump.fun / PumpSwap", detail))
             if not ok:   # out of scope for good: the Scout drops it, no more re-screens (quietly, not a "kill")
                 self.desk.blacklist[cand.mint] = detail
+        old = next((c for c in checks if c.name == "token_age" and not c.passed), None)
+        if old is not None:   # a token only gets older: out of scope for good, no more re-screens
+            self.desk.blacklist.setdefault(cand.mint, old.detail)
         failed = [c for c in checks if not c.passed]
         if failed and [c.name for c in failed] == ["graduation_wait"] and (
                 not self._recent_top10(cand.mint) or cand.mint in self._released):
@@ -353,6 +356,21 @@ class Filter(Agent):
             checks.append(Check("graduation_wait", ok, round(grad, 1), f.graduation_wait_minutes,
                                 f"graduated {grad:.0f} min ago" + ("" if ok else
                                 f" < {f.graduation_wait_minutes:.0f} min wait (instant-rug window)")))
+        # New tokens only (user's rule 2026-11-11): the desk hunts fresh launches that can still grow to about
+        # $200k market cap or more; a token that is days old, or already far up there, had its first run.
+        # Age = since the token's oldest DEX pair (unknown age / market cap: not judged).
+        if f.max_age_hours > 0 and snap.pair_created_at:
+            age_h = snap.age_minutes / 60
+            ok = age_h <= f.max_age_hours
+            checks.append(Check("token_age", ok, round(age_h, 1), f.max_age_hours,
+                                f"{age_h / 24:.1f} days old" + ("" if ok else
+                                f" > {f.max_age_hours / 24:g} days: not a new token")))
+        mcap = snap.market_cap or snap.fdv
+        if f.max_market_cap_usd > 0 and mcap > 0:
+            ok = mcap <= f.max_market_cap_usd
+            checks.append(Check("market_cap", ok, round(mcap), f.max_market_cap_usd,
+                                f"market cap ${mcap:,.0f}" + ("" if ok else
+                                f" > ${f.max_market_cap_usd:,.0f}: already ran, the first move is gone")))
         return checks
 
     async def deep(self, cand: Candidate, snap: MarketSnapshot) -> FilterReport:

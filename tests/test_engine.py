@@ -265,3 +265,19 @@ def test_graduation_wait_audit_follows_tokens_from_wait_end(tmp_path):
     st.save()                                            # pending audits survive a restart
     st2 = ShadowTracker(desk, lambda *a, **k: None)
     assert "Laterpump" in st2.deferred
+
+
+def test_new_tokens_only_age_and_market_cap(tmp_path):
+    """User's rule 2026-11-11: only tokens created in the last 3 days, not ones that already ran."""
+    desk = make_desk(tmp_path)
+    desk.cfg.filter.max_age_hours = 72
+    desk.cfg.filter.max_market_cap_usd = 0
+    f = Filter(desk)
+    assert f.screen(Candidate("Newpump"), snap(mint="Newpump")) is None               # 3 h old: goes on
+    old = f.screen(Candidate("Oldpump"), snap(mint="Oldpump", pair_created_at=time.time() - 5 * 86400))
+    assert old is not None and [c.name for c in old.failed] == ["token_age"] and "Oldpump" in desk.blacklist
+    assert f.screen(Candidate("Unkpump"), snap(mint="Unkpump", pair_created_at=0)) is None   # unknown age: not judged
+    desk.cfg.filter.max_market_cap_usd = 200_000
+    big = f.screen(Candidate("Bigpump"), snap(mint="Bigpump"))                         # $500k market cap
+    assert big is not None and [c.name for c in big.failed] == ["market_cap"] and "Bigpump" not in desk.blacklist
+    assert f.screen(Candidate("Smallpump"), snap(mint="Smallpump", market_cap=90_000, fdv=90_000)) is None

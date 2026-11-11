@@ -57,6 +57,10 @@ class FilterCfg:
     # first hour (a 15-minute-old token can't have an hour of volume), never under young_min_volume_usd.
     young_volume_liquidity_ratio: float = 0.5
     young_min_volume_usd: float = 5_000.0
+    # New tokens only (user 2026-11-11): 0 = off. Token older than max_age_hours (since its oldest DEX pair), or
+    # with a market cap already above max_market_cap_usd, is not considered.
+    max_age_hours: float = 0.0
+    max_market_cap_usd: float = 0.0
     reject_rug_linked_dev: bool = True
     require_freeze_revoked: bool = True
     reject_dangerous_token2022: bool = True
@@ -155,6 +159,7 @@ class RiskCfg:
     liquidity_drop_exit_pct: float = 35.0
     max_hold_minutes: float = 0
     price_poll_seconds: float = 2.0
+    hot_poll_seconds: float = 1.0          # ...while a position is pumping (min 1 s)
     # PROFIT LOCK (user's rule 2026-11-11, see desk/exits.py): once the trade is up profit_lock_activate_pct
     # NET (or profit_lock_fast_activate_pct if it got there within profit_lock_fast_minutes), the stop moves to
     # profit_lock_pct NET, so the trade still ends in profit. All levels are net of costs and are raised by the
@@ -166,6 +171,13 @@ class RiskCfg:
     profit_lock_sell_buffer_pct: float = 1.0
     profit_lock_keep_pct: float = 50.0     # lock keeps this share of the net peak profit (0 = fixed lock)
     profit_lock_fee_multiple: float = 0.0  # arm only once net profit >= this x the trade's round-trip fees too
+    # Stop that rises with the price (user 2026-11-11): from profit_lock_keep_from_pct net peak the stop keeps
+    # profit_lock_keep_pct of the peak, up to profit_lock_keep_fast_pct when the peak rises profit_lock_speed_full
+    # points per minute or more (measured over profit_lock_speed_seconds). 0 = each part off.
+    profit_lock_keep_from_pct: float = 0.0
+    profit_lock_keep_fast_pct: float = 0.0
+    profit_lock_speed_full: float = 0.0
+    profit_lock_speed_seconds: float = 60.0
 
 
 @dataclass
@@ -357,6 +369,12 @@ def enforce_hard_limits(cfg: Config) -> None:
         clamp(r, "profit_lock_keep_pct", lambda v: 0 <= v <= 90, 50.0, "profit lock keep share must be 0-90%")
         clamp(r, "profit_lock_fast_minutes", lambda v: 0 <= v <= 60, 3.0, "profit lock fast window must be 0-60 min")
         clamp(r, "profit_lock_fee_multiple", lambda v: 0 <= v <= 5, 1.0, "profit lock fee multiple must be 0-5")
+        clamp(r, "profit_lock_keep_from_pct", lambda v: 0 <= v <= 500, 30.0, "rising stop must start at 0-500%")
+        clamp(r, "profit_lock_keep_fast_pct", lambda v: v == 0 or r.profit_lock_keep_pct <= v <= 95, 0.0,
+              "the share kept on a fast rise must be between profit_lock_keep_pct and 95% (0 = off)")
+        clamp(r, "profit_lock_speed_full", lambda v: 0 <= v <= 1000, 30.0, "profit_lock_speed_full must be 0-1000")
+        clamp(r, "profit_lock_speed_seconds", lambda v: 20 <= v <= 600, 60.0, "speed window must be 20-600 s")
+    clamp(r, "hot_poll_seconds", lambda v: 1.0 <= v <= 10.0, 1.0, "hot_poll_seconds must be 1-10 s")
     clamp(f, "max_top10_pct", lambda v: 0 < v <= HARD_MAX_TOP10_PCT, HARD_MAX_TOP10_PCT,
           "top-10 holder ceiling can never exceed 20%")
     clamp(f, "young_volume_liquidity_ratio", lambda v: 0.25 <= v <= 5.0, 0.5,

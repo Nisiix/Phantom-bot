@@ -159,3 +159,97 @@ def test_risk_uses_the_trade_fees():
     assert p.lock_armed_on == 10.0
     p.mark_value_sol = 1.049                       # back under +4% net + 1% sale costs -> sell
     assert exit_decision(p, r, time.time(), 80_000)[0] == "PROFIT_LOCK"
+
+
+def _rising(**kw):
+    base = {"profit_lock_activate_pct": 8, "profit_lock_fast_activate_pct": 10, "profit_lock_fast_minutes": 3,
+            "profit_lock_pct": 4, "profit_lock_keep_pct": 70, "profit_lock_keep_from_pct": 30,
+            "profit_lock_keep_fast_pct": 85, "profit_lock_speed_full": 30, "profit_lock_speed_seconds": 60}
+    base.update(kw)
+    return base
+
+
+def test_stop_rises_with_the_price_users_figures():
+    """+30% -> stop about +20%, +100% -> about +70%; under +30% the fixed +4% floor (no early exits)."""
+    from desk.exits import lock_level
+    lk = lock_rule(_rising(), buffer=1.0)
+    assert lock_level(lk, 12.0) == 4.0 and lock_level(lk, 29.0) == 4.0
+    assert 20.0 <= lock_level(lk, 31.0) <= 21.5
+    assert 69.0 <= lock_level(lk, 100.0) <= 70.0
+    assert lock_level(lk, 500.0) > 340
+
+
+def test_faster_rise_keeps_a_larger_share():
+    from desk.exits import lock_level, rise_speed
+    lk = lock_rule(_rising(), buffer=1.0)
+    slow, half, fast = lock_level(lk, 61.0, 0.0), lock_level(lk, 61.0, 15.0), lock_level(lk, 61.0, 90.0)
+    assert slow == 42.0 and abs(half - 46.5) < 1e-9 and abs(fast - 51.0) < 1e-9   # 70% / 77.5% / 85% of 60
+    hist: list = []
+    assert rise_speed(hist, 0, 0.0) == 0.0 and rise_speed(hist, 5, 10.0) == 0.0   # one tick is not a trend
+    assert rise_speed(hist, 30, 20.0) == 40.0                                     # +20 points in 30 s
+    for sec in range(40, 200, 10):                                                # the peak stops rising
+        v = rise_speed(hist, sec, 20.0)
+    assert v == 0.0 and len(hist) < 10
+
+
+def test_risk_raises_the_stop_and_never_lowers_it():
+    r = RiskCfg(**_rising(), trail_activate_pct=1000)        # trailing out of the way: only the rising stop
+    p = pos(1.61, 1.61, age_s=600)
+    assert exit_decision(p, r, time.time(), 80_000, speed=90.0)[0] is None
+    assert abs(p.lock_level - 51.0) < 1e-6                   # fast pump: 85% of the +60% net peak
+    p.mark_value_sol = 1.55
+    assert exit_decision(p, r, time.time(), 80_000, speed=0.0)[0] is None and abs(p.lock_level - 51.0) < 1e-6
+    p.mark_value_sol = 1.519                                 # under +51% net + 1% sale costs -> sell
+    reason, detail = exit_decision(p, r, time.time(), 80_000, speed=0.0)
+    assert reason == "PROFIT_LOCK" and "+51.0% net" in detail
+
+
+def test_replay_uses_the_rising_stop():
+    lk = lock_rule(_rising(profit_lock_keep_fast_pct=0), buffer=1.0)
+    plain = lock_rule(_rising(profit_lock_keep_pct=0, profit_lock_keep_fast_pct=0), buffer=1.0)
+    path = [(0, 0.0), (60, 20.0), (120, 52.0), (180, 38.0), (240, 30.0), (300, 6.0)]
+    # +50% net peak: the rising stop sells at the first reading under 70% x 49 + 1 = +35.3%; the fixed one at +4%
+    assert simulate_exit(path, 2.0, -25, 1000, 8, 0, lk) == 28.0
+    assert simulate_exit(path, 2.0, -25, 1000, 8, 0, plain) == 4.0
+
+
+def test_risk_checks_faster_while_a_position_pumps(tmp_path):
+    """A pumping position is polled every second and quoted every ~3 s; the rising stop sells it on the dump."""
+    import asyncio
+    from desk.agents.risk import Risk
+    from tests.test_rules import make_desk, snap
+    desk = make_desk(tmp_path)
+    for k, v in _rising().items():
+        setattr(desk.cfg.risk, k, v)
+    desk.cfg.risk.trail_activate_pct = 1000
+    risk = Risk(desk)
+    t = time.time()
+    p = pos(1.0, 1.0, age_s=120)
+    p.entry_ts = t - 120
+    desk.portfolio.positions["M"] = p
+    lanes = []
+
+    class Dex:
+        px = 0.001
+
+        async def snapshots(self, mints, **kw):
+            return {"M": snap(price_native=self.px, liquidity_usd=80_000)}
+
+    class Jup:
+        async def quote(self, i, o, amount, bps, lane=""):
+            lanes.append(lane)
+            return {"outAmount": str(int(1000 * Dex.px * 0.99 * 1e9))}
+
+    desk.dex, desk.jup = Dex(), Jup()
+    assert risk.poll_seconds() == desk.cfg.risk.price_poll_seconds
+    asyncio.run(risk.mark_positions(t))                        # +0%: first sample
+    Dex.px = 0.0016                                            # +58% net of the 1% exit cost, 30 s later
+    asyncio.run(risk.mark_positions(t + 30))
+    assert risk.is_hot(p) and risk.poll_seconds() == 1.0 and p.lock_armed_on
+    assert abs(p.lock_level - 0.85 * (p.peak_pnl_pct - p.lock_buffer)) < 1e-6      # fast rise: keeps 85%
+    n = len(lanes)
+    asyncio.run(risk.mark_positions(t + 33.5))                 # hot: quoted again after ~3 s, not 6-12
+    assert len(lanes) == n + 1 and desk.exits.empty()
+    Dex.px = 0.0014                                            # dump under the stop: confirmed and sold
+    asyncio.run(risk.mark_positions(t + 34.5))
+    assert not desk.exits.empty() and lanes[-1] == "stop"

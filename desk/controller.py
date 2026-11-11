@@ -40,7 +40,7 @@ import time
 from datetime import datetime, timezone
 
 from .entry import MAX_WINDOW_MINUTES, entry_path, settings as entry_settings
-from .exits import OFF, LockRule, lock_rule, lock_step, lock_trigger
+from .exits import OFF, LockRule, lock_level, lock_rule, lock_step, rise_speed
 from .market import is_crash
 
 SITUATIONS = {
@@ -335,7 +335,7 @@ def simulate_exit(path: list[tuple[float, float]], cost: float, stop: float, tra
     """Net % of the desk exit policy on a recorded price path (raw % moves from the decision price).
     lock: the profit lock (desk/exits.py), same arming/sell levels as Risk."""
     peak, trail, last = 0.0, False, -cost
-    touch, armed = None, 0.0
+    touch, armed, level, hist = None, 0.0, 0.0, []
     for sec, raw in path:
         net = raw - cost
         last = net
@@ -349,9 +349,12 @@ def simulate_exit(path: list[tuple[float, float]], cost: float, stop: float, tra
         if trail and 1 + net / 100 <= (1 + peak / 100) * (1 - trail_dist / 100):
             return clip_ret(net)
         if lock.enabled:
+            speed = rise_speed(hist, sec, peak, lock.speed_s) if lock.speed_full > 0 else 0.0
             touch, armed = lock_step(lock, peak, sec, touch, armed, cost)
-            if armed and net <= lock_trigger(lock, peak):
-                return clip_ret(net)
+            if armed:
+                level = max(level, lock_level(lock, peak, speed))     # the stop only goes up
+                if net <= level + lock.buffer:
+                    return clip_ret(net)
     return clip_ret(last)
 
 
@@ -474,7 +477,10 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
              "profit_lock_activate_pct": float(r.profit_lock_activate_pct),
              "profit_lock_fast_activate_pct": float(r.profit_lock_fast_activate_pct),
              "profit_lock_pct": float(r.profit_lock_pct), "profit_lock_keep_pct": float(r.profit_lock_keep_pct),
-             "profit_lock_fee_multiple": float(r.profit_lock_fee_multiple)}
+             "profit_lock_fee_multiple": float(r.profit_lock_fee_multiple),
+             "profit_lock_keep_from_pct": float(r.profit_lock_keep_from_pct),
+             "profit_lock_keep_fast_pct": float(r.profit_lock_keep_fast_pct),
+             "profit_lock_speed_full": float(r.profit_lock_speed_full)}
     # Profit lock (user's rule: arm around +5/+6% net, sell around +2/+3% net): the Controller tries other
     # arming / selling levels, keeping the lock always in profit (sell >= +1.5% net, 1+ point under arming).
     lock_on = sorted({float(r.profit_lock_activate_pct), 0.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0})
@@ -484,17 +490,30 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
     lock_fee = sorted({float(r.profit_lock_fee_multiple), 0.0, 1.0, 1.5, 2.0, 3.0})
     # keep = share of the peak profit locked (0 = fixed break-even-plus-fees lock, the user's "not always" variant)
     lock_keep = sorted({float(r.profit_lock_keep_pct), 0.0, 30.0, 40.0, 50.0, 60.0, 70.0})
+    # Stop that rises with the price (user 2026-11-11: +30% -> +20%, +100% -> +70%, more on a fast rise). While
+    # it is on, the Controller tunes it around the user's figures and does not switch the share off.
+    rising = r.profit_lock_keep_from_pct > 0
+    if rising:
+        lock_keep = sorted({float(r.profit_lock_keep_pct), 60.0, 70.0, 80.0})
+    lock_from = sorted({float(r.profit_lock_keep_from_pct), 20.0, 30.0, 40.0}) if rising else [0.0]
+    lock_kfast = sorted({float(r.profit_lock_keep_fast_pct), 0.0, 80.0, 85.0, 90.0}) if rising \
+        else [float(r.profit_lock_keep_fast_pct)]
+    lock_speed = sorted({float(r.profit_lock_speed_full), 15.0, 30.0, 60.0}) if rising \
+        else [float(r.profit_lock_speed_full)]
     buffer = float(r.profit_lock_sell_buffer_pct)
 
     def lock_ok(v):
         # User 2026-11-11: never arm early (the first hours swing a lot), so the Controller keeps arming at
         # LOCK_MIN_ON or more; turning the lock off stays possible (that never closes a trade early).
         on = v["profit_lock_activate_pct"]
+        kf = v["profit_lock_keep_fast_pct"]
         return on == 0 or (on >= LOCK_MIN_ON and v["profit_lock_pct"] <= on - 1.0
-                           and v["profit_lock_fast_activate_pct"] >= on)
+                           and v["profit_lock_fast_activate_pct"] >= on
+                           and (kf == 0 or kf >= v["profit_lock_keep_pct"]))
 
     def r_lock(v):
-        return lock_rule({**v, "profit_lock_fast_minutes": r.profit_lock_fast_minutes}, buffer)
+        return lock_rule({**v, "profit_lock_fast_minutes": r.profit_lock_fast_minutes,
+                          "profit_lock_speed_seconds": r.profit_lock_speed_seconds}, buffer)
 
     def r_ret(v, rows=rows):
         # exits start where the current entry rule buys (epath); a token the rule doesn't buy counts 0
@@ -509,6 +528,9 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         + [{**cur_r, "profit_lock_pct": x} for x in lock_at] \
         + [{**cur_r, "profit_lock_keep_pct": x} for x in lock_keep] \
         + [{**cur_r, "profit_lock_fee_multiple": x} for x in lock_fee] \
+        + [{**cur_r, "profit_lock_keep_from_pct": x} for x in lock_from] \
+        + [{**cur_r, "profit_lock_keep_fast_pct": x} for x in lock_kfast] \
+        + [{**cur_r, "profit_lock_speed_full": x} for x in lock_speed] \
         + [{**cur_r, "profit_lock_activate_pct": on, "profit_lock_fast_activate_pct": fast, "profit_lock_pct": at}
            for on, fast, at in ((4.0, 5.0, 2.0), (6.0, 8.0, 3.0), (8.0, 10.0, 4.0), (10.0, 12.0, 5.0))]
     grid += [v for v in lock_grid if lock_ok(v)]
@@ -519,7 +541,10 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
                  "trail_distance_pct": rng.choice(dists), "max_hold_minutes": rng.choice(holds),
                  "profit_lock_activate_pct": rng.choice(lock_on),
                  "profit_lock_fast_activate_pct": rng.choice(lock_fast), "profit_lock_pct": rng.choice(lock_at),
-                 "profit_lock_keep_pct": rng.choice(lock_keep), "profit_lock_fee_multiple": rng.choice(lock_fee)}
+                 "profit_lock_keep_pct": rng.choice(lock_keep), "profit_lock_fee_multiple": rng.choice(lock_fee),
+                 "profit_lock_keep_from_pct": rng.choice(lock_from),
+                 "profit_lock_keep_fast_pct": rng.choice(lock_kfast),
+                 "profit_lock_speed_full": rng.choice(lock_speed)}
             if lock_ok(v):
                 return v
 
@@ -709,6 +734,9 @@ def evaluate_space(sp: Space, rng: random.Random, n_random: int, previous: list[
     if len(sp.rows) < min_rows:
         return [], 0
     variants = {_key(sp.current): sp.current}
+    # Winners saved before a setting existed (e.g. profit_lock_fee_multiple, 2026-11-11) lack its key: they take
+    # the current value for it, so the stored memory keeps competing instead of crashing the round.
+    previous = [{**sp.current, **v} if isinstance(v, dict) and isinstance(sp.current, dict) else v for v in previous]
     for v in sp.grid + [sp.sampler(rng) for _ in range(n_random)] + previous:
         variants.setdefault(_key(v), v)
     base = sp.returns(sp.current)
@@ -792,6 +820,8 @@ def run_experiments(cfg, analyst_raw: list[dict], filter_raw: list[dict], exec_r
         if sp is None:
             continue
         idx = [i for i, x in enumerate(sp.rows) if x["ts"] >= rv["since"]]
+        if isinstance(sp.current, dict) and isinstance(rv.get("after"), dict) and isinstance(rv.get("before"), dict):
+            rv = {**rv, "after": {**sp.current, **rv["after"]}, "before": {**sp.current, **rv["before"]}}
         try:
             a, b = sp.returns(rv["after"]), sp.returns(rv["before"])
         except (KeyError, TypeError):
@@ -1033,9 +1063,17 @@ def profit_lock_section(trades: list[dict], cfg) -> list[str]:
     out = ["## Stop a profitto (blocco del guadagno)",
            f"Regola attuale: dopo +{r.profit_lock_activate_pct:g}% netto (+{r.profit_lock_fast_activate_pct:g}% se "
            f"raggiunto entro {r.profit_lock_fast_minutes:g} min dall'acquisto) lo stop sale a "
-           f"+{r.profit_lock_pct:g}% netto, o il {r.profit_lock_keep_pct:g}% del picco netto se più alto (sale col "
-           f"picco; 0 = stop fisso a pareggio con commissioni); ogni livello è alzato dei costi di vendita (minimo "
-           f"{r.profit_lock_sell_buffer_pct:g}%, o lo slittamento misurato se maggiore)."
+           f"+{r.profit_lock_pct:g}% netto"
+           + (f"; da un picco di +{r.profit_lock_keep_from_pct:g}% lo stop sale col prezzo e tiene il "
+              f"{r.profit_lock_keep_pct:g}% del picco netto"
+              + (f", fino al {r.profit_lock_keep_fast_pct:g}% quando il picco sale di {r.profit_lock_speed_full:g} "
+                 f"punti al minuto o più" if r.profit_lock_keep_fast_pct > r.profit_lock_keep_pct
+                 and r.profit_lock_speed_full > 0 else "") + " (non scende mai)"
+              if r.profit_lock_keep_from_pct > 0 and r.profit_lock_keep_pct > 0 else
+              f", o il {r.profit_lock_keep_pct:g}% del picco netto se più alto (sale col picco; 0 = stop fisso a "
+              f"pareggio con commissioni)")
+           + f"; ogni livello è alzato dei costi di vendita (minimo "
+             f"{r.profit_lock_sell_buffer_pct:g}%, o lo slittamento misurato se maggiore)."
            + (f" Si arma solo quando il guadagno netto è almeno {r.profit_lock_fee_multiple:g} volte le commissioni "
               f"andata/ritorno del trade, se questo è più alto della soglia."
               if r.profit_lock_fee_multiple > 0 else "")

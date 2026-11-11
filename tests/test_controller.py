@@ -417,3 +417,17 @@ def test_paper_stop_trial_is_paper_only_and_not_moved_by_the_controller():
     bad.risk.paper_hard_stop_pct = -60.0
     enforce_hard_limits(bad)
     assert bad.risk.paper_hard_stop_pct == 0.0 and bad.risk.exit_stop_pct == bad.risk.hard_stop_pct
+
+
+def test_saved_winners_from_before_a_new_setting_still_compete():
+    """A winner stored before a setting existed (profit_lock_fee_multiple, 2026-11-11) lacks its key: it takes
+    the current value and keeps competing; the round must not crash when it wins (KeyError seen at restart)."""
+    import random as _random
+    from desk.controller import Space, evaluate_space
+    rows = [{"ts": i, "sit": ["all"]} for i in range(60)]
+    cur = {"a": 1.0, "new_key": 2.0}
+    sp = Space("Risk", rows, cur, lambda v: [v["a"] * v["new_key"]] * len(rows), [], lambda rng: cur,
+               lambda v: [f"{k} = {v[k]:g}" for k in cur if abs(v[k] - cur[k]) > 1e-9], "note")
+    res, tried = evaluate_space(sp, _random.Random(1), 0, [{"a": 5.0}], 0.3, 30)
+    best = next(r for r in res if r["situation"] == "all")
+    assert tried == 2 and best["variant"] == {"a": 5.0, "new_key": 2.0} and best["changes"] == ["a = 5"]

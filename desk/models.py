@@ -215,6 +215,8 @@ class Position:
     lock_at: float = 0.0                 # net % the lock sells at
     lock_buffer: float = 0.0             # sell buffer in use when it armed
     lock_keep: float = 0.0               # share of the net peak the lock keeps (0 = fixed at lock_at)
+    lock_level: float = 0.0              # highest net % the stop was raised to (rises with the price, never falls)
+    lock_speed: float = 0.0              # fastest rise seen while armed, % points per minute (for the records)
     trigger_pnl_pct: float | None = None # marked net % when Risk issued the exit (slippage = this - realized)
     exit_rules: dict = field(default_factory=dict)   # exit settings at entry (stop, trailing, time, lock)
 
