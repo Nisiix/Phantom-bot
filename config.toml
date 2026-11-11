@@ -69,10 +69,10 @@ rugged_name_days = 7               # relaunches of a name/symbol that rugged in 
 rugged_name_loss_pct = 60.0        # our trade losing >= this within an hour marks its name as rugged
 # Real token or copycat (2026-11-11): same name as a rugged token is NOT a kill when the identity proves a
 # different project. Points: contract address on its own website 2, DexScreener profile 1, own X account 1,
-# website links that X account 1, Telegram that exists +1 (dead Telegram link -1). Same dev wallet as the rugged token, or channels borrowed from it = blocked.
+# website links that X account 1, visible Telegram +1 (optional, never a minus). Same dev wallet as the rugged token, or channels borrowed from it = blocked.
 rugged_name_identity = true        # false = old rule (every name match killed)
 identity_min_score = 3
-identity_tg_min_members = 20       # linked Telegram group/channel that exists with >= N members: +1 (dead link: -1)
+identity_tg_min_members = 20       # linked Telegram group/channel that exists with >= N members: +1, optional extra: a hidden Telegram never counts against
 
 [analyst]
 min_score = 0.65             # user rule: under 0.6 = no trade (can only be raised). 0.65: Controller proposal 2026-11-10

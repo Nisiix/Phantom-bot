@@ -744,7 +744,12 @@ def test_identity_telegram_points(tmp_path):
     s = snap(mint="GHOSTpump", symbol="DACITY", name="AudaCity", websites=[],
              socials={"twitter": "https://x.com/someone", "telegram": "https://t.me/ghost"})
     c = next(c for c in asyncio.run(f.deep(Candidate("GHOSTpump"), s)).checks if c.name == "rugged_name")
-    assert not c.passed and "does not exist" in c.detail
+    assert not c.passed and "not visible to the bot (ignored)" in c.detail
+    # a hidden Telegram never takes points away: same token without the link scores the same
+    c2 = next(c for c in asyncio.run(f.deep(Candidate("GHOSTpump"), snap(
+        mint="GHOSTpump", symbol="DACITY", name="AudaCity", websites=[],
+        socials={"twitter": "https://x.com/someone"}))).checks if c.name == "rugged_name")
+    assert c.detail.split("(identity ")[1] == c2.detail.split("(identity ")[1]
 
 
 def test_identity_link_parsing():

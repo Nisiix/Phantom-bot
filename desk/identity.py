@@ -14,8 +14,9 @@ launch (or right after it), they rug, and the rugged-name ledger then blocked th
     but the real site shows the real CA), the site links the same X account, the team paid a DexScreener profile.
 
 Evidence points (default need 3): CA on the website +2, DexScreener profile +1, own X account +1, website
-links that X account +1, Telegram group/channel that exists with >= identity_tg_min_members +1; a Telegram link
-that leads nowhere -1 (read from the public t.me preview page, no Telegram account or API key needed). Of the 34 name-blocked pump.fun tokens with a DexScreener profile up to 2026-11-11,
+links that X account +1, and as a small optional extra a Telegram group/channel the bot can see with
+>= identity_tg_min_members +1 (public t.me preview page). A Telegram the bot can't see (anti-bot portal, closed
+group, dead link) never counts against the token. Of the 34 name-blocked pump.fun tokens with a DexScreener profile up to 2026-11-11,
 9 were alive the day after (26%); of the 3,108 without one, 7 (0.2%).
 """
 from __future__ import annotations
@@ -278,9 +279,10 @@ async def verify(store, probe: SiteProbe, mint: str, creator: str | None, hit: d
     elif ch.get("x"):
         why.append(f"X link is a {ch['x_kind']}, not an account")
     tg = await probe.telegram(ch["tg_url"]) if ch.get("tg_url") else {}
+    # Telegram is only a small optional extra (user, 2026-11-11): many groups sit behind anti-bot portals or are
+    # closed, so a Telegram we can't see never counts against the token; a reachable one adds at most 1 point.
     if tg.get("ok") and not tg.get("exists"):
-        score -= 1          # a Telegram link that leads nowhere: decoration, not a community
-        why.append(f"Telegram {ch['tg']} does not exist")
+        why.append(f"Telegram {ch['tg']} not visible to the bot (ignored)")
     elif tg.get("exists") and tg.get("kind") in ("group", "channel"):
         n = tg.get("members") or 0
         unit = "members" if tg["kind"] == "group" else "subscribers"
@@ -292,7 +294,7 @@ async def verify(store, probe: SiteProbe, mint: str, creator: str | None, hit: d
     elif tg.get("exists"):
         why.append("Telegram link is a personal account / bot, not a community")
     elif ch.get("tg"):
-        why.append(f"Telegram not checked ({tg.get('error', '?')})")
+        why.append(f"Telegram not reachable ({tg.get('error', '?')}, ignored)")
     if creator and rug_creator:
         why.append(f"other dev ({creator[:6]})")
     ok = score >= min_score

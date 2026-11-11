@@ -82,7 +82,7 @@ class FilterCfg:
     rugged_name_loss_pct: float = 60.0      # a trade losing >= this within an hour counts as a rug of its name
     rugged_name_identity: bool = True       # same name as a rugged token: let a proven different project through
     identity_min_score: float = 3.0         # points needed: CA on own site 2, DexScreener profile 1, own X 1, site links X 1
-    identity_tg_min_members: int = 20       # linked Telegram group/channel that exists with >= N members: +1 (dead link -1)
+    identity_tg_min_members: int = 20       # linked Telegram group/channel that exists with >= N members: +1; never a minus (optional extra)
 
 
 @dataclass
