@@ -223,13 +223,11 @@ def _gain_stats(p: np.ndarray, ret: np.ndarray, thr: float, z: float = 1.96) -> 
 # ── one training round (pure CPU, no I/O: runs in a worker thread) ──
 def dataset(analyst_raw: list[dict], cfg) -> dict:
     """Rows -> features, label and the return of the CURRENT exit rules (replayed when a price path exists)."""
-    from .controller import parse_rows, simulate_exit
-    r = cfg.risk
-    rows = parse_rows(analyst_raw, cfg.analyst.young_age_hours * 60)
+    from .controller import parse_rows
+    rows = parse_rows(analyst_raw, cfg.analyst.young_age_hours * 60, cfg)   # untrustworthy paths left out
     X, ret, trade, ts = [], [], [], []
     for x in rows:
-        rr = (simulate_exit(x["path"], x["cost"], r.hard_stop_pct, r.trail_activate_pct, r.trail_distance_pct,
-                            r.max_hold_minutes) if x["path"] else x["ret"])
+        rr = x["ret"]          # current exit rules replayed on the path (parse_rows), else the live simulation
         X.append(vector(x["f"]))
         ret.append(rr)
         s = x["f"].get("score")

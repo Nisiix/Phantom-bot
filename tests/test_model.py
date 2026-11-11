@@ -34,7 +34,7 @@ def _rows(n: int, signal: bool, seed: int = 1) -> list[dict]:
         else:
             win = rng.random() < 0.4
         ret = rng.uniform(5, 30) if win else rng.uniform(-12, -4)
-        out.append({"start_ts": t0 + i * 60, "mint": f"m{i}", "score": f["score"], "decision": "approve",
+        out.append({"start_ts": t0 + i * 60, "mint": f"m{i}pump", "score": f["score"], "decision": "approve",
                     "sim_net_pct": ret, "cost_pct": 2.0, "features": json.dumps(f), "path": None})
     return out
 

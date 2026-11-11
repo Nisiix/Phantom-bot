@@ -59,6 +59,11 @@ AGENT_NAMES = {"Scout": "Scout", "Filter": "Filter", "Analyst": "Analyst", "Risk
 RET_MIN, RET_MAX = -100.0, 300.0
 
 
+SKIP_TEXT = {"copycat": "copycat (mint non creato da pump.fun, ora bloccati dal Filter)",
+             "frozen": "con prezzo congelato (pool svuotata: DexScreener smette di aggiornarla)",
+             "glitch": "con una lettura di prezzo assurda"}
+
+
 def clip_ret(x: float) -> float:
     return max(RET_MIN, min(RET_MAX, x))
 
@@ -245,8 +250,36 @@ def row_situations(f: dict, young_minutes: float) -> list[str]:
     return out
 
 
-def parse_rows(raw: list[dict], young_minutes: float) -> list[dict]:
+def path_problem(path: list[tuple[float, float]] | None) -> str:
+    """Why a recorded price path can't be trusted ("" = fine).
+
+    frozen: DexScreener stops updating a pool once its liquidity is pulled, so the follow-up reads one flat price
+      for the whole hour. Measured 2026-11-11: 24 of the 27 'pumpswap:pool' follow-ups were flat, 22 of those 24
+      pools had $0 liquidity the next day (rugs recorded as +2%, +475%...). Pump.fun migrations: 0 flat of 81.
+    glitch: one absurd reading (e.g. +1,376,622% for a token that ended the hour at +23%)."""
+    if not path:
+        return ""
+    if len(path) >= 15 and len({v for _, v in path}) <= 2:
+        return "frozen"
+    if max(v for _, v in path) > 5000:
+        return "glitch"
+    return ""
+
+
+def parse_rows(raw: list[dict], young_minutes: float, cfg=None, skipped: dict | None = None) -> list[dict]:
+    """Shadow rows -> test rows.
+
+    With cfg, each row's result ("ret") is the CURRENT exit rules of Risk (stop, trailing AND the time exit)
+    replayed on its price path; the live shadow simulation (sim_net_pct) is kept only for rows without a path.
+    With cfg, rows the current rules can't use are left out (counted in `skipped`): price paths that can't be
+    trusted (path_problem) and, with [scout] venues = "pumpfun", copycat mints the Filter now blocks for good."""
     rows = []
+    r_ = cfg.risk if cfg is not None else None
+    pump_only = cfg is not None and getattr(cfg.scout, "venues", "") == "pumpfun"
+
+    def skip(why: str) -> None:
+        if skipped is not None:
+            skipped[why] = skipped.get(why, 0) + 1
     for r in raw:
         try:
             f = json.loads(r.get("features") or "{}")
@@ -254,16 +287,29 @@ def parse_rows(raw: list[dict], young_minutes: float) -> list[dict]:
             continue
         if not isinstance(f, dict) or r.get("sim_net_pct") is None:
             continue
+        mint = r.get("mint", "") or ""
+        if pump_only and mint and not mint.endswith("pump"):
+            skip("copycat")
+            continue
         path = None
         if r.get("path"):
             try:
                 path = [(float(a), float(b)) for a, b in json.loads(r["path"])]
             except (TypeError, ValueError):
                 path = None
+        cost = float(r.get("cost_pct") or 2.5)
+        ret = clip_ret(float(r["sim_net_pct"]))
+        if cfg is not None and path:
+            why = path_problem(path)
+            if why:
+                skip(why)
+                continue
+            ret = simulate_exit(path, cost, r_.hard_stop_pct, r_.trail_activate_pct, r_.trail_distance_pct,
+                                float(r_.max_hold_minutes))
         if r.get("score") is not None:
             f.setdefault("score", r["score"])
-        rows.append({"ts": r["start_ts"], "mint": r.get("mint", ""), "ret": clip_ret(float(r["sim_net_pct"])),
-                     "cost": float(r.get("cost_pct") or 2.5), "decision": r.get("decision", ""), "f": f,
+        rows.append({"ts": r["start_ts"], "mint": mint, "ret": ret,
+                     "cost": cost, "decision": r.get("decision", ""), "f": f,
                      "path": path, "sit": row_situations(f, young_minutes)})
     rows.sort(key=lambda x: x["ts"])
     return rows
@@ -594,12 +640,13 @@ def run_experiments(cfg, analyst_raw: list[dict], filter_raw: list[dict], exec_r
     re-checked on the tokens that arrived after it, new setting vs old one on the same tokens."""
     c = cfg.controller
     young = cfg.analyst.young_age_hours * 60
-    ar = parse_rows(analyst_raw, young)
-    fr = parse_rows(filter_raw, young)
+    skipped: dict = {}
+    ar = parse_rows(analyst_raw, young, cfg, skipped)
+    fr = parse_rows(filter_raw, young, cfg, skipped)
     rng = random.Random(seed if seed is not None else time.time_ns())
     out = {"t": time.time(), "analyst_rows": len(ar), "with_path": sum(1 for x in ar if x["path"]),
            "filter_rows": len(fr), "since": min([x["ts"] for x in ar + fr], default=None),
-           "results": [], "tried": 0, "best": {}, "reviews": []}
+           "results": [], "tried": 0, "best": {}, "reviews": [], "skipped": skipped}
     spaces = build_spaces(cfg, ar, fr, exec_rejects, c.min_rows)
     by_agent = {sp.agent: sp for sp in spaces}
     for rv in reviews or []:
@@ -724,6 +771,10 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
               f"- {exp['analyst_rows']} token valutati dall'Analyst ({exp['with_path']} con percorso di prezzo), "
               f"{exp['filter_rows']} token valutati dal Filter, ciascuno seguito per 60 minuti"
               + (f", dal {datetime.fromtimestamp(since, timezone.utc):%Y-%m-%d %H:%M} UTC" if since else ""),
+              *([f"- esclusi dai test: " + ", ".join(f"{n} {SKIP_TEXT.get(k, k)}" for k, n in sorted(
+                  exp["skipped"].items()))] if exp.get("skipped") else []),
+              f"- ogni token è misurato con le regole di uscita attuali di Risk (stop, trailing e uscita a tempo) "
+              f"rigiocate sul suo percorso di prezzo",
               f"- {exp['tried']} configurazioni provate in questo ciclo, {trials_total} in totale in {rounds} cicli",
               f"- scelta sul {100 - cfg.controller.holdout_pct:.0f}% più vecchio dei dati, verifica sul "
               f"{cfg.controller.holdout_pct:.0f}% più recente", ""]

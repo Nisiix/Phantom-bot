@@ -82,6 +82,10 @@ The Controller (Controllore) runs inside the desk with two read-only jobs:
   95% interval; 99% for single situations). Proposals never cross the hard limits. Stops wider than -6%
   (down to -30%, with wider trailing and time exits) are also replayed, as a measure only: they get their own
   report section ("Stop più larghi del -6%") and are never proposed, so changing the rule stays your call.
+  Every token is measured with Risk's current exit rules (stop, trailing and the time exit) replayed on its
+  price path. Paths that can't be trusted are left out: a flat price for the whole hour (DexScreener stops
+  updating a pool once its liquidity is pulled, so a rug reads as +2% or +475%) and absurd readings. With
+  `venues = "pumpfun"`, copycat mints the Filter now blocks for good are left out too.
 
 The report is in `data/reports/controller_<mode>_latest.md`, in the dashboard (section Controllore, also
 shown in the 3D view) and on demand with `python run.py controller`. All of it uses local data only, so it

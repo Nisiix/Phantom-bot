@@ -9,7 +9,8 @@ import time
 from desk.agents.analyst import score_token
 from desk.agents.controller import Controller
 from desk.config import Config
-from desk.controller import (analyst_score, build_report, health_checks, proposals, run_experiments,
+from desk.controller import (analyst_score, build_report, health_checks, parse_rows, path_problem, proposals,
+                             run_experiments,
                              simulate_exit, within_hard_limits)
 from desk.shadow import Shadow, ShadowTracker
 from tests.test_rules import make_desk, position, snap
@@ -96,7 +97,7 @@ def _rows(n, seed=1):
              "top10_pct": 15.0, "vol_h1": 80_000, "mkt_meme_h1": rng.choice((-3.0, 0.0, 3.0))}
         f["score"] = analyst_score(f, __import__("desk.controller", fromlist=["BASE_WEIGHTS"]).BASE_WEIGHTS)
         ret = 20.0 if win else -8.0
-        an.append({"start_ts": t0 + i * 60, "mint": f"M{i}", "score": f["score"], "decision": "approve",
+        an.append({"start_ts": t0 + i * 60, "mint": f"M{i}pump", "score": f["score"], "decision": "approve",
                    "sim_net_pct": ret, "cost_pct": 2.0, "features": json.dumps(f), "path": json.dumps(path)})
         fi.append({**an[-1], "decision": "approve"})
     return an, fi
@@ -361,3 +362,36 @@ def test_shadow_followups_survive_restart(tmp_path):
     assert "A:analyst" in st2.active and st2.active["A:analyst"].path == [(20, 1.0)]
     assert "B:analyst" not in st2.active                    # its 60 minutes ran out: stored, not lost
     assert desk.store.q("SELECT mint FROM shadow")[0]["mint"] == "B"
+
+
+def test_untrustworthy_paths_and_copycats_are_left_out_and_exits_are_replayed():
+    cfg = Config()
+    cfg.scout.venues = "pumpfun"
+    cfg.risk.hard_stop_pct, cfg.risk.trail_activate_pct, cfg.risk.trail_distance_pct = -4.0, 25.0, 8.0
+    cfg.risk.max_hold_minutes = 45
+    flat = [(20 * k, 2.65) for k in range(1, 60)]                      # pool emptied: DexScreener price frozen
+    assert path_problem(flat) == "frozen"
+    assert path_problem([(7, 3.2), (28, 1376622.0), (60, 22.9)]) == "glitch"
+    assert path_problem([(20, 1.0), (40, 2.0), (60, 1.5)]) == ""
+    # +155% at minute 44, then a rug to -99% at minute 50: the 45-min time exit takes the +155%
+    runner = [(60 * m, 3.5 * m) for m in range(1, 45)] + [(2700, 155.0), (3000, -99.0), (3600, -99.0)]
+
+    def row(mint, path, sim):
+        return {"start_ts": 1.0, "mint": mint, "score": 0.7, "decision": "approve", "sim_net_pct": sim,
+                "cost_pct": 2.0, "features": json.dumps({"score": 0.7}), "path": json.dumps(path)}
+    skipped: dict = {}
+    rows = parse_rows([row("AAApump", runner, -101.0), row("BBB", runner, 50.0), row("CCCpump", flat, 0.6)],
+                      60, cfg, skipped)
+    assert [x["mint"] for x in rows] == ["AAApump"]
+    assert abs(rows[0]["ret"] - 153.0) < 1e-9                          # replayed, not the live -101
+    assert skipped == {"copycat": 1, "frozen": 1}
+    assert parse_rows([row("BBB", runner, 50.0)], 60)[0]["ret"] == 50.0  # without cfg: old behaviour
+
+
+def test_shadow_simulation_takes_the_time_exit():
+    from desk.shadow import update_shadow
+    s = Shadow(key="M", mint="M", symbol="T", stage="analyst", decision="approve", reason="", score=0.7,
+               ref_price=1.0, ref_liq=1.0, cost_pct=2.0, start=0.0)
+    update_shadow(s, 2.5, 2700, -4, 25, 8, 45)       # +148% net at the 45-min mark: sold there
+    update_shadow(s, 0.01, 3000, -4, 25, 8, 45)
+    assert not s.sim_open and abs(s.sim_ret - 148.0) < 1e-9
