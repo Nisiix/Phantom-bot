@@ -27,7 +27,17 @@ class FakeRPC:
     async def mint_info(self, mint):
         return {"program": T22}
 
+    first = 0.0          # the creator's holding after its first transaction (chain history)
+
     async def call(self, method, params):
+        if method == "getSignaturesForAddress":
+            return [{"signature": "late", "err": None}, {"signature": "first", "err": None},
+                    {"signature": "failed", "err": {"x": 1}}] if self.first else []
+        if method == "getTransaction":
+            assert params[1]["maxSupportedTransactionVersion"] == 1
+            amt = self.first if params[0] == "first" else 1.0
+            return {"meta": {"postTokenBalances": [{"owner": DEV, "mint": MINT,
+                                                    "uiTokenAmount": {"uiAmountString": str(amt)}}]}}
         assert method == "getMultipleAccounts"
         self.calls += 1
         by_ata = {ata(w, MINT, T22): b for w, b in self.balances.items()}
@@ -134,3 +144,17 @@ def test_risk_sells_position_when_creator_sold(tmp_path):
         return order
     order = run(go())
     assert order.reason == "DEV_SOLD" and order.mint == MINT and "sold 20.0%" in order.detail
+
+
+def test_creator_first_buy_read_from_chain_when_launch_not_seen(tmp_path):
+    desk = make_desk(tmp_path)
+    rpc = FakeRPC({DEV: 5.0})
+    rpc.first = 100.0                                      # bought 100 at launch, holds 5 now
+    dw = DevWatch(desk.store, rpc, desk.cfg.devwatch)      # the Scout never saw the launch
+    g = dw.group(MINT, DEV, 1000.0, T22)
+    assert run(dw.refresh(g)) == 95.0 and g.initial_src == "chain" and dw.breached(g)
+    assert DevWatch(desk.store, rpc, desk.cfg.devwatch).group(MINT).initial_src == "chain"   # saved
+    rpc2 = FakeRPC({DEV: 0.0})                             # no history: never held, nothing to judge
+    g2 = DevWatch(None, rpc2, desk.cfg.devwatch).group(MINT, DEV, 1000.0, T22)
+    run(DevWatch(None, rpc2, desk.cfg.devwatch).refresh(g2))
+    assert g2.initial_src == "none" and g2.initial == 0.0

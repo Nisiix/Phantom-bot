@@ -10,7 +10,9 @@ Who is watched (the "group"):
   * the creator's SOL funder when GMGN knows it
 
 What "from the start" means: the reference is the larger of
-  * the creator's own buy in the create transaction (pump.fun `initialBuy`, seen live by the Scout), and
+  * the creator's own buy in the create transaction (pump.fun `initialBuy`, seen live by the Scout; when the Scout
+    didn't see the launch, read from the chain: the first successful transaction of the creator's token account,
+    i.e. what the creator held right after it - user's request 2026-11-11), and
   * the largest total the group was ever seen holding.
 Tokens moved between wallets of the group don't count as a sale (the total stays the same); tokens sent to a
 wallet outside the group do (they left the group: in practice a sale through a fresh wallet).
@@ -62,6 +64,7 @@ class Group:
     creator: str = ""
     wallets: dict = field(default_factory=dict)     # wallet -> role ("creator", "linked (transfer)", "dev funder")
     initial: float = 0.0                            # creator's own buy at creation (UI tokens), 0 = unknown
+    initial_src: str = ""                           # "launch" (Scout) | "chain" (first tx) | "none" (never held)
     peak_total: float = 0.0                         # largest group total ever seen (UI tokens)
     cur: dict = field(default_factory=dict)         # wallet -> last balance seen (UI tokens)
     supply: float = 0.0                             # UI tokens
@@ -109,7 +112,7 @@ class Group:
                 f"sold {self.sold_pct:.1f}%")
 
     def to_dict(self) -> dict:
-        return {"mint": self.mint, "creator": self.creator, "wallets": self.wallets, "initial": self.initial,
+        return {"mint": self.mint, "creator": self.creator, "wallets": self.wallets, "initial": self.initial, "initial_src": self.initial_src,
                 "peak_total": self.peak_total, "cur": self.cur, "supply": self.supply, "token_program": self.token_program, "updated": self.updated,
                 "sold_pct": self.sold_pct}
 
@@ -148,7 +151,7 @@ class DevWatch:
                 return None
             g = Group(mint, creator=creator)
             if init and init[0] == creator:
-                g.initial = init[1]
+                g.initial, g.initial_src = init[1], "launch"
         if creator and not g.creator:
             g.creator = creator
         if g.creator:
@@ -165,6 +168,13 @@ class DevWatch:
         if not g.token_program:
             info = await self.rpc.mint_info(g.mint)
             g.token_program = (info or {}).get("program") or SPL_TOKEN
+        if not g.initial_src and g.creator:
+            try:
+                first = await self.first_holding(g.creator, g.mint, g.token_program)
+            except Exception:  # noqa: BLE001 - history unreadable now: retried at the next check
+                first = None
+            if first is not None:
+                g.initial, g.initial_src = max(g.initial, first), "chain" if first > 0 else "none"
         wallets = list(g.wallets)
         accounts = [ata(w, g.mint, g.token_program) for w in wallets]
         pairs = [(w, a) for w, a in zip(wallets, accounts) if a]
@@ -183,6 +193,46 @@ class DevWatch:
         sold = g.update(balances)
         self.save(g)
         return sold
+
+    async def first_holding(self, owner: str, mint: str, token_program: str, max_pages: int = 5) -> float | None:
+        """What owner held of mint right after the first successful transaction of its token account (for the
+        creator: the create transaction with its own buy). 0.0 = the account has no history (never held);
+        None = history too long to reach the start (more than max_pages x 1000 transactions)."""
+        acc = ata(owner, mint, token_program)
+        if not acc:
+            return None
+        before, page = None, []
+        for _ in range(max_pages):
+            opts = {"limit": 1000, "commitment": "confirmed"}
+            if before:
+                opts["before"] = before
+            page = await self.rpc.call("getSignaturesForAddress", [acc, opts]) or []
+            if len(page) < 1000:
+                break
+            before = page[-1]["signature"]
+        else:
+            return None
+        oks = [s["signature"] for s in reversed(page) if not s.get("err")]     # oldest first
+        if not oks:
+            return 0.0
+        for sig in oks[:3]:
+            tx = None
+            for ver in (1, 0):        # v1 transactions exist since 2026; an older RPC only knows version 0
+                try:
+                    tx = await self.rpc.call("getTransaction", [sig, {"encoding": "jsonParsed",
+                                                                      "commitment": "confirmed",
+                                                                      "maxSupportedTransactionVersion": ver}])
+                    break
+                except RuntimeError as e:
+                    if ver == 0 or "version" not in str(e).lower():
+                        raise
+            for b in ((tx or {}).get("meta") or {}).get("postTokenBalances") or []:
+                if b.get("owner") == owner and b.get("mint") == mint:
+                    ta = b.get("uiTokenAmount") or {}
+                    amt = float(ta.get("uiAmountString") or ta.get("uiAmount") or 0)
+                    if amt > 0:
+                        return amt
+        return 0.0
 
     def save(self, g: Group) -> None:
         if self.store is not None:
