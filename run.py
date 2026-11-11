@@ -8,6 +8,9 @@
   python run.py wallet          check the wallet key in .env (shows address + balance, never the key)
   python run.py research        which signals separated winners from losers (from the 60-min shadow data)
   python run.py controller      Controller report now: tests other settings on the logged data (proposals only)
+  python run.py restart         ask the running desk to restart by itself (new code after a git pull): it stops
+                                buying, waits until no position is open (--wait N minutes, default 20; --now =
+                                at once) and comes back in a few seconds, no window to close
   python run.py exit-study      where the profit lock should arm and sell, measured on the logged price paths
   python run.py reset-paper     paper account back to the starting balance, profit stats zeroed (backup kept;
                                 the 60-min follow-up data the Controller and QUANT learn from is kept)
@@ -131,13 +134,15 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(description="Phantom Desk")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper", "pages", "model", "exit-study"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "recap", "gate", "wallet", "research", "controller", "reset-paper", "pages", "model", "exit-study", "restart"])
     ap.add_argument("--mode", choices=["paper", "live"], help="override mode from config.toml")
     ap.add_argument("--headless", action="store_true", help="plain log output instead of the live terminal")
     ap.add_argument("--config", help="path to config.toml")
     ap.add_argument("--stage", choices=["analyst", "filter"], default="analyst",
                     help="research: tokens scored by the Analyst (default) or everything the Filter saw")
     ap.add_argument("--days", type=float, default=0, help="research: only the last N days (0 = all)")
+    ap.add_argument("--now", action="store_true", help="restart: don't wait for open positions to close")
+    ap.add_argument("--wait", type=float, default=20.0, help="restart: minutes to wait for open positions (default 20)")
     args = ap.parse_args()
     cfg = load_config(args.config, args.mode)
     for w in cfg.warnings:
@@ -179,6 +184,18 @@ def main() -> int:
         print(controller_report(cfg))
         return 0
 
+    if args.command == "restart":
+        from desk.app import request_restart
+        store = Store(cfg.data_dir / f"{cfg.mode}.db")
+        n = store.q("SELECT COUNT(*) AS n FROM positions")[0]["n"]
+        flag = request_restart(cfg, now=args.now, max_wait_min=args.wait)
+        print(f"Restart requested ({flag}). Open positions now: {n}. The running desk stops buying"
+              + (" and restarts at once." if args.now or not n else
+                 f", waits until they close (at most {args.wait:g} min) and then restarts.")
+              + " It comes back by itself in the same window (start.bat / start.sh); nothing happens if no desk "
+                "is running. Delete the file to withdraw the request.")
+        return 0
+
     if args.command == "exit-study":
         from desk.exit_study import run_study
         text = run_study(cfg, Store(cfg.data_dir / f"{cfg.mode}.db"))
@@ -202,7 +219,10 @@ def main() -> int:
         return 0
 
     try:
-        asyncio.run(run_desk(cfg, use_tui=not args.headless))
+        if asyncio.run(run_desk(cfg, use_tui=not args.headless)):
+            from desk.app import RESTART_CODE
+            print("Desk restarting...", file=sys.stderr)
+            return RESTART_CODE
     except LiveRefused as e:
         print(f"\n{e}\n", file=sys.stderr)
         return 2

@@ -24,7 +24,7 @@ import time
 from datetime import datetime, timezone
 
 from ..clients.jupiter import SOL_MINT
-from ..exits import LockRule, lock_level, lock_rule, lock_step, position_lock_level, rise_speed
+from ..exits import LockRule, keep_share, lock_level, lock_rule, lock_step, position_lock_level, rise_speed
 from ..models import ExitOrder, Position
 from .base import Agent
 
@@ -144,6 +144,8 @@ class Risk(Agent):
         """own_order=True: the Executor re-checking its own in-flight buy right before the swap."""
         t = time.time()
         pf = self.desk.portfolio
+        if getattr(self.desk, "restart_pending", False):
+            return False, "restart pending: no new buys until the desk is back"
         if mint in pf.positions:
             return False, "no averaging down: position already open"
         if mint in self.desk.in_flight and not own_order:
@@ -347,9 +349,10 @@ class Risk(Agent):
                 self.lock_announced.add(mint)
                 self.emit("risk", f"profit lock ARMED at {pos.peak_pnl_pct:+.1f}% (target +{pos.lock_armed_on:g}% net"
                                   f"{', fast move' if pos.lock_armed_on > self.r.profit_lock_activate_pct else ''}): "
-                                  f"stop moved to +{position_lock_level(pos):.1f}% net, rising with the peak "
-                                  f"({pos.lock_keep * 100:.0f}% of it, min +{pos.lock_at:g}%; "
-                                  f"{pos.lock_buffer:.1f}% for sale costs)", mint, pos.symbol)
+                                  f"stop now at +{position_lock_level(pos):.1f}% net (min +{pos.lock_at:g}%"
+                                  + (f"; from a +{lock.keep_from:g}% peak it rises with the price, "
+                                     f"{keep_share(lock, speed) * 100:.0f}% of the peak" if lock.keep > 0 else "")
+                                  + f"; {pos.lock_buffer:.1f}% for sale costs)", mint, pos.symbol)
             if reason:
                 pos.trigger_pnl_pct = pos.pnl_pct
             pf.persist(pos)

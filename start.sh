@@ -15,4 +15,13 @@ if ! cmp -s requirements.txt .venv/installed-requirements.txt; then
   cp requirements.txt .venv/installed-requirements.txt
 fi
 [ -f .env ] || cp .env.example .env
-exec .venv/bin/python run.py "$@"
+# Exit code 75 = the desk asked to restart itself (python run.py restart, after a git pull): start it again at once.
+while true; do
+  .venv/bin/python run.py "$@" && exit 0
+  rc=$?
+  [ "$rc" -eq 75 ] || exit "$rc"
+  if ! cmp -s requirements.txt .venv/installed-requirements.txt; then
+    .venv/bin/python -m pip install --disable-pip-version-check -q -r requirements.txt
+    cp requirements.txt .venv/installed-requirements.txt
+  fi
+done

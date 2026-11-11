@@ -41,6 +41,9 @@ copy /y requirements.txt .venv\installed-requirements.txt >nul
 if not exist ".env" copy ".env.example" ".env" >nul
 
 "%VPY%" run.py %*
+rem  Codice 75 = il desk ha chiesto di riavviarsi da solo (python run.py restart, dopo un git pull):
+rem  riparte subito in questa finestra, ricontrollando anche le dipendenze.
+if %errorlevel%==75 goto venvok
 if errorlevel 1 pause
 exit /b 0
 

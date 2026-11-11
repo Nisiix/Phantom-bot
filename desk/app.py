@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import signal
 import sys
+import time
+from pathlib import Path
 
 from .agents.analyst import Analyst
 from .agents.controller import Controller
@@ -122,7 +125,70 @@ def _loop_exception_handler(desk: Desk):
     return handler
 
 
-async def run_desk(cfg: Config, use_tui: bool = True) -> None:
+# ── restart without closing the window ──
+# 2026-11-11: an update needed the user to close the window and start.bat again; the desk was off for 76 seconds
+# with a position open at +20%, the price fell under its stops meanwhile and it was sold at -2.4% at the next
+# start. `python run.py restart` now leaves a request file; the running desk stops buying, waits until it holds no
+# position (at most max_wait_min, then it goes anyway), and exits with RESTART_CODE: start.bat / start.sh start it
+# again at once with the new code, a gap of a few seconds instead of minutes.
+RESTART_CODE = 75
+RESTART_MAX_WAIT_MIN = 20.0
+
+
+def restart_flag(cfg: Config) -> Path:
+    return Path(cfg.data_dir) / "restart.flag"
+
+
+def request_restart(cfg: Config, now: bool = False, max_wait_min: float = RESTART_MAX_WAIT_MIN) -> Path:
+    flag = restart_flag(cfg)
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text(json.dumps({"ts": time.time(), "now": bool(now), "max_wait_min": float(max_wait_min)}),
+                    encoding="utf-8")
+    return flag
+
+
+async def restart_watch(desk: Desk, flag: Path, poll: float = 2.0) -> None:
+    from .models import Event
+
+    def say(kind: str, text: str) -> None:
+        desk.hub.emit(Event("Desk", kind, text))
+    try:
+        flag.unlink()                      # a request left from before this start is stale
+    except OSError:
+        pass
+    seen = 0.0
+    while not desk.stop.is_set():
+        await asyncio.sleep(poll)
+        if not flag.exists():
+            if seen:                       # request withdrawn (file deleted): back to normal
+                seen, desk.restart_pending = 0.0, False
+                say("info", "restart request withdrawn: buying again")
+            continue
+        try:
+            req = json.loads(flag.read_text(encoding="utf-8") or "{}")
+        except (OSError, ValueError):
+            req = {}
+        t = time.time()
+        max_wait = float(req.get("max_wait_min") or RESTART_MAX_WAIT_MIN) * 60
+        busy = len(desk.portfolio.positions) + len(desk.in_flight)
+        if not seen:
+            seen, desk.restart_pending = t, True
+            say("info", "restart requested: no new buys" + ("" if req.get("now") or not busy else
+                f"; waiting until the {busy} open position(s) close (at most {max_wait / 60:.0f} min)"))
+        if req.get("now") or not busy or t - seen >= max_wait:
+            try:
+                flag.unlink()
+            except OSError:
+                pass
+            say("info", f"restarting now ({busy} open position(s): they are saved and watched again in a few "
+                        f"seconds)" if busy else "restarting now (no open positions)")
+            desk.restart = True
+            desk.stop.set()
+            return
+
+
+async def run_desk(cfg: Config, use_tui: bool = True) -> bool:
+    """Runs the desk until stopped. Returns True when it stopped to be restarted at once (restart_watch)."""
     desk, broker = await build(cfg)
     risk = Risk(desk)
     logger = Logger(desk)
@@ -148,6 +214,7 @@ async def run_desk(cfg: Config, use_tui: bool = True) -> None:
             tasks.append(asyncio.create_task(PagesPublisher(desk, dash).run(), name="pages"))
     ui = Terminal(desk, risk, logger)
     tasks.append(asyncio.create_task(ui.run() if use_tui and sys.stdout.isatty() else headless(desk), name="ui"))
+    tasks.append(asyncio.create_task(restart_watch(desk, restart_flag(cfg)), name="restart-watch"))
     await desk.stop.wait()
     # Graceful shutdown: give the Logger a moment to flush, then cancel.
     await asyncio.sleep(1.5)
@@ -163,3 +230,4 @@ async def run_desk(cfg: Config, use_tui: bool = True) -> None:
     pf = desk.portfolio
     print(f"Desk stopped. Equity {pf.equity_sol:.4f} SOL, open positions {len(pf.positions)} "
           f"(positions are persisted and resume on restart).")
+    return desk.restart
