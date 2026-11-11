@@ -94,6 +94,8 @@ def load_overrides(cfg) -> dict:
     applied = {}
     for name, v in (data or {}).items():
         sec, _, key = name.partition(".")
+        if sec == "entry" and getattr(cfg.entry, "trial_since", ""):
+            continue                      # the user's entry-timing trial wins over the Controller's choice
         obj = getattr(cfg, sec, None)
         if obj is None or not hasattr(obj, key):
             continue

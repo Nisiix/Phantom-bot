@@ -131,6 +131,10 @@ class EntryCfg:
     fallback: str = "skip"
     max_liq_drop_pct: float = 20.0
     poll_seconds: float = 6.0
+    # User's trial (UTC ISO time, "" = none): the rule above was chosen by the user. While set, the Controller
+    # does not change [entry] (its own overrides for it are ignored) and measures the rule against "buy at once"
+    # on the tokens approved since then; when the newer data disproves it, it flags it as "da rimuovere".
+    trial_since: str = ""
 
 
 @dataclass

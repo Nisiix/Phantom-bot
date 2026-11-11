@@ -241,6 +241,23 @@ class Controller(Agent):
             self.emit("risk", f"APPLIED: {why}")
         return len(picked)
 
+    def flag_entry_trial(self, t: dict | None) -> None:
+        """The user's entry-timing trial: announce when its status changes; 'da rimuovere' is a warning."""
+        if not t:
+            return
+        prev = self.desk.store.kv_get("entry_trial_status", "")
+        if t["status"] == prev:
+            return
+        self.desk.store.kv_set("entry_trial_status", t["status"])
+        if t["status"] == "in prova":
+            return
+        msg = (f"entry timing trial ({t['rule']['mode']}): {t['status'].upper()} — {t['mean']:+.2f} pts/token vs "
+               f"buying at once on {t['n']} tokens [{t['lo']:+.2f}, {t['hi']:+.2f}]")
+        if t["status"].startswith("da rimuovere"):
+            self.emit("risk", msg + ". Set [entry] mode = \"now\" in config.toml to remove it")
+        else:
+            self.emit("info", msg)
+
     async def experiment_loop(self) -> None:
         while not self.desk.stop.is_set():
             wait = self.next_round - time.time()
@@ -268,6 +285,7 @@ class Controller(Agent):
             self.review(exp)
             props = proposals(exp, self.cfg)
             applied = self.auto_apply(exp, props)
+            self.flag_entry_trial(exp.get("entry_trial"))
             self.state.counters["applied"] = self.state.counters.get("applied", 0) + applied
             self._save_state()
             self.write_report()

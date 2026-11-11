@@ -185,3 +185,28 @@ def test_executor_armed_plan_waits_for_fresh_verdict(tmp_path):
 
 def test_plan_now_buys_immediately():
     assert EntryPlan("now", 600).update(0, 0) == "buy"
+
+
+def test_user_trial_is_measured_and_flagged_not_changed(tmp_path):
+    from desk.controller import entry_trial, entry_trial_section
+    from desk.controller_memory import load_overrides
+    cfg = Config()
+    cfg.quant.learn_since = ""
+    cfg.entry.mode, cfg.entry.dip_pct, cfg.entry.window_minutes = "dip", 3.0, 5.0
+    cfg.entry.trial_since = "2030-01-01T00:00:00Z"
+    # every token dips 4% then dies: the dip rule buys and loses, buying at once loses less
+    path = [(20 * k, v) for k, v in enumerate([5, -4, -20, -40, -60], start=1)]
+    raw = [_row(i, path) for i in range(40)]
+    rows = parse_rows(raw, 240, cfg)
+    sp = {s.agent: s for s in build_spaces(cfg, rows, [], {}, 30)}["Timing"]
+    assert entry_trial(cfg, sp)["status"] == "in prova"              # no token after the trial start yet
+    cfg.entry.trial_since = "2020-01-01T00:00:00Z"
+    t = entry_trial(cfg, sp)
+    assert t["n"] == 40 and t["status"].startswith("da rimuovere")
+    assert any("DA RIMUOVERE" in line for line in entry_trial_section(t))
+    assert not within_hard_limits(cfg, ['[entry] mode = "now"'])     # the Controller never changes the trial
+    cfg.data_dir = tmp_path
+    (tmp_path / "controller_overrides_paper.json").write_text('{"entry.mode": "bounce"}')
+    cfg.controller.auto_apply = "always"
+    load_overrides(cfg)
+    assert cfg.entry.mode == "dip"

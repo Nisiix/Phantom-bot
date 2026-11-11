@@ -770,6 +770,7 @@ def run_experiments(cfg, analyst_raw: list[dict], filter_raw: list[dict], exec_r
         out["reviews"].append({"id": rv["id"], **paired([a[i] - b[i] for i in idx])})
         # what was learned keeps competing: the old and new settings stay among the candidates
         previous = {**previous, sp.agent: list(previous.get(sp.agent, [])) + [rv["before"], rv["after"]]}
+    out["entry_trial"] = entry_trial(cfg, by_agent.get("Timing"))
     for sp in spaces:
         res, tried = evaluate_space(sp, rng, c.random_variants, previous.get(sp.agent, []), c.holdout_pct / 100,
                                     c.min_rows)
@@ -780,6 +781,64 @@ def run_experiments(cfg, analyst_raw: list[dict], filter_raw: list[dict], exec_r
             out["results"].append({"agent": sp.agent, "situation": "all", "n": len(sp.rows), "note": sp.note,
                                    "verdict": f"dati insufficienti ({len(sp.rows)} token, ne servono {c.min_rows})"})
     return out
+
+
+def entry_trial(cfg, sp: "Space | None") -> dict | None:
+    """The user's entry-timing trial ([entry] trial_since): the rule vs buying at once, on the tokens approved since
+    the trial started (paired, same tokens). status: in prova (too few tokens yet) | confermata (better, 95% interval
+    above 0) | incerta | da rimuovere (worse on average after enough tokens; "smentita" when the interval is all
+    below 0)."""
+    from .quant import parse_since
+    since_s = getattr(cfg.entry, "trial_since", "")
+    if not since_s or sp is None:
+        return None
+    since = parse_since(since_s)
+    idx = [i for i, x in enumerate(sp.rows) if x["ts"] >= since]
+    rule, now_ = sp.returns(sp.current), sp.returns({**sp.current, "mode": "now"})
+    st = paired([rule[i] - now_[i] for i in idx])
+    need = cfg.controller.review_min_rows
+    if st["n"] < need:
+        status = "in prova"
+    elif st["hi"] < 0:
+        status = "da rimuovere (smentita)"
+    elif st["mean"] < 0:
+        status = "da rimuovere"
+    elif st["lo"] > 0:
+        status = "confermata"
+    else:
+        status = "incerta"
+    return {**st, "need": need, "since": since, "status": status, "rule": dict(sp.current),
+            "taken": sum(1 for i in idx if rule[i] != 0)}
+
+
+def entry_rule_text(r: dict) -> str:
+    fb = ", altrimenti nessun acquisto" if r.get("fallback") == "skip" else ", altrimenti compra a fine finestra"
+    return {"dip": f"ribasso di {r['dip_pct']:g}% entro {r['window_minutes']:g} min" + fb,
+            "bounce": f"ribasso di {r['dip_pct']:g}% poi rimbalzo di {r['bounce_pct']:g}% entro "
+                      f"{r['window_minutes']:g} min" + fb,
+            "confirm": f"prezzo >= {r['confirm_pct']:+g}% dopo {r['confirm_minutes']:g} min"}.get(r["mode"], "subito")
+
+
+def entry_trial_section(t: dict | None) -> list[str]:
+    if not t:
+        return []
+    out = ["## Prova del momento d'acquisto (scelta dell'utente)",
+           f"- regola: {entry_rule_text(t['rule'])}, attiva dal {datetime.fromtimestamp(t['since'], timezone.utc):%Y-%m-%d %H:%M} UTC"]
+    if not t["n"]:
+        out.append(f"- nessun token approvato da allora (ne servono {t['need']} per giudicarla)")
+    else:
+        out.append(f"- {t['n']} token approvati da allora ({t['taken']} comprati con la regola): "
+                   f"{t['mean']:+.2f} punti % per token rispetto a comprare subito, intervallo 95% "
+                   f"[{t['lo']:+.2f}, {t['hi']:+.2f}]")
+    verdict = {"in prova": f"IN PROVA: servono almeno {t['need']} token per giudicarla",
+               "confermata": "CONFERMATA: meglio che comprare subito",
+               "incerta": "INCERTA: per ora non peggiora, i dati non bastano a confermarla",
+               "da rimuovere": "DA RIMUOVERE: con i dati nuovi rende meno che comprare subito. Per toglierla: "
+                               "[entry] mode = \"now\" e trial_since = \"\" in config.toml",
+               "da rimuovere (smentita)": "DA RIMUOVERE, SMENTITA: rende meno che comprare subito con intervallo "
+                                          "tutto sotto zero. Per toglierla: [entry] mode = \"now\" e "
+                                          "trial_since = \"\" in config.toml"}[t["status"]]
+    return out + [f"- {verdict}", ""]
 
 
 def within_hard_limits(cfg, changes: list[str]) -> bool:
@@ -794,6 +853,8 @@ def within_hard_limits(cfg, changes: list[str]) -> bool:
         key, val = rest.split(" = ", 1)
         if (sec, key) == ("analyst", "weights"):
             continue                        # score weights: no hard limit (validated when config.toml is loaded)
+        if sec == "entry" and getattr(cfg.entry, "trial_since", ""):
+            return False                    # entry-timing trial running: the rule is the user's choice
         if (sec, key) == ("risk", "hard_stop_pct") and cfg.risk.exit_stop_pct and \
                 cfg.risk.exit_stop_pct < cfg.risk.hard_stop_pct:
             return False                    # paper stop trial running: the stop is the user's experiment
@@ -878,6 +939,7 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
         lines.append(f"- [{LEVEL[f['level']]}] {f['agent']} — {f['check']}: {f['detail']}")
     lines.append("")
     lines += decisions or []
+    lines += entry_trial_section((exp or {}).get("entry_trial"))
     if not exp:
         lines.append("Primo ciclo di test non ancora eseguito.")
         return "\n".join(lines)

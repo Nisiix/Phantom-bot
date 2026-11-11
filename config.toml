@@ -116,13 +116,18 @@ exit_slippage_ladder_bps = [800, 1500, 3000]
 # the rule by itself (auto_apply) only when one beats the current one on data it never saw.
 # Measured at launch on 42 approved tokens: waiting looked better on the older tokens, not on the newest ones,
 # so it starts on "now" and the Controller decides as data comes in.
-mode = "now"
-window_minutes = 10       # 1-15
-dip_pct = 5.0
+# USER'S TRIAL (2026-11-11 02:12 UTC): buy only on a 3% dip within 5 min of approval, else no trade.
+# With trial_since set the Controller does not change this rule; it measures it against "buy at once" on the tokens
+# approved since then and flags it "DA RIMUOVERE" (report + feed) if the newer data disproves it.
+# To end the trial: mode = "now" and trial_since = "".
+mode = "dip"
+window_minutes = 5        # 1-15
+dip_pct = 3.0
 bounce_pct = 2.0
 confirm_minutes = 5.0
 confirm_pct = 0.0
 fallback = "skip"
+trial_since = "2026-11-11T02:15:00Z"
 max_liq_drop_pct = 20.0
 poll_seconds = 6.0        # price check of waiting tokens (one batched DexScreener call)
 
