@@ -28,6 +28,9 @@ trades, the desk's own DexScreener readings for the market cap. No paid API, no 
 
 SAFEGUARDS (devil's-advocate review, 2026-11-12):
   * dust buys don't count: an early buy under `min_buy_sol` (0.1 SOL; volume/spam bots buy 0.001-0.01 SOL);
+  * real money only (user 2026-11-12): a smart wallet must hold at least `min_balance_usd` ($500) in SOL + USDC +
+    USDT right now (read on-chain every rescore, one getMultipleAccounts per 100 wallets); below that it is kept in
+    `sw_smart` (balance_usd) but never counted for a token;
   * one operator = one win: wins are counted on distinct creators (their funder when known), so a pump group
     relaunching through fresh creators with the same wallets does not collect a "win" per relaunch;
   * no self-proof: a token never counts as proof for itself - a holder is smart for THIS token only if it is still
@@ -78,6 +81,10 @@ CREATE INDEX IF NOT EXISTS ix_dec_mint ON decisions(mint);
 CREATE TABLE IF NOT EXISTS sw_hits (mint TEXT, wallet TEXT, symbol TEXT, ts REAL, stage TEXT, held_at_start INTEGER,
   tokens REAL, wins INTEGER, n INTEGER, PRIMARY KEY (mint, wallet));
 """
+
+# Stablecoins counted in a smart wallet's balance (SPL Token program, 6 decimals).
+STABLES = ("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",   # USDC
+           "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB")   # USDT
 
 _MC = re.compile(r"market cap \$([\d,]+)")
 _LIQ = re.compile(r"liquidity: ([\d.]+) vs")
@@ -137,7 +144,14 @@ class SmartWallets:
         self._held: dict[str, set] = {}
         for r in store.q("SELECT mint, wallet FROM sw_hits"):
             self._held.setdefault(r["mint"], set()).add(r["wallet"])
-        self.smart: dict[str, dict] = {r["wallet"]: r for r in store.q("SELECT * FROM sw_smart")}
+        try:
+            store.db.execute("ALTER TABLE sw_smart ADD COLUMN balance_usd REAL")
+        except Exception:  # noqa: BLE001 - column already there
+            pass
+        rows = store.q("SELECT * FROM sw_smart")
+        self._balance: dict[str, float] = {r["wallet"]: r["balance_usd"] for r in rows if r.get("balance_usd") is not None}
+        self.all_smart: dict[str, dict] = {r["wallet"]: r for r in rows}   # before the balance check
+        self.smart: dict[str, dict] = {w: r for w, r in self.all_smart.items() if self.balance_ok(w)}
         # The win line can change ([smart_wallets] win_mcap_usd): every stored token is judged again on the line in
         # use (its peak is kept, only the verdict follows the line).
         store.db.execute("UPDATE sw_tokens SET won = CASE WHEN COALESCE(peak_mcap, 0) >= ? THEN 1 ELSE 0 END",
@@ -346,14 +360,59 @@ class SmartWallets:
 
     def _apply(self, now: float, ranked: list[dict], contrib: dict, validation: dict) -> None:
         self.store.db.execute("DELETE FROM sw_smart")       # derived list: rebuilt from sw_trades every time
-        self.store.db.executemany("INSERT INTO sw_smart(wallet,tokens,wins,hit_rate,sol_in,last_ts,ts) "
-                                  "VALUES(?,?,?,?,?,?,?)",
+        self.store.db.executemany("INSERT INTO sw_smart(wallet,tokens,wins,hit_rate,sol_in,last_ts,ts,balance_usd) "
+                                  "VALUES(?,?,?,?,?,?,?,?)",
                                   [(r["wallet"], r["tokens"], r["wins"], r["hit_rate"], r["sol_in"] or 0.0,
-                                    r["last_ts"], now) for r in ranked])
-        self.smart = {r["wallet"]: r for r in ranked}
+                                    r["last_ts"], now, self._balance.get(r["wallet"])) for r in ranked])
+        self.all_smart = {r["wallet"]: r for r in ranked}
+        self.smart = {w: r for w, r in self.all_smart.items() if self.balance_ok(w)}
         self._contrib = contrib
         self._validation = validation
         self._ready = {}
+
+    # ── real money only (user 2026-11-12) ──
+    def balance_ok(self, wallet: str) -> bool:
+        """At least min_balance_usd in SOL + USDC + USDT at the last reading (unknown = not yet: not counted)."""
+        need = float(self.c.min_balance_usd)
+        if need <= 0:
+            return True
+        b = self._balance.get(wallet)
+        return b is not None and b >= need
+
+    async def refresh_balances(self, sol_usd: float | None = None) -> int:
+        """Read every smart wallet's SOL + USDC + USDT now and keep only the ones worth >= min_balance_usd.
+        Returns how many are counted. Without a SOL price the previous readings stay."""
+        if float(self.c.min_balance_usd) <= 0 or not self.all_smart:
+            self.smart = {w: r for w, r in self.all_smart.items() if self.balance_ok(w)}
+            return len(self.smart)
+        px = float(sol_usd if sol_usd is not None else (self.store.kv_get("sol_usd", 0.0) or 0.0))
+        if px <= 0:
+            return len(self.smart)
+        ws = list(self.all_smart)
+        usd = {w: 0.0 for w in ws}
+        for i in range(0, len(ws), 100):
+            chunk = ws[i: i + 100]
+            res = await self.call("getMultipleAccounts", [chunk, {"encoding": "base64", "dataSlice": {"offset": 0,
+                                                                                                      "length": 0}}])
+            for w, acc in zip(chunk, (res or {}).get("value") or []):
+                usd[w] += (float((acc or {}).get("lamports") or 0) / 1e9) * px
+            for stable in STABLES:
+                pairs = [(w, ata(w, stable, SPL_TOKEN)) for w in chunk]
+                pairs = [(w, a) for w, a in pairs if a]
+                res = await self.call("getMultipleAccounts", [[a for _, a in pairs], {"encoding": "jsonParsed"}])
+                for (w, _), acc in zip(pairs, (res or {}).get("value") or []):
+                    try:
+                        ui = acc["data"]["parsed"]["info"]["tokenAmount"]
+                        usd[w] += float(ui.get("uiAmountString") or ui.get("uiAmount") or 0)
+                    except (KeyError, TypeError, ValueError):
+                        continue
+        self._balance.update(usd)
+        self.store.db.executemany("UPDATE sw_smart SET balance_usd=? WHERE wallet=?", [(v, w) for w, v in usd.items()])
+        before = len(self.smart)
+        self.smart = {w: {**r, "balance_usd": usd.get(w)} for w, r in self.all_smart.items() if self.balance_ok(w)}
+        if len(self.smart) != before:
+            self._ready = {}
+        return len(self.smart)
 
     @staticmethod
     def pick(buys: dict[str, set], tokens: dict[str, tuple[int, str]], c) -> set:
@@ -690,10 +749,13 @@ class SmartWallets:
                     last_score = t
                     n0 = len(self.smart)
                     await self.rescore_async()
+                    await self.refresh_balances()
                     if len(self.smart) != n0:
                         self.emit("info", f"smart wallets: {len(self.smart)} (>= {c.min_wins} early buys that reached "
                                           f"${float(c.win_mcap_usd) / 1000:.0f}k, hit rate >= "
-                                          f"{float(c.min_hit_rate) * 100:.0f}%)")
+                                          f"{float(c.min_hit_rate) * 100:.0f}%, balance >= "
+                                          f"${float(c.min_balance_usd):,.0f}; {len(self.all_smart)} before the "
+                                          f"balance check)")
                 if t - last_peaks >= float(c.peak_check_minutes) * 60:
                     last_peaks = t
                     await self.track_peaks()

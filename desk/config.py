@@ -265,6 +265,7 @@ class SmartWalletsCfg:
     watch_seconds: float = 60.0         # open positions: smart holders read this often
     watch_analyst_seconds: float = 300.0  # the Analyst's tokens (it also asks at every re-score, cached 60 s)
     min_buy_sol: float = 0.1            # early buys smaller than this are not scored (user 2026-11-12: 0.1 SOL)
+    min_balance_usd: float = 500.0      # a smart wallet must hold at least this in SOL + USDC + USDT (user 2026-11-12)
     # Report to the Analyst (user 2026-11-12): used only with sufficient data, otherwise ignored.
     ready_min_decided_tokens: int = 300  # tokens read and decided (won, or older than decide_hours)
     ready_min_winners: int = 20          # ...of which reached win_mcap_usd

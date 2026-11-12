@@ -58,7 +58,8 @@ def chain(mint: str, creator: str, buyers: list[str], bundle: list[str] = ()) ->
 
 
 def cfg(**kw) -> SmartWalletsCfg:
-    c = SmartWalletsCfg(rpc_interval_seconds=0, min_wins=2, min_tokens=2, min_hit_rate=0.5, decide_hours=1)
+    c = SmartWalletsCfg(rpc_interval_seconds=0, min_wins=2, min_tokens=2, min_hit_rate=0.5, decide_hours=1,
+                        min_balance_usd=0)
     for k, v in kw.items():
         setattr(c, k, v)
     return c
@@ -419,3 +420,28 @@ def test_token_without_smart_wallets_keeps_the_usual_entry(tmp_path):
     v.clearance.report.rug["decimals"] = 6
     asyncio.run(ex.handle_verdict(v))                                   # entry mode "now": bought at once
     assert "M" in desk.portfolio.positions and not ex.whale_plans
+
+
+def test_smart_wallet_needs_500_usd_balance(tmp_path):
+    from solders.pubkey import Pubkey
+
+    from desk.devwatch import ata
+    from desk.smartwallets import STABLES
+    st = Store(tmp_path / "p.db")
+    RICH, POOR, USDC_ONLY = (str(Pubkey.new_unique()) for _ in range(3))
+    chains = {m: chain(m, "D" + m, [RICH, POOR, USDC_ONLY]) for m in ("W1pump", "W2pump")}
+    rpc = Rpc(chains)
+    sw = SmartWallets(st, rpc, None, cfg(min_wins=2, min_tokens=2, min_hit_rate=0.5, min_balance_usd=500))
+    for m in chains:
+        asyncio.run(sw.scan(m))
+    _decided(st, {"W1pump": 1, "W2pump": 1})
+    sw.rescore()
+    assert set(sw.all_smart) == {RICH, POOR, USDC_ONLY} and sw.smart == {}   # balance not read yet: not counted
+    acc_sol = {RICH: {"lamports": int(4e9)}, POOR: {"lamports": int(1e9)}, USDC_ONLY: {"lamports": 0}}
+    rpc.holdings = {**acc_sol, ata(USDC_ONLY, STABLES[0]): {"data": {"parsed": {"info": {"tokenAmount": {
+        "uiAmountString": "800"}}}}}}
+    assert asyncio.run(sw.refresh_balances(sol_usd=150.0)) == 2            # 4 SOL = $600, 1 SOL = $150, $800 USDC
+    assert set(sw.smart) == {RICH, USDC_ONLY}
+    assert st.q("SELECT balance_usd FROM sw_smart WHERE wallet=?", (POOR,))[0]["balance_usd"] == 150.0
+    sw2 = SmartWallets(st, rpc, None, cfg(min_balance_usd=500))          # restart: balances kept
+    assert set(sw2.smart) == {RICH, USDC_ONLY}
