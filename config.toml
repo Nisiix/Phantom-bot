@@ -205,7 +205,11 @@ profit_lock_sell_buffer_pct = 1.0
 # noise), so it is kept mild: 80% only on a violent rise (60 points per minute). The Controller keeps tuning.
 profit_lock_keep_from_pct = 20.0
 profit_lock_keep_pct = 70.0
-profit_lock_keep_fast_pct = 80.0
+# User 2026-11-12: on a fast rise lower the stop a little so a token that keeps climbing is left running (the
+# trailing from +30% at 6% stays). Re-measured 2026-11-12 10:00 UTC (57 paths, lock +12/+15): fast share 80% -> 70%
+# = +0.24 pts/token ([-0.10, +0.58]), 2 fewer premature sales, no extra loser; 75% gave +0.15; under 70% (code
+# change) measured no further gain. 70 = same share as keep_pct: the speed part is neutral, not removed.
+profit_lock_keep_fast_pct = 70.0
 profit_lock_speed_full = 60.0
 profit_lock_speed_seconds = 60.0
 # Fee rule: the lock also waits until the NET profit is at least this many times the trade's round-trip fees
