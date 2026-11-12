@@ -9,7 +9,7 @@ trades, the desk's own DexScreener readings for the market cap. No paid API, no 
                   ~20 wallets in the first second, all the creator's),
      * creator  - the creator itself.
    Past tokens followed by the desk are backfilled in the background, the ones that crossed the win line first.
-2. WINNERS. A token "won" when its market cap reached `win_mcap_usd` ($200k). Peaks come from the desk's own
+2. WINNERS. A token "won" when its market cap reached `win_mcap_usd` ($100k, user 2026-11-12; was $200k). Peaks come from the desk's own
    Filter readings and from a DexScreener check every `peak_check_minutes` for `peak_track_hours`; a reading counts
    only with real liquidity (>= $10k and market cap <= 25x liquidity: dust pools fake huge caps, BERNIE 2026-11-11).
    A token that did not win within `decide_hours` is a loss.
@@ -29,7 +29,7 @@ SAFEGUARDS (devil's-advocate review, 2026-11-12):
   * one operator = one win: wins are counted on distinct creators (their funder when known), so a pump group
     relaunching through fresh creators with the same wallets does not collect a "win" per relaunch;
   * no self-proof: a token never counts as proof for itself - a holder is smart for THIS token only if it is still
-    smart with this token's own result taken out (a token already at $200k made its early buyers "smart");
+    smart with this token's own result taken out (a token already past the win line made its early buyers "smart");
   * insiders don't count: the creator, its DevWatch group, wallets funded by the creator or by the creator's funder
     are never counted as smart holders of that token;
   * one operator = one holder: smart wallets funded by the same (non-exchange) wallet count once (funders looked up
@@ -136,6 +136,10 @@ class SmartWallets:
         for r in store.q("SELECT mint, wallet FROM sw_hits"):
             self._held.setdefault(r["mint"], set()).add(r["wallet"])
         self.smart: dict[str, dict] = {r["wallet"]: r for r in store.q("SELECT * FROM sw_smart")}
+        # The win line can change ([smart_wallets] win_mcap_usd): every stored token is judged again on the line in
+        # use (its peak is kept, only the verdict follows the line).
+        store.db.execute("UPDATE sw_tokens SET won = CASE WHEN COALESCE(peak_mcap, 0) >= ? THEN 1 ELSE 0 END",
+                         (float(cfg.win_mcap_usd),))
         self._backfill: list[str] = []
         self._backfill_ts = 0.0
         self._bot_peaks: dict[str, tuple[float, float]] = {}

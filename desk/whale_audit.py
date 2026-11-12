@@ -9,8 +9,8 @@ records, whether that information is right:
      Controller's tests use), share of winners, and the difference between the two groups with a 95% interval.
   B. TOKENS THE BONUS PROMOTED. Tokens that passed the threshold only thanks to the bonus (score - bonus < threshold
      <= score): what they would have made. This is the direct test of the rule.
-  C. $200k PRECISION. Of the tokens where the Whale checker saw smart holders (any stage), how many reached the
-     win line ($200k real market cap), against the same share for every token the Analyst scored (the base rate).
+  C. WIN-LINE PRECISION. Of the tokens where the Whale checker saw smart holders (any stage), how many reached the
+     win line ([smart_wallets] win_mcap_usd, $100k real market cap), against the same share for every token the Analyst scored (the base rate).
   D. WALLETS. The smart wallets seen on >= 3 decided tokens, best and worst precision.
 
 Only proposals come out of it (the Controller never applies anything): switch the bonus off when the promoted

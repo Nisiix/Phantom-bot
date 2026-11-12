@@ -9,7 +9,7 @@ remaining weights are renormalised, so a missing site neither helps nor hurts th
 With GMGN data a ninth component, smart money (.10: smart/renowned wallets holding, penalised
 for fresh-wallet / bot / rat-trader crowds), is added and the others are scaled by 0.9.
 WHALE CHECKER (user 2026-11-12, desk/smartwallets.py): for every token the Whale checker reports how many of its
-smart wallets (wallets that keep buying early the tokens that reach $200k) hold it. With sufficient data each one
+smart wallets (wallets that keep buying early the tokens that reach $100k) hold it. With sufficient data each one
 adds whale_bonus_per_wallet to the score (at most whale_bonus_max), which can lift a token over the threshold and
 on to the Executor; without sufficient data the report is ignored (no bonus, no penalty).
 Then hard caps for wash trading, insider clusters and parabolic blow-off tops (they apply after the bonus).

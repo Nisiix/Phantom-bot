@@ -246,7 +246,8 @@ class SmartWalletsCfg:
     """User 2026-11-12 (desk/smartwallets.py): wallets that keep buying the winners early, found with plain RPC (no
     paid API). Agent "Whale checker": the Analyst adds a bonus for smart holders only once the data is sufficient."""
     enabled: bool = True
-    win_mcap_usd: float = 200_000.0     # a token "won" when its real market cap reached this
+    win_mcap_usd: float = 100_000.0     # a token "won" when its real market cap reached this (user 2026-11-12:
+                                        # $100k, was $200k)
     scan_trades: int = 40               # first N trades of every followed token read from the chain
     max_sig_pages: int = 60             # 1000 signatures each (~1.3 s a page): measured 2026-11-12, followed tokens
                                         # 30-60 min old had 2k-80k signatures; longer histories are not read

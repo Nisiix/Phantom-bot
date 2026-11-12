@@ -323,3 +323,13 @@ def test_rescore_async_reads_in_a_thread_same_result(tmp_path):
     sw.smart = {}
     assert set(asyncio.run(sw.rescore_async())) == set(sync) == {"A", "B"}
     assert st.q("SELECT COUNT(*) AS n FROM sw_smart")[0]["n"] == 2
+
+
+def test_win_line_is_100k_and_old_verdicts_follow_it(tmp_path):
+    assert SmartWalletsCfg().win_mcap_usd == 100_000
+    st = Store(tmp_path / "p.db")
+    sw = SmartWallets(st, Rpc({}), None, cfg(win_mcap_usd=200_000))
+    st.db.execute("INSERT INTO sw_tokens(mint,complete,peak_mcap,won) VALUES('Mpump',1,150000,0)")
+    SmartWallets(st, Rpc({}), None, cfg(win_mcap_usd=100_000))        # restart with the new line
+    assert st.q("SELECT won FROM sw_tokens")[0]["won"] == 1
+    assert sw is not None

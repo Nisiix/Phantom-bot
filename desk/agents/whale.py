@@ -2,7 +2,7 @@
 
   * reads on-chain, with plain public RPC, the creator and the first trades of every token the desk follows
     (open positions, the Analyst's tokens, then the newest shadow follow-ups) and of the past ones (winners first);
-  * scores the wallets that keep buying early the tokens that reach $200k of real market cap;
+  * scores the wallets that keep buying early the tokens that reach $100k of real market cap;
   * every minute, checks whether one of those wallets holds a token the Analyst is following or an open position.
 
 It reports to the Analyst (user 2026-11-12): for every token the Analyst scores, how many smart wallets hold it.
