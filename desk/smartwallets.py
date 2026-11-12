@@ -23,14 +23,43 @@ trades, the desk's own DexScreener readings for the market cap. No paid API, no 
    holders on the spot and reports them. Only when the data is sufficient (readiness(): enough decided tokens,
    winners and smart wallets) does the Analyst use it, as a bonus on its score; otherwise it ignores it.
    Nothing here buys or sells by itself: the Analyst's threshold, its caps and the Executor's checks still decide.
+
+SAFEGUARDS (devil's-advocate review, 2026-11-12):
+  * dust buys don't count: an early buy under `min_buy_sol` (volume/spam bots buy 0.001-0.01 SOL) is not scored;
+  * one operator = one win: wins are counted on distinct creators (their funder when known), so a pump group
+    relaunching through fresh creators with the same wallets does not collect a "win" per relaunch;
+  * no self-proof: a token never counts as proof for itself - a holder is smart for THIS token only if it is still
+    smart with this token's own result taken out (a token already at $200k made its early buyers "smart");
+  * insiders don't count: the creator, its DevWatch group, wallets funded by the creator or by the creator's funder
+    are never counted as smart holders of that token;
+  * one operator = one holder: smart wallets funded by the same (non-exchange) wallet count once (funders looked up
+    on-chain in the background, cached in `wallet_funders`);
+  * sellers don't count: a smart wallet that already sold half of the largest amount seen is not a holder any more;
+  * proof before use: "sufficient data" also needs the list to have proved itself on tokens it had not seen
+    (validate(): wallets chosen on the older 70% of the decided tokens must pick winners on the newer 30% at least
+    `ready_min_lift` times the base rate, on >= `ready_min_validation_tokens` tokens);
+  * RPC budget: holders are cached 60 s; open positions are watched every minute, the Analyst's tokens every
+    `watch_analyst_seconds` (the Analyst asks again itself at every re-score).
 """
 from __future__ import annotations
 
 import asyncio
 import re
+import sqlite3
 import time
 
 from .devwatch import SPL_TOKEN, ata
+from .funding import Funding
+
+
+class _Paced:
+    """RPC adapter for desk/funding.py: its calls go through the Whale checker's paced lane."""
+
+    def __init__(self, sw: "SmartWallets") -> None:
+        self.sw = sw
+
+    async def call(self, method: str, params: list | None = None):
+        return await self.sw.call(method, params or [])
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sw_tokens (
@@ -112,20 +141,28 @@ class SmartWallets:
         self._bot_peaks: dict[str, tuple[float, float]] = {}
         self._fails: dict[str, int] = {}
         self._ready: dict = {}
+        self._lock = asyncio.Lock()
+        self._scanned: set[str] = {r["mint"] for r in store.q("SELECT mint FROM sw_tokens")}
+        self._contrib: dict[str, dict[str, tuple[int, str]]] = {}   # smart wallet -> mint -> (won, operator)
+        self._hcache: dict[str, tuple[float, dict]] = {}
+        self._max_amt: dict[tuple[str, str], float] = {}
+        self._validation: dict = {}
+        self.funding = Funding(store, _Paced(self), hops=1)
         self.stats = {"scanned": 0, "too_long": 0, "trades": 0, "errors": 0, "hits": 0, "backfilled": 0,
                       "reports": 0}
 
     # ── RPC, paced: the public node is shared with the Filter, DevWatch and the funder backfill ──
     async def call(self, method: str, params: list):
-        wait = self._last_call + float(self.c.rpc_interval_seconds) - time.time()
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._last_call = time.time()
+        async with self._lock:
+            wait = self._last_call + float(self.c.rpc_interval_seconds) - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_call = time.time()
         return await self.rpc.call(method, params, lane="smart")
 
     # ── 1. early buyers ──
     def scanned(self, mint: str) -> bool:
-        return bool(self.store.q("SELECT 1 FROM sw_tokens WHERE mint=?", (mint,)))
+        return mint in self._scanned
 
     async def scan(self, mint: str, symbol: str = "", source: str = "follow", max_pages: int | None = None) -> dict:
         """Read the create transaction and the first trades of `mint` from the chain and store them."""
@@ -192,12 +229,13 @@ class SmartWallets:
             "peak_mcap,peak_ts,peak_checked,won,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (r["mint"], r.get("symbol") or "", r.get("creator"), r.get("create_ts"), r.get("create_slot"),
              time.time(), r["complete"], r.get("n_trades") or 0, peak, pts, 0.0, won, r.get("source") or ""))
+        self._scanned.add(r["mint"])
 
     # ── 2. winners ──
-    def bot_peaks(self) -> dict[str, tuple[float, float]]:
+    def bot_peaks(self, q=None) -> dict[str, tuple[float, float]]:
         """Highest real market cap the Filter ever read for each pump mint: mint -> (mcap, ts)."""
         out: dict[str, tuple[float, float]] = {}
-        for r in self.store.q("SELECT ts, mint, data FROM decisions WHERE mint LIKE '%pump' "
+        for r in (q or self.store.q)("SELECT ts, mint, data FROM decisions WHERE mint LIKE '%pump' "
                               "AND data LIKE '%market cap $%'"):
             m, liq = _MC.search(r["data"] or ""), _LIQ.search(r["data"] or "")
             if not m or not liq:
@@ -244,30 +282,150 @@ class SmartWallets:
         return n
 
     # ── 3. score ──
+    _BUYS = ("SELECT mint, wallet, SUM(sol) AS sol, MIN(ts) AS ts FROM sw_trades WHERE side='buy' AND signer=1 "
+             "AND bundle=0 AND creator=0 GROUP BY mint, wallet HAVING SUM(sol) >= ?")
+    _DECIDED = ("SELECT t.mint, t.won, COALESCE(f.funder, t.creator, t.mint) AS op FROM sw_tokens t "
+                "LEFT JOIN wallet_funders f ON f.wallet = t.creator AND f.hub = 0 AND f.funder IS NOT NULL "
+                "WHERE t.complete=1 AND (t.won=1 OR t.create_ts < ?)")
+
+    def _ro(self, sql: str, args: tuple = ()) -> list[dict]:
+        """Read-only query on its own connection: the heavy reads run in a worker thread, never in the event loop
+        (a few seconds there would delay Risk's stop checks)."""
+        db = sqlite3.connect(f"file:{self.store.path}?mode=ro", uri=True, timeout=10)
+        db.row_factory = sqlite3.Row
+        try:
+            return [dict(r) for r in db.execute(sql, args)]
+        finally:
+            db.close()
+
     def rescore(self, now: float | None = None) -> dict[str, dict]:
+        """Smart wallets: early buys (signer, not bundle, not creator, >= min_buy_sol) on decided tokens; wins are
+        counted once per operator (creator's funder, or the creator), the hit rate is wins / tokens."""
         now = now or time.time()
+        self._apply(now, *self._compute(now, self.store.q))
+        return self.smart
+
+    async def rescore_async(self, now: float | None = None) -> dict[str, dict]:
+        """rescore() with the reads in a worker thread (the desk's loop keeps running meanwhile)."""
+        now = now or time.time()
+        res = await asyncio.to_thread(self._compute, now, self._ro)
+        self._apply(now, *res)
+        return self.smart
+
+    def _compute(self, now: float, q) -> tuple[list[dict], dict, dict]:
         c = self.c
-        decided_before = now - float(c.decide_hours) * 3600
-        rows = self.store.q(
-            "SELECT b.wallet, COUNT(*) AS tokens, SUM(t.won) AS wins, SUM(b.sol) AS sol_in, MAX(b.ts) AS last_ts "
-            "FROM (SELECT mint, wallet, SUM(sol) AS sol, MIN(ts) AS ts FROM sw_trades "
-            "      WHERE side='buy' AND signer=1 AND bundle=0 AND creator=0 GROUP BY mint, wallet) b "
-            "JOIN sw_tokens t ON t.mint = b.mint "
-            "WHERE t.complete=1 AND (t.won=1 OR t.create_ts < ?) GROUP BY b.wallet HAVING wins >= ? AND tokens >= ?",
-            (decided_before, int(c.min_wins), int(c.min_tokens)))
+        args = (float(c.min_buy_sol), now - float(c.decide_hours) * 3600)
+        rows = q(
+            f"WITH b AS ({self._BUYS}), d AS ({self._DECIDED}) "
+            "SELECT b.wallet, COUNT(*) AS tokens, COUNT(DISTINCT CASE WHEN d.won=1 THEN d.op END) AS wins, "
+            "SUM(b.sol) AS sol_in, MAX(b.ts) AS last_ts FROM b JOIN d ON d.mint = b.mint GROUP BY b.wallet "
+            "HAVING wins >= ? AND tokens >= ?", args + (int(c.min_wins), int(c.min_tokens)))
         smart = {}
         for r in rows:
             hr = (r["wins"] or 0) / max(1, r["tokens"])
             if hr >= float(c.min_hit_rate):
                 smart[r["wallet"]] = {**r, "hit_rate": round(hr, 3), "ts": now}
         ranked = sorted(smart.values(), key=lambda r: (-r["hit_rate"], -r["wins"]))[: int(c.max_smart_wallets)]
+        contrib: dict[str, dict[str, tuple[int, str]]] = {r["wallet"]: {} for r in ranked}
+        ws = list(contrib)
+        for i in range(0, len(ws), 400):
+            chunk = ws[i: i + 400]
+            for r in q(f"WITH b AS ({self._BUYS}), d AS ({self._DECIDED}) SELECT b.wallet, b.mint, d.won, "
+                                  f"d.op FROM b JOIN d ON d.mint = b.mint WHERE b.wallet IN "
+                                  f"({','.join('?' * len(chunk))})", args + tuple(chunk)):
+                contrib[r["wallet"]][r["mint"]] = (int(r["won"] or 0), r["op"])
+        return ranked, contrib, self.validate(now, q)
+
+    def _apply(self, now: float, ranked: list[dict], contrib: dict, validation: dict) -> None:
         self.store.db.execute("DELETE FROM sw_smart")       # derived list: rebuilt from sw_trades every time
         self.store.db.executemany("INSERT INTO sw_smart(wallet,tokens,wins,hit_rate,sol_in,last_ts,ts) "
                                   "VALUES(?,?,?,?,?,?,?)",
                                   [(r["wallet"], r["tokens"], r["wins"], r["hit_rate"], r["sol_in"] or 0.0,
                                     r["last_ts"], now) for r in ranked])
         self.smart = {r["wallet"]: r for r in ranked}
-        return self.smart
+        self._contrib = contrib
+        self._validation = validation
+        self._ready = {}
+
+    @staticmethod
+    def pick(buys: dict[str, set], tokens: dict[str, tuple[int, str]], c) -> set:
+        """Smart wallets from {wallet: mints bought early} on `tokens` {mint: (won, operator)} (same rule as rescore)."""
+        out = set()
+        for w, ms in buys.items():
+            ms = [m for m in ms if m in tokens]
+            if len(ms) < int(c.min_tokens):
+                continue
+            wins = len({tokens[m][1] for m in ms if tokens[m][0]})
+            if wins >= int(c.min_wins) and wins / len(ms) >= float(c.min_hit_rate):
+                out.add(w)
+        return out
+
+    def validate(self, now: float | None = None, q=None) -> dict:
+        """Out-of-sample check: wallets picked on the older 70% of the decided tokens (last lookback_days), scored
+        on the newer 30%: share of the newer tokens with one of them among the early buyers that won, vs the base
+        rate of all newer tokens."""
+        now = now or time.time()
+        q = q or self.store.q
+        c = self.c
+        since = now - float(c.validation_lookback_days) * 86400
+        dec = q("SELECT t.mint, t.won, COALESCE(f.funder, t.creator, t.mint) AS op, t.create_ts FROM sw_tokens t "
+                           "LEFT JOIN wallet_funders f ON f.wallet = t.creator AND f.hub = 0 AND f.funder IS NOT NULL "
+                           "WHERE t.complete=1 AND t.create_ts > ? AND (t.won=1 OR t.create_ts < ?) ORDER BY t.create_ts",
+                           (since, now - float(c.decide_hours) * 3600))
+        out = {"n": 0, "wins": 0, "base": None, "precision": None, "lift": None, "test_tokens": 0}
+        if len(dec) < 10:
+            return out
+        cut = int(len(dec) * 0.7)
+        train = {r["mint"]: (int(r["won"] or 0), r["op"]) for r in dec[:cut]}
+        test = {r["mint"]: int(r["won"] or 0) for r in dec[cut:]}
+        buys: dict[str, set] = {}
+        by_mint: dict[str, set] = {}
+        for r in q(f"SELECT b.mint, b.wallet FROM ({self._BUYS}) b JOIN sw_tokens t ON t.mint = b.mint "
+                              f"WHERE t.create_ts > ?", (float(c.min_buy_sol), since)):
+            if r["mint"] in train:
+                buys.setdefault(r["wallet"], set()).add(r["mint"])
+            elif r["mint"] in test:
+                by_mint.setdefault(r["mint"], set()).add(r["wallet"])
+        picked = self.pick(buys, train, c)
+        sig = [m for m, ws in by_mint.items() if ws & picked]
+        out["test_tokens"] = len(test)
+        out["base"] = sum(test.values()) / len(test)
+        out["n"], out["wins"] = len(sig), sum(test[m] for m in sig)
+        if sig:
+            out["precision"] = out["wins"] / len(sig)
+            out["lift"] = out["precision"] / out["base"] if out["base"] else (float("inf") if out["wins"] else 0.0)
+        return out
+
+    def smart_for(self, wallet: str, mint: str) -> dict | None:
+        """The wallet's record if it is smart even with `mint`'s own result left out (no self-proof), else None."""
+        s = self.smart.get(wallet)
+        if s is None:
+            return None
+        con = self._contrib.get(wallet) or {}
+        if mint not in con:
+            return s
+        rest = [v for m, v in con.items() if m != mint]
+        wins = len({op for won, op in rest if won})
+        c = self.c
+        if wins < int(c.min_wins) or len(rest) < int(c.min_tokens) or wins / max(1, len(rest)) < float(c.min_hit_rate):
+            return None
+        return {**s, "tokens": len(rest), "wins": wins, "hit_rate": round(wins / len(rest), 3)}
+
+    def operator(self, wallet: str) -> str:
+        """Who is behind a wallet: its funder when known and not an exchange, else the wallet itself."""
+        f = self.store.wallet_funder(wallet)
+        return f["funder"] if f and f.get("funder") and not f.get("hub") else wallet
+
+    async def lookup_funders(self, limit: int = 1) -> int:
+        """Background: who funded the smart wallets (one at a time, cached in wallet_funders)."""
+        n = 0
+        for w in list(self.smart):
+            if n >= limit:
+                break
+            if self.store.wallet_funder(w) is None:
+                await self.funding.funder(w)
+                n += 1
+        return n
 
     # ── 4. watch ──
     async def token_program(self, mint: str) -> str:
@@ -276,10 +434,15 @@ class SmartWallets:
             self._programs[mint] = ((info or {}).get("value") or {}).get("owner") or SPL_TOKEN
         return self._programs[mint]
 
-    async def holders(self, mint: str) -> dict[str, float]:
-        """Smart wallets holding `mint` right now -> UI amount (one RPC call per 100 wallets)."""
+    async def holders(self, mint: str, max_age: float = 60.0) -> dict[str, float]:
+        """Smart wallets holding `mint` right now -> UI amount (one RPC call per 100 wallets, cached max_age s)."""
         if not self.smart:
             return {}
+        hit = self._hcache.get(mint)
+        if hit and time.time() - hit[0] < max_age:
+            return dict(hit[1])
+        if len(self._hcache) > 2000:
+            self._hcache.clear()
         prog = await self.token_program(mint)
         pairs = [(w, ata(w, mint, prog)) for w in self.smart]
         pairs = [(w, a) for w, a in pairs if a]
@@ -295,7 +458,14 @@ class SmartWallets:
                     continue
                 if amt > 0:
                     out[w] = amt
+                    k = (mint, w)
+                    self._max_amt[k] = max(self._max_amt.get(k, 0.0), amt)
+        self._hcache[mint] = (time.time(), dict(out))
         return out
+
+    def selling(self, mint: str, wallet: str, amt: float) -> bool:
+        """Already sold half of the largest amount we saw it hold."""
+        return amt < 0.5 * self._max_amt.get((mint, wallet), amt)
 
     def record(self, mint: str, symbol: str, held: dict[str, float], stage: str, quiet: bool = False) -> list[str]:
         """Store the smart wallets holding a token (one row per wallet and token). Returns the new ones."""
@@ -318,7 +488,8 @@ class SmartWallets:
 
     async def watch(self, mint: str, symbol: str = "", stage: str = "") -> list[str]:
         """Record the smart wallets that hold a followed token. Returns the wallets seen for the first time."""
-        return self.record(mint, symbol, await self.holders(mint), stage)
+        held = await self.holders(mint)
+        return self.record(mint, symbol, {w: a for w, a in held.items() if self.smart_for(w, mint) is not None}, stage)
 
     # ── 5. report to the Analyst (user 2026-11-12) ──
     def readiness(self, now: float | None = None) -> dict:
@@ -339,16 +510,27 @@ class SmartWallets:
             missing.append(f"{out['winners']}/{c.ready_min_winners} winners")
         if out["smart"] < int(c.ready_min_smart_wallets):
             missing.append(f"{out['smart']}/{c.ready_min_smart_wallets} smart wallets")
+        v = self._validation or {}
+        out["validation"] = v
+        if int(v.get("n") or 0) < int(c.ready_min_validation_tokens):
+            missing.append(f"out-of-sample check on {int(v.get('n') or 0)}/{c.ready_min_validation_tokens} tokens")
+        elif (v.get("lift") or 0) < float(c.ready_min_lift):
+            missing.append(f"out-of-sample lift {v.get('lift') or 0:.2f} < {c.ready_min_lift:g} (the list does not "
+                           f"pick winners better than chance yet)")
         out["ready"] = not missing
         out["why"] = ("not enough data yet: " + ", ".join(missing)) if missing else \
-            f"{out['smart']} smart wallets from {out['decided']} tokens ({out['winners']} winners)"
+            (f"{out['smart']} smart wallets from {out['decided']} tokens ({out['winners']} winners)"
+             + (f", out-of-sample {v['wins']}/{v['n']} won vs base {100 * (v.get('base') or 0):.0f}% "
+                f"(lift {v['lift']:.1f})" if v.get("lift") is not None else ""))
         self._ready = out
         return out
 
-    async def report(self, mint: str, symbol: str = "") -> dict:
+    async def report(self, mint: str, symbol: str = "", creator: str | None = None, creator_funder: str | None = None,
+                     insiders: set | None = None) -> dict:
         """What the Whale checker tells the Analyst about a token it is scoring:
         {"ready": False, "why"} when the data is not sufficient (the Analyst ignores it), else
-        {"ready": True, "holders": n, "wallets": [...], "best_hit_rate"}. Holders are read on-chain now."""
+        {"ready": True, "holders": n operators, "wallets": [...], "skipped": {...}}. Holders are read on-chain now
+        (cached 60 s) and counted with the safeguards in the module docstring."""
         r = self.readiness()
         if not r["ready"]:
             return {"ready": False, "why": r["why"]}
@@ -357,31 +539,60 @@ class SmartWallets:
         except Exception as e:  # noqa: BLE001 - RPC slow / down: the Analyst scores without it
             return {"ready": False, "why": f"holders not read in time ({e.__class__.__name__})"}
         self.stats["reports"] += 1
-        self.record(mint, symbol, held, "analyst", quiet=True)
-        top = sorted(held, key=lambda w: -(self.smart.get(w) or {}).get("hit_rate", 0))
-        out = {"ready": True, "holders": len(held), "wallets": [w[:6] for w in top[:5]],
-               "best_hit_rate": (self.smart.get(top[0]) or {}).get("hit_rate") if top else None,
-               "why": r["why"]}
+        inside = {w for w in (insiders or set()) if w} | {w for w in (creator, creator_funder) if w}
+        skipped = {"self_proof": 0, "insider": 0, "selling": 0, "same_operator": 0}
+        counted: dict[str, tuple[str, dict]] = {}          # operator -> (wallet, record)
+        for w, amt in held.items():
+            rec = self.smart_for(w, mint)
+            if rec is None:
+                skipped["self_proof"] += 1
+                continue
+            op = self.operator(w)
+            fund = (self.store.wallet_funder(w) or {}).get("funder")
+            if w in inside or op in inside or (creator and fund == creator):
+                skipped["insider"] += 1
+                continue
+            if self.selling(mint, w, amt):
+                skipped["selling"] += 1
+                continue
+            if op in counted:
+                skipped["same_operator"] += 1
+                if rec["hit_rate"] > counted[op][1]["hit_rate"]:
+                    counted[op] = (w, rec)
+                continue
+            counted[op] = (w, rec)
+        valid = {w: held[w] for w, _ in counted.values()}
+        self.record(mint, symbol, valid, "analyst", quiet=True)
+        top = sorted(counted.values(), key=lambda x: -x[1]["hit_rate"])
+        out = {"ready": True, "holders": len(counted), "wallets": [w[:6] for w, _ in top[:5]],
+               "best_hit_rate": top[0][1]["hit_rate"] if top else None, "seen": len(held),
+               "skipped": {k: v for k, v in skipped.items() if v}, "why": r["why"]}
         if held:
-            best = self.smart.get(top[0]) or {}
-            self.emit("info", f"-> Analyst: {len(held)} smart wallet(s) hold {symbol or mint[:6]} (best "
-                              f"{best.get('wins', 0)}/{best.get('tokens', 0)} early buys reached "
-                              f"${float(self.c.win_mcap_usd) / 1000:.0f}k)", mint, symbol, wallets=out["wallets"])
+            best = top[0][1] if top else {}
+            sk = ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in out["skipped"].items())
+            self.emit("info", f"-> Analyst: {len(counted)} smart wallet(s) count for {symbol or mint[:6]}"
+                              + (f" (best {best.get('wins', 0)}/{best.get('tokens', 0)} early buys reached "
+                                 f"${float(self.c.win_mcap_usd) / 1000:.0f}k)" if top else "")
+                              + (f"; not counted: {sk}" if sk else ""), mint, symbol, wallets=out["wallets"])
         return out
 
     # ── background loop ──
-    def backfill_next(self) -> tuple[str, int] | None:
-        """Next past token to read: the winners first (so the list fills quickly), then the rest, newest first."""
+    def _backfill_list(self) -> tuple[dict, list[str]]:
+        """(bot peaks, past tokens to read: the winners first, then the rest, newest first). Worker thread."""
+        peaks = self.bot_peaks(self._ro)
+        mints = [r["mint"] for r in self._ro("SELECT mint, MAX(start_ts) AS t FROM shadow WHERE mint LIKE '%pump' "
+                                             "GROUP BY mint ORDER BY t DESC")]
+        win = float(self.c.win_mcap_usd)
+        winners = [m for m in mints if peaks.get(m, (0, 0))[0] >= win]
+        ws = set(winners)
+        return peaks, winners + [m for m in mints if m not in ws]
+
+    async def backfill_next(self) -> tuple[str, int] | None:
+        """Next past token to read (the list is rebuilt at most once an hour)."""
         if not self._backfill and time.time() - self._backfill_ts >= 3600:
             self._backfill_ts = time.time()
-            self._bot_peaks = self.bot_peaks()
-            done = {r["mint"] for r in self.store.q("SELECT mint FROM sw_tokens")}
-            mints = [r["mint"] for r in self.store.q("SELECT mint, MAX(start_ts) AS t FROM shadow WHERE mint LIKE "
-                                                     "'%pump' GROUP BY mint ORDER BY t DESC")]
-            win = float(self.c.win_mcap_usd)
-            winners = [m for m in mints if self._bot_peaks.get(m, (0, 0))[0] >= win]
-            ws = set(winners)
-            self._backfill = [m for m in winners + [m for m in mints if m not in ws] if m not in done]
+            self._bot_peaks, todo = await asyncio.to_thread(self._backfill_list)
+            self._backfill = [m for m in todo if m not in self._scanned]
             self._backfill.reverse()                        # pop() from the end
         while self._backfill:
             m = self._backfill.pop()
@@ -407,14 +618,13 @@ class SmartWallets:
         c = self.c
         last_peaks = last_score = 0.0
         last_watch: dict[str, float] = {}
-        self.rescore()
         while not stop.is_set():
             t = time.time()
             try:
                 if t - last_score >= float(c.rescore_minutes) * 60:
                     last_score = t
                     n0 = len(self.smart)
-                    self.rescore()
+                    await self.rescore_async()
                     if len(self.smart) != n0:
                         self.emit("info", f"smart wallets: {len(self.smart)} (>= {c.min_wins} early buys that reached "
                                           f"${float(c.win_mcap_usd) / 1000:.0f}k, hit rate >= "
@@ -423,15 +633,18 @@ class SmartWallets:
                     last_peaks = t
                     await self.track_peaks()
                 for mint, symbol, stage in watched():
-                    if self.smart and time.time() - last_watch.get(mint, 0) >= float(c.watch_seconds):
+                    every = float(c.watch_seconds if stage == "position" else c.watch_analyst_seconds)
+                    if self.smart and time.time() - last_watch.get(mint, 0) >= every:
                         last_watch[mint] = time.time()
                         await self.watch(mint, symbol, stage)
+                if self.smart:
+                    await self.lookup_funders(1)
                 todo = next(((m, s) for m, s in followed() if m.endswith("pump") and not self.scanned(m)), None)
                 if todo:
                     await self._scan_safe(todo[0], todo[1], "follow")
                     continue
                 if c.backfill:
-                    nxt = self.backfill_next()
+                    nxt = await self.backfill_next()
                     if nxt:
                         await self._scan_safe(nxt[0], "", "backfill", nxt[1])
                         self.stats["backfilled"] += 1

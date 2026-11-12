@@ -197,7 +197,8 @@ def test_readiness_and_report(tmp_path):
     chains = {m: chain(m, "D" + m, ["A"]) for m in ("W1pump", "W2pump", "L1pump")}
     rpc = Rpc(chains)
     sw = SmartWallets(st, rpc, None, cfg(ready_min_decided_tokens=3, ready_min_winners=2,
-                                         ready_min_smart_wallets=1, min_hit_rate=0.5))
+                                         ready_min_smart_wallets=1, min_hit_rate=0.5,
+                                         ready_min_validation_tokens=0, ready_min_lift=0))
     rep = asyncio.run(sw.report("Xpump"))
     assert rep["ready"] is False and "0/3 tokens decided" in rep["why"]
     for m in chains:
@@ -216,3 +217,109 @@ def test_readiness_and_report(tmp_path):
     rep = asyncio.run(sw.report(mint, "TOK"))
     assert rep["ready"] and rep["holders"] == 1 and rep["wallets"] == [real[:6]]
     assert st.q("SELECT stage FROM sw_hits")[0]["stage"] == "analyst"
+
+
+# ── devil's-advocate safeguards (2026-11-12) ──
+def _decided(st, won: dict, creators: dict | None = None):
+    st.db.execute("UPDATE sw_tokens SET create_ts=?", (time.time() - 7200,))
+    for m, w in won.items():
+        st.db.execute("UPDATE sw_tokens SET won=? WHERE mint=?", (int(w), m))
+    for m, cr in (creators or {}).items():
+        st.db.execute("UPDATE sw_tokens SET creator=? WHERE mint=?", (cr, m))
+
+
+def test_dust_buys_and_one_win_per_operator(tmp_path):
+    st = Store(tmp_path / "p.db")
+    chains = {m: chain(m, "D" + m, ["A", "B"]) for m in ("W1pump", "W2pump", "W3pump")}
+    rpc = Rpc(chains)
+    for m in chains:                       # B buys dust (0.01 SOL) everywhere
+        for sig, _, _, tx in chains[m]:
+            if tx["transaction"]["message"]["accountKeys"][0]["pubkey"] == "B":
+                tx["meta"]["postBalances"][0] = tx["meta"]["preBalances"][0] - int(0.01e9)
+    sw = SmartWallets(st, rpc, None, cfg(min_wins=2, min_tokens=2, min_hit_rate=0.5))
+    for m in chains:
+        asyncio.run(sw.scan(m))
+    _decided(st, {m: 1 for m in chains})
+    assert set(sw.rescore()) == {"A"}                                   # B's dust buys are not scored
+    # the same operator (one funder behind 3 fresh creators) relaunching = one win, not three
+    for m in chains:
+        st.save_wallet_funder({"wallet": "D" + m, "funder": "BOSS", "complete": True, "hub": False})
+    assert sw.rescore() == {}
+
+
+def test_no_self_proof_and_insiders_sellers_operators(tmp_path):
+    from solders.pubkey import Pubkey
+
+    from desk.devwatch import ata
+    st = Store(tmp_path / "p.db")
+    S1, S2, S3, INS, mint = (str(Pubkey.new_unique()) for _ in range(5))
+    chains = {"W1pump": chain("W1pump", "D1", [S1, S2, S3, INS]), "W2pump": chain("W2pump", "D2", [S1, S2, S3, INS]),
+              mint: chain(mint, "D3", [S1])}
+    rpc = Rpc(chains)
+    sw = SmartWallets(st, rpc, None, cfg(min_wins=2, min_tokens=2, min_hit_rate=0.5, ready_min_decided_tokens=1,
+                                         ready_min_winners=1, ready_min_smart_wallets=1,
+                                         ready_min_validation_tokens=0, ready_min_lift=0))
+    for m in chains:
+        asyncio.run(sw.scan(m))
+    _decided(st, {"W1pump": 1, "W2pump": 1, mint: 1})
+    sw.rescore()
+    assert {S1, S2, S3, INS} <= set(sw.smart)
+    assert sw.smart_for(S1, mint) is not None                         # 2 other winners: still smart without it
+    sw.c.min_wins = 3
+    sw.rescore()
+    assert S1 in sw.smart and sw.smart_for(S1, mint) is None          # smart only thanks to this very token
+    sw.c.min_wins = 2
+    sw.rescore()
+    # S2 and S3 are one operator (same funder); INS is funded by the creator's funder
+    st.save_wallet_funder({"wallet": S2, "funder": "OP", "complete": True, "hub": False})
+    st.save_wallet_funder({"wallet": S3, "funder": "OP", "complete": True, "hub": False})
+    st.save_wallet_funder({"wallet": INS, "funder": "CREATORFUNDER", "complete": True, "hub": False})
+    acc = lambda n: {"data": {"parsed": {"info": {"tokenAmount": {"uiAmountString": str(n)}}}}}   # noqa: E731
+    new = str(Pubkey.new_unique())
+    rpc.holdings = {ata(w, new): acc(100) for w in (S1, S2, S3, INS)}
+    rep = asyncio.run(sw.report(new, "NEW", creator="DEV", creator_funder="CREATORFUNDER"))
+    assert rep["holders"] == 2 and rep["skipped"] == {"insider": 1, "same_operator": 1}
+    sw._hcache.clear()
+    rpc.holdings[ata(S1, new)] = acc(30)                              # S1 sold 70% of what it held
+    rep = asyncio.run(sw.report(new, "NEW", creator="DEV", creator_funder="CREATORFUNDER"))
+    assert rep["holders"] == 1 and rep["skipped"]["selling"] == 1
+
+
+def test_validation_out_of_sample(tmp_path):
+    st = Store(tmp_path / "p.db")
+    c = cfg(min_wins=2, min_tokens=2, min_hit_rate=0.5)
+    sw = SmartWallets(st, Rpc({}), None, c)
+    now = time.time()
+    # 20 decided tokens over time; GOOD buys early in the winners, the rest is noise
+    ins_t = "INSERT INTO sw_tokens(mint,creator,create_ts,complete,won,scanned_ts) VALUES(?,?,?,?,?,?)"
+    ins_b = "INSERT INTO sw_trades(mint,wallet,sig,ts,side,sol,signer,bundle,creator) VALUES(?,?,?,?,?,?,?,?,?)"
+    for i in range(20):
+        won = int(i % 4 == 0)
+        m = f"T{i}pump"
+        st.db.execute(ins_t, (m, f"DEV{i}", now - 3 * 86400 + i * 3600, 1, won, now))
+        st.db.execute(ins_b, (m, "NOISE", f"s{i}n", now, "buy", 0.5, 1, 0, 0))
+        if won:
+            st.db.execute(ins_b, (m, "GOOD", f"s{i}g", now, "buy", 0.5, 1, 0, 0))
+    v = sw.validate(now)
+    assert v["test_tokens"] == 6 and v["n"] == 1 and v["wins"] == 1
+    assert abs(v["base"] - 1 / 6) < 1e-9 and abs(v["lift"] - 6.0) < 1e-9  # picked on the old 14, right on the new 6
+    sw._validation = v
+    c.ready_min_validation_tokens, c.ready_min_lift = 3, 1.2
+    sw.smart = {"GOOD": {}}
+    c.ready_min_decided_tokens = c.ready_min_winners = c.ready_min_smart_wallets = 1
+    sw._ready = {}
+    r = sw.readiness(now)
+    assert not r["ready"] and "out-of-sample check on 1/3" in r["why"]
+
+
+def test_rescore_async_reads_in_a_thread_same_result(tmp_path):
+    st = Store(tmp_path / "p.db")
+    chains = {m: chain(m, "D" + m, ["A", "B"]) for m in ("W1pump", "W2pump", "L1pump")}
+    sw = SmartWallets(st, Rpc(chains), None, cfg(min_wins=2, min_tokens=2, min_hit_rate=0.5))
+    for m in chains:
+        asyncio.run(sw.scan(m))
+    _decided(st, {"W1pump": 1, "W2pump": 1, "L1pump": 0})
+    sync = dict(sw.rescore())
+    sw.smart = {}
+    assert set(asyncio.run(sw.rescore_async())) == set(sync) == {"A", "B"}
+    assert st.q("SELECT COUNT(*) AS n FROM sw_smart")[0]["n"] == 2

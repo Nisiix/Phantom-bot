@@ -277,8 +277,11 @@ class Analyst(Agent):
 
     async def _whales(self, mint: str, symbol: str) -> dict | None:
         """The Whale checker's report on this token, or None when it cannot answer (never blocks scoring)."""
+        d = self.desk
         try:
-            return await self.desk.smart.report(mint, symbol)
+            g = d.devwatch.groups.get(mint) if d.devwatch is not None else None
+            insiders = set((g.wallets or {}).keys()) if g is not None else set()
+            return await d.smart.report(mint, symbol, d.creators.get(mint), d.funders.get(mint), insiders)
         except Exception:  # noqa: BLE001 - a Whale checker problem must never stop a verdict
             return None
 

@@ -57,7 +57,8 @@ def load(db_path, mints: set[str]) -> tuple[list[dict], dict[str, dict]]:
     out: dict[str, dict] = {}
     try:
         try:
-            hits = [dict(r) for r in db.execute("SELECT mint, wallet, ts, stage FROM sw_hits")]
+            # the Analyst's hits: counted with every safeguard (insiders, self-proof, sellers, one per operator)
+            hits = [dict(r) for r in db.execute("SELECT mint, wallet, ts, stage FROM sw_hits WHERE stage='analyst'")]
             for r in db.execute("SELECT mint, peak_mcap, create_ts, scanned_ts FROM sw_tokens"):
                 out[r["mint"]] = {"peak": float(r["peak_mcap"] or 0),
                                   "first_ts": r["create_ts"] or r["scanned_ts"]}

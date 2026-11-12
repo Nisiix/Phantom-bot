@@ -261,11 +261,16 @@ class SmartWalletsCfg:
     min_hit_rate: float = 0.3           # wins / tokens bought early
     max_smart_wallets: int = 300        # watched with getMultipleAccounts (100 per call)
     rescore_minutes: float = 30.0
-    watch_seconds: float = 60.0         # tokens the Analyst follows + open positions: smart holders read this often
+    watch_seconds: float = 60.0         # open positions: smart holders read this often
+    watch_analyst_seconds: float = 300.0  # the Analyst's tokens (it also asks at every re-score, cached 60 s)
+    min_buy_sol: float = 0.05           # early buys smaller than this are not scored (volume / spam bots)
     # Report to the Analyst (user 2026-11-12): used only with sufficient data, otherwise ignored.
     ready_min_decided_tokens: int = 300  # tokens read and decided (won, or older than decide_hours)
     ready_min_winners: int = 20          # ...of which reached win_mcap_usd
     ready_min_smart_wallets: int = 5
+    ready_min_validation_tokens: int = 15  # out-of-sample check: newer tokens with a smart early buyer...
+    ready_min_lift: float = 1.2           # ...that won at least this many times the base rate
+    validation_lookback_days: float = 14.0
     analyst_timeout_seconds: float = 15.0  # holders not read in time -> the Analyst scores without them
 
 
