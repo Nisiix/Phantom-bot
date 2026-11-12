@@ -59,16 +59,16 @@ def test_activity_view(tmp_path):
     assert api.startswith(b"HTTP/1.1 200") and b'"events"' in api
 
 
-def test_funnel_survives_restart(tmp_path):
+def test_funnel_survives_restart_and_paper_reset(tmp_path):
     dash = make_dash(tmp_path)
     st = dash.desk.store
     st.kv_set("paper_reset_ts", 100.0)
-    st.add_decision(50.0, "executor", "buy", "OLD", "OLD", "before reset", {})        # before the reset: ignored
+    st.add_decision(50.0, "executor", "buy", "OLD", "OLD", "before reset", {})        # before the reset: still counted
     for mint in ("A", "B", "C"):
         st.add_decision(200.0, "filter", "reject", mint, mint, "low volume", {})
     st.add_decision(201.0, "filter", "pass", "A", "A", "ok", {})
     st.add_decision(202.0, "analyst", "approve", "A", "A", "0.7", {})
     st.add_decision(203.0, "executor", "buy", "A", "A", "bought", {})
     s = json.loads(dash.state_json())       # agent counters are all zero (fresh start), the log isn't
-    assert [f["n"] for f in s["funnel"]] == [3, 1, 1, 1]
-    assert s["funnel_since"] == 100.0 and s["filter_evals"] == 4
+    assert [f["n"] for f in s["funnel"]] == [3, 1, 1, 2]       # a paper reset never zeroes the pipeline
+    assert s["funnel_since"] == 50.0 and s["filter_evals"] == 4

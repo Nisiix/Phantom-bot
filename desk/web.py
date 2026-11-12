@@ -125,14 +125,18 @@ class Dashboard:
         }
 
     def funnel(self) -> tuple[dict, float]:
-        """Pipeline counts since the last paper reset (all history if never reset), from the decision log,
-        so a restart doesn't zero them. Cached for 15 s: it's a COUNT over the log."""
+        """Pipeline counts over the whole decision log, so neither a restart nor a paper reset zeroes them
+        (user rule 2026-11-12: a reset of the balance/account value touches only the balance, never the pipeline
+        of examined / promoted / approved / bought tokens). `since` = first logged decision, for the label.
+        Cached for 15 s: it's a COUNT over the log."""
         t = time.time()
         if t - self._funnel[0] > 15.0:
             st = self.desk.store
-            since = float(st.kv_get("paper_reset_ts", 0) or 0) if self.desk.cfg.mode == "paper" else 0.0
+            since = 0.0
             try:
-                self._funnel = (t, st.funnel_since(since), since)
+                first = st.q("SELECT MIN(ts) AS t FROM decisions")
+                since = float(first[0]["t"] or 0.0) if first else 0.0
+                self._funnel = (t, st.funnel_since(0.0), since)
             except Exception:  # noqa: BLE001
                 self._funnel = (t, {"seen": 0, "passed": 0, "approved": 0, "bought": 0, "filter_checks": 0}, since)
         return self._funnel[1], self._funnel[2]

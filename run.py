@@ -95,6 +95,8 @@ def reset_paper(cfg, balance_sol: float | None = None) -> str:
 
     NEVER removes learning data (the bot's historical memory): shadow follow-ups and price paths, QUANT outcomes,
     decisions/events, rug ledger, Risk's per-token memory, Controller state, market history.
+    Touches only the balance / account value: the dashboard pipeline (examined, promoted, approved, bought tokens)
+    counts the whole decision log and is never zeroed by a reset.
     Removes paper trades, open paper positions, the equity curve and the balance/streak state from the account
     (trades and equity are moved to archive tables: the live gate keeps counting them, so a reset never
     restarts or shortcuts the paper record needed for live). Keeps what the desk
@@ -125,7 +127,7 @@ def reset_paper(cfg, balance_sol: float | None = None) -> str:
     store.kv_set("paper_reset_ts", time.time())
     return (f"Paper account reset to {bal:g} SOL: removed {n_trades} trades, "
             f"{n_pos} open positions and the equity curve. Backup: {backup.name}. "
-            "Learning data (60-min follow-ups, QUANT outcomes) kept; the live-gate record keeps every trade.")
+            "Learning data (60-min follow-ups, QUANT outcomes) and the token pipeline counters kept; the live-gate record keeps every trade.")
 
 
 def pending_reset(cfg) -> None:
