@@ -87,8 +87,9 @@ identity_tg_min_members = 20       # linked Telegram group/channel that exists w
 
 [analyst]
 min_score = 0.65             # user rule: under 0.6 = no trade (can only be raised). 0.65: Controller proposal 2026-11-10
-# Score weights (Controller proposal 2026-11-10, "promettente" on 82 tokens; remove the line to go back to the built-in ones)
-weights = { liquidity = 0.13, turnover = 0.07, buy_pressure = 0.23, momentum = 0.06, holders = 0.07, hygiene = 0.04, website = 0.31, maturity = 0.10 }
+# Score weights: applied by the Controller on 2026-11-11 20:00 UTC (decision #5, "promettente" on 42 tokens), kept
+# by the user on 2026-11-12 and moved here from data/controller_overrides_paper.json. Remove the line for the built-in ones.
+weights = { liquidity = 0.03, turnover = 0.03, buy_pressure = 0.28, momentum = 0.03, holders = 0.09, hygiene = 0.02, website = 0.51, maturity = 0.02 }
 website_check = true
 # Claude reads the website and judges if it looks legit & "tasty".
 # Used only when ANTHROPIC_API_KEY is set in .env.
@@ -158,8 +159,8 @@ hard_stop_pct = -4.0          # user rule: hard stop at -6% (can only be tighten
 paper_hard_stop_pct = -25.0   # PAPER ONLY, user's choice 2026-11-11: trial of a stop wider than the -6% hard limit
                               # (Controller measure "Stop più larghi": -25% did +5.8 pts/token on 41 tokens, still uncertain).
                               # 0 = off. Live always uses hard_stop_pct (max -6%). Range -30..0.
-trail_activate_pct = 25.0     # user rule: trailing starts only after +12% (25: Controller proposal 2026-11-10)
-trail_distance_pct = 8.0      # trailing stop distance below the peak (8: Controller proposal 2026-11-10)
+trail_activate_pct = 30.0     # user rule: trailing starts only after +12% (30: Controller 2026-11-11, kept by the user 2026-11-12)
+trail_distance_pct = 6.0      # trailing stop distance below the peak (6: Controller 2026-11-11, kept by the user 2026-11-12)
 cooldown_after_loss_minutes = 20     # unused: after a loss only that token is blocked (forever), other pairs stay open
 max_consecutive_losses = 3           # ...and a longer pause after a losing streak
 streak_pause_minutes = 0               # 0 = no pause after a losing streak (set e.g. 30 to pause new buys after 3 losses in a row)
