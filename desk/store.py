@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS rug_ledger (wallet TEXT PRIMARY KEY, mint TEXT, reaso
 CREATE TABLE IF NOT EXISTS rugged_names (key TEXT PRIMARY KEY, mint TEXT, symbol TEXT, reason TEXT, ts REAL);
 CREATE TABLE IF NOT EXISTS token_links (link TEXT, mint TEXT, ts REAL, PRIMARY KEY (link, mint));
 CREATE TABLE IF NOT EXISTS dev_groups (mint TEXT PRIMARY KEY, data TEXT, ts REAL);
+CREATE TABLE IF NOT EXISTS wallet_funders (wallet TEXT PRIMARY KEY, funder TEXT, sol REAL, first_ts REAL, n INTEGER,
+    complete INTEGER, hub INTEGER, ts REAL);
+CREATE INDEX IF NOT EXISTS wallet_funders_funder ON wallet_funders(funder);
 """
 
 
@@ -137,6 +140,32 @@ class Store:
 
     def ruggers(self) -> dict[str, dict]:
         return {r["wallet"]: r for r in self.q("SELECT * FROM rug_ledger")}
+
+    # ── who funded a wallet (desk/funding.py; learning data, never deleted) ──
+    def wallet_funder(self, wallet: str) -> dict | None:
+        rows = self.q("SELECT * FROM wallet_funders WHERE wallet=?", (wallet,))
+        if not rows:
+            return None
+        r = dict(rows[0])
+        r["complete"], r["hub"] = bool(r["complete"]), bool(r["hub"])
+        return r
+
+    def save_wallet_funder(self, r: dict) -> None:
+        self.db.execute("INSERT OR REPLACE INTO wallet_funders(wallet,funder,sol,first_ts,n,complete,hub,ts) "
+                        "VALUES(?,?,?,?,?,?,?,?)", (r["wallet"], r.get("funder"), r.get("sol") or 0.0,
+                                                    r.get("first_ts"), r.get("n") or 0, int(bool(r.get("complete"))),
+                                                    int(bool(r.get("hub"))), time.time()))
+
+    def rugged_siblings(self, funder: str) -> list[dict]:
+        """Wallets funded by `funder` that are in the rug ledger."""
+        return [dict(r) for r in self.q("SELECT l.wallet, l.mint, l.reason FROM wallet_funders f "
+                                        "JOIN rug_ledger l ON l.wallet = f.wallet WHERE f.funder=? AND f.hub=0 "
+                                        "LIMIT 3", (funder,))]
+
+    def ledger_without_funder(self, limit: int = 50) -> list[str]:
+        return [r["wallet"] for r in self.q("SELECT l.wallet FROM rug_ledger l LEFT JOIN wallet_funders f "
+                                            "ON f.wallet = l.wallet WHERE f.wallet IS NULL ORDER BY l.ts DESC "
+                                            "LIMIT ?", (limit,))]
 
     def rugger(self, wallet: str | None) -> dict | None:
         """Single indexed lookup (the ledger only grows: never load all of it per token)."""

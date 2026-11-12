@@ -40,6 +40,7 @@ import time
 from ..clients.feeds import is_pump_copycat, is_pump_token
 from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
 from ..devwatch import linked_wallets
+from ..funding import Funding
 from ..onchain_lp import OnchainLP
 from ..pools import quote_ok
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
@@ -190,13 +191,37 @@ class Filter(Agent):
         # mint -> [ts, top10 %] of the last reading above spread_top10_high_pct (survives restarts)
         self._top10_high: dict[str, list] = desk.store.kv_get("filter_top10_high", {}) or {}
         self.onchain = OnchainLP(desk.rpc, private_rpc="api.mainnet-beta.solana.com" not in rpc_url)
+        self.funding = Funding(desk.store, desk.rpc, int(self.f.funder_hops), int(self.f.funder_hub_signatures))
 
     async def run(self) -> None:
         self.status("idle")
         n = max(1, int(self.f.deep_workers))
         self.emit("info", f"Filter online: mint/LP/top10/volume/dev-rug kills armed ({n} deep-check workers)")
         await asyncio.gather(self.supervised("filter-screen", self.loop),
-                             *(self.supervised(f"filter-deep-{i}", self.deep_loop) for i in range(n)))
+                             *(self.supervised(f"filter-deep-{i}", self.deep_loop) for i in range(n)),
+                             self.supervised("filter-funders", self.funder_backfill))
+
+    async def funder_backfill(self) -> None:
+        """Look up who funded the wallets already in the rug ledger (slowly, public RPC), so a new creator funded
+        by the same wallet as an old rugger is caught (desk/funding.py)."""
+        every = float(self.f.funder_backfill_seconds)
+        if not self.f.funder_check or every <= 0 or self.desk.rpc is None:
+            return
+        while not self.desk.stop.is_set():
+            todo = self.desk.store.ledger_without_funder(20)
+            if not todo:
+                await asyncio.sleep(300)
+                continue
+            for w in todo:
+                if self.desk.stop.is_set():
+                    return
+                try:
+                    await self.funding.funder(w)
+                    self.state.bump("funders_backfilled")
+                except Exception:  # noqa: BLE001 - RPC busy: try again later
+                    self.state.bump("funder_errors")
+                    await asyncio.sleep(30)
+                await asyncio.sleep(every)
 
     async def loop(self) -> None:
         """Stage 1 — cheap market screen, batched (30 mints per DexScreener call).
@@ -469,6 +494,26 @@ class Filter(Agent):
         checks.append(Check("dev_rug_link", not rug_reasons, "; ".join(rug_reasons) or "clean", "clean",
                             "; ".join(rug_reasons) or f"dev {str(creator)[:6]} clean ({len(prior)} prior)",
                             permanent=bool(rug_reasons)))
+        # 5b. Who funded the creator (user 2026-11-12): a fresh wallet paid by a rugger, or by a wallet that paid
+        # another rugging creator, is the same operator (desk/funding.py).
+        if creator and f.funder_check and not rug_reasons:
+            try:
+                why, chain = await self.funding.check(creator)
+            except Exception as e:  # noqa: BLE001 - RPC down: not judged, retried on the next check
+                why, chain = None, []
+                self.state.bump("funder_errors")
+                checks.append(Check("funder_rug_link", True, "n/a", "clean",
+                                    f"funder not read ({e.__class__.__name__}): retried next check"))
+            else:
+                first = next((r["funder"] for r in chain if r.get("funder") and not r.get("hub")), None)
+                if first:
+                    self.desk.funders.setdefault(cand.mint, first)
+                desc = " <- ".join(f"{(r.get('funder') or '?')[:6]}{' (exchange)' if r.get('hub') else ''}"
+                                   for r in chain) or "unknown"
+                checks.append(Check("funder_rug_link", why is None, why or "clean", "clean",
+                                    why or f"funded by {desc}", permanent=why is not None))
+                if why:
+                    rug_reasons.append(why)
         if rug_reasons and creator:
             self.desk.store.add_rugger(creator, cand.mint, rug_reasons[0][:120])
 

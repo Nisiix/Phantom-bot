@@ -73,6 +73,13 @@ class FilterCfg:
     allowed_quote_mints: list = field(default_factory=lambda: list(DEFAULT_QUOTES))
     serial_dev_min_launches: int = 3
     serial_dev_dead_ratio: float = 0.8
+    # Who funded the creator (user 2026-11-12, desk/funding.py): block a buy when the creator's funder (up to
+    # funder_hops wallets up) is in the rug ledger or funded another wallet that is. Hubs (exchanges: >=
+    # funder_hub_signatures transactions in the last hour) are never used for a link.
+    funder_check: bool = True
+    funder_hops: int = 2
+    funder_hub_signatures: int = 1000
+    funder_backfill_seconds: float = 4.0   # one ledger wallet looked up every N s in the background (0 = off)
     deep_workers: int = 3               # parallel deep checks (RugCheck keeps its own rate limit)
     deep_max_wait_seconds: float = 60   # drop queued deep checks whose market data got stale
     # Instant-rug guards (2026-11-10: 16 of 32 paper trades lost 60-100%, all bought 5-26 min after graduation).
