@@ -544,7 +544,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
 
     def r_sample(rng):
         while True:
-            v = {"hard_stop_pct": rng.choice(stops), "trail_activate_pct": rng.choice(trail_on),
+            v = {**cur_r, "hard_stop_pct": rng.choice(stops), "trail_activate_pct": rng.choice(trail_on),
                  "trail_distance_pct": rng.choice(dists), "max_hold_minutes": rng.choice(holds),
                  "profit_lock_activate_pct": rng.choice(lock_on),
                  "profit_lock_fast_activate_pct": rng.choice(lock_fast), "profit_lock_pct": rng.choice(lock_at),
@@ -743,8 +743,10 @@ def evaluate_space(sp: Space, rng: random.Random, n_random: int, previous: list[
     variants = {_key(sp.current): sp.current}
     # Winners saved before a setting existed (e.g. profit_lock_fee_multiple, 2026-11-11) lack its key: they take
     # the current value for it, so the stored memory keeps competing instead of crashing the round.
-    previous = [{**sp.current, **v} if isinstance(v, dict) and isinstance(sp.current, dict) else v for v in previous]
+    def full(v):
+        return {**sp.current, **v} if isinstance(v, dict) and isinstance(sp.current, dict) else v
     for v in sp.grid + [sp.sampler(rng) for _ in range(n_random)] + previous:
+        v = full(v)
         variants.setdefault(_key(v), v)
     base = sp.returns(sp.current)
     vecs = {k: sp.returns(v) for k, v in variants.items()}

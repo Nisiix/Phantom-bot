@@ -437,3 +437,15 @@ def test_saved_winners_from_before_a_new_setting_still_compete():
     res, tried = evaluate_space(sp, _random.Random(1), 0, [{"a": 5.0}], 0.3, 30)
     best = next(r for r in res if r["situation"] == "all")
     assert tried == 2 and best["variant"] == {"a": 5.0, "new_key": 2.0} and best["changes"] == ["a = 5"]
+
+
+def test_sampled_variants_missing_a_new_setting_do_not_crash():
+    """A random variant built without a newer key (profit_lock_keep_low_pct, 2026-11-12) takes the current value."""
+    import random as _random
+    from desk.controller import Space, evaluate_space
+    rows = [{"ts": i, "sit": ["all"]} for i in range(60)]
+    cur = {"a": 1.0, "new_key": 2.0}
+    sp = Space("Risk", rows, cur, lambda v: [v["a"] * v["new_key"]] * len(rows), [{"a": 3.0}], lambda rng: {"a": 5.0},
+               lambda v: [f"{k} = {v[k]:g}" for k in cur if abs(v[k] - cur[k]) > 1e-9], "note")
+    res, _ = evaluate_space(sp, _random.Random(1), 3, [], 0.3, 30)
+    assert next(r for r in res if r["situation"] == "all")["changes"] == ["a = 5"]
