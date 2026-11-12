@@ -16,7 +16,8 @@ from collections import Counter, deque
 
 from .. import controller_memory as mem
 from .. import model as ml
-from ..controller import (build_report, health_checks, profit_lock_section, proposals, reason_category,
+from .. import whale_audit as wa
+from ..controller import (build_report, health_checks, parse_rows, profit_lock_section, proposals, reason_category,
                           run_experiments)
 from .base import Agent
 
@@ -53,6 +54,9 @@ class Controller(Agent):
         self.last_applied: dict = st.get("last_applied", {})
         self._announced: set[str] = set()
         self.model_new: dict | None = None
+        # How precise the Whale checker is (desk/whale_audit.py, user 2026-11-12): recomputed every test round.
+        self.whale_new: dict | None = None
+        self.whale_res: dict | None = (desk.store.kv_get("controller_last", {}) or {}).get("whale")
         self.model_res: dict | None = (desk.store.kv_get("ml_model", {}) or {}).get("last") or None
         # Survive restarts: last report, last test round and last checks are shown again right away.
         last = desk.store.kv_get("controller_last", {}) or {}
@@ -177,6 +181,11 @@ class Controller(Agent):
         (its result is left in self.model_new for the event loop)."""
         an, fi, rej = self._load()
         exp = run_experiments(self.cfg, an, fi, rej, self.best, reviews=reviews)
+        self.whale_new = None
+        try:
+            self.whale_new = self.whale_audit(an)
+        except Exception as e:  # noqa: BLE001 - the audit is a report: it must never stop a round
+            self.whale_new = {"error": f"{e.__class__.__name__}: {e}"}
         self.model_new = None
         if self.cfg.model.enabled:
             try:
@@ -185,6 +194,18 @@ class Controller(Agent):
                 self.model_new = {"t": time.time(), "rows": len(an), "min_rows": self.cfg.model.min_rows,
                                   "verdict": "errore", "why": f"errore di addestramento: {e.__class__.__name__}: {e}"}
         return exp
+
+    def whale_audit(self, analyst_raw: list[dict]) -> dict | None:
+        """Precision of the Whale checker's information on the logged tokens (worker thread, read-only)."""
+        sw = self.cfg.smart_wallets
+        if not sw.enabled:
+            return None
+        rows = parse_rows(analyst_raw, self.cfg.analyst.young_age_hours * 60, self.cfg)
+        hits, tokens = wa.load(self.desk.store.path, {r["mint"] for r in rows})
+        return wa.audit(rows, hits, tokens, self.cfg.analyst.min_score, sw.win_mcap_usd, sw.decide_hours)
+
+    def _whale(self) -> dict | None:
+        return self.whale_res if self.whale_res and "error" not in self.whale_res else None
 
     def _save_state(self) -> None:
         self.desk.store.kv_set("controller_state", {"rounds": self.rounds, "trials": self.trials, "best": self.best,
@@ -283,6 +304,9 @@ class Controller(Agent):
                         self.emit("risk", msg)
                     self.state.counters["model"] = 1 if gate.active else 0
             self.exp = exp
+            prev_whale = self.whale_res
+            self.whale_res = self.whale_new
+            self.whale_note(prev_whale)
             self.rounds += 1
             self.trials += exp["tried"]
             self.best = exp["best"]
@@ -311,6 +335,7 @@ class Controller(Agent):
         """Everything the Controller would change, for the user to decide: the tests' winners, going back from a
         decision the data disproved, switching on the model's block."""
         out = list(proposals(self.exp, self.cfg)) if self.exp else []
+        out += wa.proposals(self._whale(), self.cfg)
         try:
             out += mem.rollback_proposals(self.desk.store, self.cfg)
         except Exception:  # noqa: BLE001 - report only
@@ -335,14 +360,49 @@ class Controller(Agent):
         self.report = build_report(self.health, self.exp, self.cfg, self.trials, self.rounds,
                                    mem.report_section(self.desk.store, self.cfg), self.all_proposals()) \
             + "\n\n" + "\n".join(profit_lock_section(self._exit_records(), self.cfg)) \
-            + ml.report_section(self.model_res, self.desk.model, self.cfg)
+            + ml.report_section(self.model_res, self.desk.model, self.cfg) \
+            + wa.report_section(self._whale(), self.cfg, self._readiness())
         self.report_ts = time.time()
         self.desk.store.kv_set("controller_last", {"report": self.report, "report_ts": self.report_ts,
-                                                   "exp": self.exp, "health": self.health})
+                                                   "exp": self.exp, "health": self.health,
+                                                   "whale": self.whale_res})
         path = self.cfg.data_dir / "reports" / f"controller_{self.cfg.mode}_latest.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.report, encoding="utf-8")
         return self.report
+
+    def _readiness(self) -> dict | None:
+        sw = getattr(self.desk, "smart", None)
+        try:
+            return sw.readiness() if sw is not None else None
+        except Exception:  # noqa: BLE001 - report only
+            return None
+
+    def whale_note(self, prev: dict | None) -> None:
+        """One line in the feed when the Whale checker's measured precision changes verdict."""
+        a = self._whale()
+        if not a:
+            if self.whale_res and "error" in self.whale_res:
+                self.emit("warn", f"Whale checker audit failed: {self.whale_res['error']}")
+            return
+        self.state.counters["whale_tokens"] = a["ready_rows"]
+
+        def verdict(x: dict | None) -> str:
+            if not x or "error" in x:
+                return ""
+            d, p = x["diff"], x["promoted"]
+            if p["n"] >= wa.MIN_GROUP and p["hi"] < 0:
+                return "bonus loses"
+            if d["ok"] and x["with"]["n"] >= wa.MIN_GROUP and x["without"]["n"] >= wa.MIN_GROUP:
+                return "better" if d["lo"] > 0 else "worse" if d["hi"] < 0 else "no clear difference"
+            return "not enough data"
+        v = verdict(a)
+        if v != verdict(prev):
+            prec = f"{100 * a['precision']:.0f}%" if a["precision"] is not None else "n/a"
+            base = f"{100 * a['base_rate']:.0f}%" if a["base_rate"] is not None else "n/a"
+            self.emit("info", f"Whale checker precision: {v} (tokens with smart holders {a['with']['n']}, "
+                              f"promoted by the bonus {a['promoted']['n']}, reached "
+                              f"${self.cfg.smart_wallets.win_mcap_usd / 1000:.0f}k {prec} vs base {base})")
 
     def summary(self) -> dict:
         """For the dashboard."""

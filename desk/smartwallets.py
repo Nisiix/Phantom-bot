@@ -222,9 +222,12 @@ class SmartWallets:
     async def track_peaks(self) -> int:
         """DexScreener check of the recent, undecided tokens. Returns how many readings moved a peak up."""
         t = time.time()
-        rows = self.store.q("SELECT mint, peak_mcap FROM sw_tokens WHERE won=0 AND complete=1 AND create_ts > ? "
-                            "AND peak_checked < ? LIMIT 300",
-                            (t - float(self.c.peak_track_hours) * 3600, t - float(self.c.peak_check_minutes) * 60))
+        # Every followed token, also the ones whose history was too long to read (create_ts unknown: scanned_ts),
+        # so the Controller can measure the Whale checker's precision on all of them (desk/whale_audit.py).
+        since = t - float(self.c.peak_track_hours) * 3600
+        rows = self.store.q("SELECT mint, peak_mcap FROM sw_tokens WHERE won=0 AND COALESCE(create_ts, scanned_ts) > ? "
+                            "AND peak_checked < ? ORDER BY peak_checked LIMIT 300",
+                            (since, t - float(self.c.peak_check_minutes) * 60))
         if not rows:
             return 0
         snaps = await self.dex.snapshots([r["mint"] for r in rows], fresh=True, lane="smart") or {}
