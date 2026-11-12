@@ -229,8 +229,9 @@ profit_lock_keep_high_from_pct = 50.0
 # Replay 2026-11-12 10:20 UTC (57 paths, current stops): 30% at +30% = -1.5 pts/token on all tokens ([-6.0, +3.0]),
 # -5.9 on the 19 approved ([-18.4, +6.5]), same losing trades: it gives up part of the big runs in exchange for a
 # surer profit on the ones that fall back. Not modelled in the Controller's replays. 0 = off.
-scale_out_at_pct = 30.0
-scale_out_fraction_pct = 30.0
+# OFF: the user withdrew it on 2026-11-12 after the replay above (back to selling the whole position).
+scale_out_at_pct = 0
+scale_out_fraction_pct = 0
 # Fee rule: the lock also waits until the NET profit is at least this many times the trade's round-trip fees
 # (1 = "profit = 100% of the fees"). With today's fees (median 2.5%, max 3.1%) the +8% level decides; it only
 # matters for an expensive token.
