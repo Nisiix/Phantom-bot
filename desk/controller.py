@@ -217,6 +217,10 @@ def health_checks(s: dict, old: dict | None = None) -> list[dict]:
         out.append(_f("info", "Executor", "segnali rifiutati dall'Executor",
                       f"{fu['exec_rejects']} rifiuti nell'ultima ora: {top}"))
 
+    # ── Whale checker: how well it collects the addresses (desk/whale_audit.py) ──
+    from .whale_audit import harvest_checks
+    out += harvest_checks(s.get("whale"))
+
     if not any(f["level"] in ("warn", "critical") for f in out):
         out.append(_f("ok", "Controller", "tutto regolare", "gli agenti rispettano le regole e lavorano"))
     order = {"critical": 0, "warn": 1, "info": 2, "ok": 3}
@@ -1035,6 +1039,9 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
                      "verifica. Più dati arrivano, più i test diventano precisi.")
     for p in props:
         lines.append(f"- {p['agent']} | {p['label']} | {'; '.join(p['changes'])}")
+        if p.get("kind") == "whale_harvest":
+            lines.append("    efficienza della raccolta (nessun effetto diretto sui trade): vedi la sezione Whale checker")
+            continue
         if p["also"]:
             lines.append(f"    vince anche in: {', '.join(p['also'])}")
         lines.append(f"    guadagno stimato {p['gain']:+.2f} punti % per token valutato, intervallo 95% "

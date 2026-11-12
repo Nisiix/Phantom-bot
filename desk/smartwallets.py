@@ -29,8 +29,8 @@ trades, the desk's own DexScreener readings for the market cap. No paid API, no 
 SAFEGUARDS (devil's-advocate review, 2026-11-12):
   * dust buys don't count: an early buy under `min_buy_sol` (0.1 SOL; volume/spam bots buy 0.001-0.01 SOL);
   * real money only (user 2026-11-12): a smart wallet must hold at least `min_balance_usd` ($500) in SOL + USDC +
-    USDT right now (read on-chain every rescore, one getMultipleAccounts per 100 wallets); below that it is kept in
-    `sw_smart` (balance_usd) but never counted for a token;
+    USDT right now (read on-chain every rescore, one getMultipleAccounts per 100 wallets); below that it is never
+    counted and NOT stored (user 2026-11-12: no space spent on them; its balance is kept in memory only);
   * one operator = one win: wins are counted on distinct creators (their funder when known), so a pump group
     relaunching through fresh creators with the same wallets does not collect a "win" per relaunch;
   * no self-proof: a token never counts as proof for itself - a holder is smart for THIS token only if it is still
@@ -52,6 +52,7 @@ import asyncio
 import re
 import sqlite3
 import time
+from collections import deque
 
 from .devwatch import SPL_TOKEN, ata
 from .funding import Funding
@@ -172,6 +173,12 @@ class SmartWallets:
         self.funding = Funding(store, _Paced(self), hops=1)
         self.stats = {"scanned": 0, "too_long": 0, "trades": 0, "errors": 0, "hits": 0, "backfilled": 0,
                       "reports": 0}
+        # How well the harvest works (read by the Controller, desk/whale_audit.py harvest checks)
+        self.calls = 0                              # RPC calls made by this engine since the start
+        self.started = time.time()
+        self._scans: deque = deque(maxlen=600)      # one entry per token read (or failed)
+        self._reps: deque = deque(maxlen=600)       # one entry per report to the Analyst
+        self.backlog = 0                            # followed tokens not read yet
 
     # ── RPC, paced: the public node is shared with the Filter, DevWatch and the funder backfill ──
     async def call(self, method: str, params: list):
@@ -180,6 +187,7 @@ class SmartWallets:
             if wait > 0:
                 await asyncio.sleep(wait)
             self._last_call = time.time()
+            self.calls += 1
         return await self.rpc.call(method, params, lane="smart")
 
     # ── 1. early buyers ──
@@ -189,8 +197,10 @@ class SmartWallets:
     async def scan(self, mint: str, symbol: str = "", source: str = "follow", max_pages: int | None = None) -> dict:
         """Read the create transaction and the first trades of `mint` from the chain and store them."""
         pages = int(max_pages or self.c.max_sig_pages)
+        t0, c0, used = time.time(), self.calls, 0
         before, oldest, complete = None, [], False
         for _ in range(max(1, pages)):
+            used += 1
             opt: dict = {"limit": 1000}
             if before:
                 opt["before"] = before
@@ -206,6 +216,8 @@ class SmartWallets:
         if not row["complete"]:
             self.stats["too_long"] += 1
             self._save_token(row)
+            self._scans.append({"t": time.time(), "secs": time.time() - t0, "calls": self.calls - c0, "pages": used,
+                                "complete": False, "trades": 0, "source": source})
             return row
         sigs = list(reversed(oldest))                    # oldest first: [0] is the create transaction
         create = sigs[0]
@@ -216,11 +228,14 @@ class SmartWallets:
         if keys:
             k = keys[0]
             row["creator"] = k.get("pubkey") if isinstance(k, dict) else k
-        # The creator's bundle (same slot as the create) is stored but does not use up the scan_trades budget:
-        # on 2026-11-12 tokens it filled the first 10-15 trades. At most 2 x scan_trades transactions are read.
-        rows, idx, reads = [], 0, 0
+        # Only USABLE trades use up the scan_trades budget (a buy of >= min_buy_sol signed by a wallet that is not the
+        # creator, outside the creator's same-slot bundle): measured 2026-11-12 on the first token read after the
+        # restart, 32 of 64 rows were dust buys and 22 the creator's bundle, 6 usable. Dust buys are not even stored
+        # (no space spent on them, user 2026-11-12). At most 2 x scan_trades transactions are read.
+        rows, idx, reads, useful, n_dust, n_bundle = [], 0, 0, 0, 0, 0
+        min_sol = float(self.c.min_buy_sol)
         for s in sigs[1:]:
-            if idx >= int(self.c.scan_trades) or reads >= 2 * int(self.c.scan_trades):
+            if useful >= int(self.c.scan_trades) or reads >= 2 * int(self.c.scan_trades):
                 break
             if s.get("err"):
                 continue
@@ -231,16 +246,30 @@ class SmartWallets:
             if not trades:
                 continue
             bundle = int(s.get("slot") is not None and s.get("slot") == row["create_slot"])
+            usable = False
             for t in trades:
+                creator = t["wallet"] == row["creator"]
+                if bundle:
+                    n_bundle += 1
+                elif t["side"] == "buy" and t["signer"] and not creator:
+                    if t["sol"] < min_sol:
+                        n_dust += 1
+                        continue                          # dust: not stored
+                    usable = True
                 rows.append((mint, t["wallet"], s["signature"], s.get("slot"), s.get("blockTime"), idx, t["side"],
-                             t["tokens"], t["sol"], int(t["signer"]), bundle, int(t["wallet"] == row["creator"])))
+                             t["tokens"], t["sol"], int(t["signer"]), bundle, int(creator)))
             if not bundle:
                 idx += 1
+            if usable:
+                useful += 1
         self.store.db.executemany("INSERT OR IGNORE INTO sw_trades VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", rows)
         row["n_trades"] = idx
         self._save_token(row)
         self.stats["scanned"] += 1
         self.stats["trades"] += idx
+        self._scans.append({"t": time.time(), "secs": time.time() - t0, "calls": self.calls - c0, "pages": used,
+                            "complete": True, "trades": idx, "reads": reads, "usable": useful, "dust": n_dust,
+                            "bundle": n_bundle, "source": source})
         return row
 
     def _save_token(self, r: dict) -> None:
@@ -363,7 +392,8 @@ class SmartWallets:
         self.store.db.executemany("INSERT INTO sw_smart(wallet,tokens,wins,hit_rate,sol_in,last_ts,ts,balance_usd) "
                                   "VALUES(?,?,?,?,?,?,?,?)",
                                   [(r["wallet"], r["tokens"], r["wins"], r["hit_rate"], r["sol_in"] or 0.0,
-                                    r["last_ts"], now, self._balance.get(r["wallet"])) for r in ranked])
+                                    r["last_ts"], now, self._balance.get(r["wallet"])) for r in ranked
+                                   if not self._poor(r["wallet"])])
         self.all_smart = {r["wallet"]: r for r in ranked}
         self.smart = {w: r for w, r in self.all_smart.items() if self.balance_ok(w)}
         self._contrib = contrib
@@ -371,6 +401,12 @@ class SmartWallets:
         self._ready = {}
 
     # ── real money only (user 2026-11-12) ──
+    def _poor(self, wallet: str) -> bool:
+        """Balance read and under min_balance_usd (an unread balance is not poor yet)."""
+        need = float(self.c.min_balance_usd)
+        b = self._balance.get(wallet)
+        return need > 0 and b is not None and b < need
+
     def balance_ok(self, wallet: str) -> bool:
         """At least min_balance_usd in SOL + USDC + USDT at the last reading (unknown = not yet: not counted)."""
         need = float(self.c.min_balance_usd)
@@ -407,7 +443,13 @@ class SmartWallets:
                     except (KeyError, TypeError, ValueError):
                         continue
         self._balance.update(usd)
-        self.store.db.executemany("UPDATE sw_smart SET balance_usd=? WHERE wallet=?", [(v, w) for w, v in usd.items()])
+        if len(self._balance) > 20000:                    # memory only: keep the wallets still in the list
+            self._balance = {w: v for w, v in self._balance.items() if w in self.all_smart}
+        need = float(self.c.min_balance_usd)
+        self.store.db.executemany("UPDATE sw_smart SET balance_usd=? WHERE wallet=?",
+                                  [(v, w) for w, v in usd.items() if v >= need])
+        # under the line: not stored at all (user 2026-11-12)
+        self.store.db.executemany("DELETE FROM sw_smart WHERE wallet=?", [(w,) for w, v in usd.items() if v < need])
         before = len(self.smart)
         self.smart = {w: {**r, "balance_usd": usd.get(w)} for w, r in self.all_smart.items() if self.balance_ok(w)}
         if len(self.smart) != before:
@@ -633,9 +675,12 @@ class SmartWallets:
         r = self.readiness()
         if not r["ready"]:
             return {"ready": False, "why": r["why"]}
+        t0 = time.time()
         try:
             held = await asyncio.wait_for(self.holders(mint), timeout=float(self.c.analyst_timeout_seconds))
         except Exception as e:  # noqa: BLE001 - RPC slow / down: the Analyst scores without it
+            self._reps.append({"t": time.time(), "secs": time.time() - t0, "timeout": True, "counted": 0,
+                               "entries_tried": 0, "entries_ok": 0})
             return {"ready": False, "why": f"holders not read in time ({e.__class__.__name__})"}
         self.stats["reports"] += 1
         inside = {w for w in (insiders or set()) if w} | {w for w in (creator, creator_funder) if w}
@@ -688,6 +733,8 @@ class SmartWallets:
                "entry_sol": entry, "premium_pct": round(prem, 1) if prem is not None else None}
         self.reports[mint] = {"ts": time.time(), "wallets": [w for w, _ in top], "entry_sol": entry,
                               "entries": entries}
+        self._reps.append({"t": time.time(), "secs": time.time() - t0, "timeout": False, "counted": len(counted),
+                           "entries_tried": min(5, len(top)), "entries_ok": len(entries)})
         if len(self.reports) > 2000:
             self.reports = dict(list(self.reports.items())[-1000:])
         if held:
@@ -699,6 +746,38 @@ class SmartWallets:
                               + (f"; their buy price {entry:.3g} SOL, now {prem:+.0f}%" if prem is not None else "")
                               + (f"; not counted: {sk}" if sk else ""), mint, symbol, wallets=out["wallets"])
         return out
+
+    # ── how well the harvest works (the Controller reads this) ──
+    def efficiency(self, window_h: float = 6.0, now: float | None = None) -> dict:
+        """Throughput and cost of the harvest over the last window_h hours (in-memory, cheap)."""
+        now = now or time.time()
+        since = now - window_h * 3600
+        sc = [x for x in self._scans if x["t"] >= since]
+        ok = [x for x in sc if x.get("complete")]
+        long_ = [x for x in sc if not x.get("complete") and not x.get("error")]
+        err = [x for x in sc if x.get("error")]
+        rp = [x for x in self._reps if x["t"] >= since]
+        span_h = max(1 / 60, min(window_h, (now - max(self.started, since)) / 3600))
+        tried = sum(x["entries_tried"] for x in rp)
+        avg = lambda xs: sum(xs) / len(xs) if xs else None      # noqa: E731
+        return {
+            "window_h": round(span_h, 2), "scans": len(sc), "complete": len(ok), "too_long": len(long_),
+            "errors": len(err), "tokens_per_hour": round(len(sc) / span_h, 1),
+            "secs_per_token": avg([x["secs"] for x in ok]), "calls_per_token": avg([x["calls"] for x in ok]),
+            "pages_per_token": avg([x["pages"] for x in ok]),
+            "calls_wasted_too_long": sum(x["calls"] for x in long_),
+            "calls_total": sum(x["calls"] for x in sc), "too_long_share": len(long_) / len(sc) if sc else None,
+            "usable_per_token": avg([x.get("usable", 0) for x in ok]), "dust": sum(x.get("dust", 0) for x in ok),
+            "tx_per_usable": (sum(x.get("reads", 0) for x in ok) / max(1, sum(x.get("usable", 0) for x in ok)))
+            if ok else None,
+            "calls_per_min": round(self.calls / max(1.0, (now - self.started) / 60), 1),
+            "lane_per_min": round(60 / max(0.01, float(self.c.rpc_interval_seconds)), 1),
+            "backlog": self.backlog, "backfill_left": len(self._backfill),
+            "reports": len(rp), "report_secs": avg([x["secs"] for x in rp if not x["timeout"]]),
+            "report_timeouts": sum(1 for x in rp if x["timeout"]),
+            "entries_tried": tried, "entries_ok": sum(x["entries_ok"] for x in rp),
+            "smart": len(self.smart), "smart_before_balance": len(self.all_smart),
+        }
 
     # ── background loop ──
     def _backfill_list(self) -> tuple[dict, list[str]]:
@@ -731,6 +810,8 @@ class SmartWallets:
             await self.scan(mint, symbol, source, pages)
             self._fails.pop(mint, None)
         except Exception:
+            self._scans.append({"t": time.time(), "secs": 0.0, "calls": 0, "pages": 0, "complete": False,
+                                "trades": 0, "source": source, "error": True})
             self._fails[mint] = self._fails.get(mint, 0) + 1
             if self._fails[mint] >= 3:
                 self._fails.pop(mint, None)
@@ -766,7 +847,9 @@ class SmartWallets:
                         await self.watch(mint, symbol, stage)
                 if self.smart:
                     await self.lookup_funders(1)
-                todo = next(((m, s) for m, s in followed() if m.endswith("pump") and not self.scanned(m)), None)
+                todo_all = [(m, s) for m, s in followed() if m.endswith("pump") and not self.scanned(m)]
+                self.backlog = len(todo_all)
+                todo = todo_all[0] if todo_all else None
                 if todo:
                     await self._scan_safe(todo[0], todo[1], "follow")
                     continue

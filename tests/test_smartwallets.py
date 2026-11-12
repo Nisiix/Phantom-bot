@@ -443,7 +443,10 @@ def test_smart_wallet_needs_500_usd_balance(tmp_path):
         "uiAmountString": "800"}}}}}}
     assert asyncio.run(sw.refresh_balances(sol_usd=150.0)) == 2            # 4 SOL = $600, 1 SOL = $150, $800 USDC
     assert set(sw.smart) == {RICH, USDC_ONLY}
-    assert st.q("SELECT balance_usd FROM sw_smart WHERE wallet=?", (POOR,))[0]["balance_usd"] == 150.0
+    assert not st.q("SELECT 1 FROM sw_smart WHERE wallet=?", (POOR,))   # under $500: not stored at all
+    assert st.q("SELECT balance_usd FROM sw_smart WHERE wallet=?", (RICH,))[0]["balance_usd"] == 600.0
+    sw.rescore()                                                        # next rescore: still not stored
+    assert not st.q("SELECT 1 FROM sw_smart WHERE wallet=?", (POOR,)) and set(sw.smart) == {RICH, USDC_ONLY}
     sw2 = SmartWallets(st, rpc, None, cfg(min_balance_usd=500))          # restart: balances kept
     assert set(sw2.smart) == {RICH, USDC_ONLY}
 
@@ -468,3 +471,58 @@ def test_dropped_token_comes_back_only_with_other_smart_wallets(tmp_path):
     asyncio.run(go())
     assert "M" in desk.portfolio.positions
     assert "altri wallet bravi" in desk.portfolio.positions["M"].entry_reason
+
+
+
+# ── Controller: is the Whale checker collecting the addresses efficiently? (user 2026-11-12) ──
+def test_efficiency_counters_and_harvest_checks(tmp_path):
+    from desk import whale_audit as wa
+    from desk.config import Config
+    st = Store(tmp_path / "p.db")
+    chains = {m: chain(m, "D" + m, ["A", "B"], bundle=["X1"]) for m in ("W1pump", "W2pump")}
+
+    class Busy(Rpc):
+        async def call(self, method, params, lane=""):
+            if params and params[0] == "LONGpump":
+                self.calls += 1
+                return [{"signature": f"s{self.calls}-{i}", "slot": 1, "blockTime": 1, "err": None} for i in range(1000)]
+            return await super().call(method, params, lane)
+
+    sw = SmartWallets(st, Busy(chains), None, cfg(max_sig_pages=3))
+    for m in chains:
+        asyncio.run(sw.scan(m))
+    asyncio.run(sw.scan("LONGpump"))
+    eff = sw.efficiency()
+    assert eff["scans"] == 3 and eff["complete"] == 2 and eff["too_long"] == 1
+    assert eff["calls_wasted_too_long"] == 3 and eff["calls_per_token"] >= 3
+    hv = wa.harvest(st.path, 0.1)
+    assert hv["tokens_24h"] == 2 and hv["usable"] == 4 and hv["bundle"] == 2
+    # 12 of 20 tokens too long while the RPC lane is half idle: flagged, and "read deeper" proposed
+    eff2 = {**eff, "scans": 20, "too_long": 12, "too_long_share": 0.6, "calls_per_min": 30.0, "lane_per_min": 100.0}
+    checks = wa.harvest_checks(eff2)
+    assert [c["check"] for c in checks] == ["molti token non leggibili"]
+    cfg_ = Config()
+    props = wa.harvest_proposals(eff2, hv, cfg_)
+    assert props[0]["changes"] == [f"[smart_wallets] max_sig_pages = {int(cfg_.smart_wallets.max_sig_pages * 1.5)}"]
+    text = wa.harvest_section(eff2, hv, cfg_)
+    assert "raccolta degli indirizzi" in text and "4 compratori utili" in text and "max_sig_pages" in text
+    assert eff["usable_per_token"] == 2 and eff["dust"] == 0
+    # a full lane with a long queue: read fewer trades per token
+    eff3 = {**eff, "scans": 30, "backlog": 150, "calls_per_min": 95.0, "lane_per_min": 100.0}
+    assert wa.harvest_proposals(eff3, hv, cfg_)[0]["changes"] == ["[smart_wallets] scan_trades = 30"]
+    assert any(c["check"] == "non tiene il passo" for c in wa.harvest_checks(eff3))
+
+
+def test_dust_buys_are_not_stored_and_do_not_use_the_budget(tmp_path):
+    st = Store(tmp_path / "p.db")
+    buyers = [f"DUST{i}" for i in range(6)] + ["REAL1", "REAL2"]
+    ch = chain("Tpump", "DEV", buyers)
+    for sig, _, w, tx in ch:
+        if w.startswith("DUST"):
+            tx["meta"]["postBalances"][0] = tx["meta"]["preBalances"][0] - int(0.005e9)
+    sw = SmartWallets(st, Rpc({"Tpump": ch}), None, cfg(scan_trades=4))   # reads at most 8 transactions
+    asyncio.run(sw.scan("Tpump"))
+    stored = {r["wallet"] for r in st.q("SELECT wallet FROM sw_trades")}
+    assert stored == {"REAL1", "REAL2"}                     # the 6 dust buys were read, counted, not stored
+    eff = sw.efficiency()
+    assert eff["dust"] == 6 and eff["usable_per_token"] == 2

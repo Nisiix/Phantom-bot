@@ -56,6 +56,8 @@ class Controller(Agent):
         self.model_new: dict | None = None
         # How precise the Whale checker is (desk/whale_audit.py, user 2026-11-12): recomputed every test round.
         self.whale_new: dict | None = None
+        self.harvest_new: dict | None = None
+        self.harvest_res: dict | None = None
         self.whale_res: dict | None = (desk.store.kv_get("controller_last", {}) or {}).get("whale")
         self.model_res: dict | None = (desk.store.kv_get("ml_model", {}) or {}).get("last") or None
         # Survive restarts: last report, last test round and last checks are shown again right away.
@@ -111,7 +113,15 @@ class Controller(Agent):
                        "horizon": cfg.quant.horizon_minutes * 60},
             "http": {h: dict(v) for h, v in getattr(d.http, "stats", {}).items()},
             "funnel": self.funnel(t),
+            "whale": self._whale_eff(),
         }
+
+    def _whale_eff(self) -> dict | None:
+        sw = getattr(self.desk, "smart", None)
+        try:
+            return sw.efficiency() if sw is not None else None
+        except Exception:  # noqa: BLE001 - a check, never a crash
+            return None
 
     def funnel(self, t: float) -> dict:
         rows = self.desk.store.q("SELECT stage,outcome,reason FROM decisions WHERE ts>=?", (t - 3600,))
@@ -186,6 +196,10 @@ class Controller(Agent):
             self.whale_new = self.whale_audit(an)
         except Exception as e:  # noqa: BLE001 - the audit is a report: it must never stop a round
             self.whale_new = {"error": f"{e.__class__.__name__}: {e}"}
+        try:
+            self.harvest_new = wa.harvest(self.desk.store.path, float(self.cfg.smart_wallets.min_buy_sol))
+        except Exception:  # noqa: BLE001 - report only
+            self.harvest_new = None
         self.model_new = None
         if self.cfg.model.enabled:
             try:
@@ -306,6 +320,7 @@ class Controller(Agent):
             self.exp = exp
             prev_whale = self.whale_res
             self.whale_res = self.whale_new
+            self.harvest_res = self.harvest_new
             self.whale_note(prev_whale)
             self.rounds += 1
             self.trials += exp["tried"]
@@ -336,6 +351,7 @@ class Controller(Agent):
         decision the data disproved, switching on the model's block."""
         out = list(proposals(self.exp, self.cfg)) if self.exp else []
         out += wa.proposals(self._whale(), self.cfg)
+        out += wa.harvest_proposals(self._whale_eff(), self.harvest_res, self.cfg)
         try:
             out += mem.rollback_proposals(self.desk.store, self.cfg)
         except Exception:  # noqa: BLE001 - report only
@@ -361,7 +377,8 @@ class Controller(Agent):
                                    mem.report_section(self.desk.store, self.cfg), self.all_proposals()) \
             + "\n\n" + "\n".join(profit_lock_section(self._exit_records(), self.cfg)) \
             + ml.report_section(self.model_res, self.desk.model, self.cfg) \
-            + wa.report_section(self._whale(), self.cfg, self._readiness())
+            + wa.report_section(self._whale(), self.cfg, self._readiness()) \
+            + wa.harvest_section(self._whale_eff(), self.harvest_res, self.cfg)
         self.report_ts = time.time()
         self.desk.store.kv_set("controller_last", {"report": self.report, "report_ts": self.report_ts,
                                                    "exp": self.exp, "health": self.health,
