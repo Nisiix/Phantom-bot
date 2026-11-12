@@ -462,7 +462,9 @@ class Filter(Agent):
             rug_reasons.append(f"dev in rug ledger ({known['reason'][:60]})")
         prior = [t for t in (rc.get("creatorTokens") or []) if t.get("mint") != cand.mint]
         dead = [t for t in prior if float(t.get("marketCap") or 0) < 10_000]
-        if len(prior) >= f.serial_dev_min_launches and len(dead) / len(prior) >= f.serial_dev_dead_ratio:
+        # serial_dev_min_launches = 0: off (user 2026-11-12: serial ruggers use a fresh wallet every time)
+        if (f.serial_dev_min_launches > 0 and len(prior) >= f.serial_dev_min_launches
+                and len(dead) / len(prior) >= f.serial_dev_dead_ratio):
             rug_reasons.append(f"serial dev: {len(dead)}/{len(prior)} prior launches dead")
         checks.append(Check("dev_rug_link", not rug_reasons, "; ".join(rug_reasons) or "clean", "clean",
                             "; ".join(rug_reasons) or f"dev {str(creator)[:6]} clean ({len(prior)} prior)",
@@ -729,7 +731,7 @@ class Filter(Agent):
             try:
                 dh = dev_history(await gm.created_tokens(creator))
                 s.update({f"dev_{k}": v for k, v in dh.items()})
-                serial = (dh["launches"] >= g.serial_min_launches and dh["open_ratio"] is not None
+                serial = (g.serial_min_launches > 0 and dh["launches"] >= g.serial_min_launches and dh["open_ratio"] is not None
                           and dh["open_ratio"] <= g.serial_max_graduation)
                 checks.append(Check("dev_serial_launcher", not serial, dh["launches"], g.serial_min_launches,
                                     f"dev launched {dh['launches']}, graduated {dh['graduated']}",

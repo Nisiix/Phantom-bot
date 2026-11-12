@@ -61,7 +61,8 @@ allowed_quote_mints = ["So11111111111111111111111111111111111111112"]
 # So the ceiling sits at $500k, not $200k: tokens between $200k and $500k still ran like the smaller ones.
 max_age_hours = 72.0               # token older than 3 days (since its oldest DEX pair): not considered. 0 = off
 max_market_cap_usd = 500000.0      # market cap already above this: the first run is gone. 0 = off
-serial_dev_min_launches = 3        # dev with >= N prior launches...
+serial_dev_min_launches = 0        # dev with >= N prior launches... 0 = OFF (user 2026-11-12: serial ruggers use a new
+                                   # wallet every time; on 46 trades 42 creators showed 0 prior launches. Was 3.)
 serial_dev_dead_ratio = 0.8        # ...of which >= 80% died (< $10k mcap) = rug-linked
 # ── engine ──
 deep_workers = 3                   # deep checks in parallel (RugCheck keeps its own rate limit)
@@ -292,7 +293,7 @@ max_insider_rate = 0.25          # suspected insider share   -> reject
 max_bundler_rate = 0.30          # bundled-buy share         -> reject
 max_sniper_rate = 0.30           # sniper share              -> reject
 max_funding_cluster_pct = 15.0   # % supply held by wallets funded by the same wallet -> reject
-serial_min_launches = 10         # dev with >= 10 launches and...
+serial_min_launches = 0          # dev with >= N launches and... 0 = OFF (user 2026-11-12, as serial_dev_min_launches)
 serial_max_graduation = 0.05     # ...<= 5% graduated -> permanent kill (and added to rug ledger)
 
 [controller]
