@@ -526,3 +526,44 @@ def test_dust_buys_are_not_stored_and_do_not_use_the_budget(tmp_path):
     assert stored == {"REAL1", "REAL2"}                     # the 6 dust buys were read, counted, not stored
     eff = sw.efficiency()
     assert eff["dust"] == 6 and eff["usable_per_token"] == 2
+
+
+
+def test_choices_are_logged_with_reasons_but_not_the_poor(tmp_path):
+    from solders.pubkey import Pubkey
+
+    from desk import whale_audit as wa
+    from desk.devwatch import ata
+    st = Store(tmp_path / "p.db")
+    RICH, POOR, LOW_HR, INS = (str(Pubkey.new_unique()) for _ in range(4))
+    chains = {"W1pump": chain("W1pump", "D1", [RICH, POOR, LOW_HR, INS]),
+              "W2pump": chain("W2pump", "D2", [RICH, POOR, LOW_HR, INS]),
+              "L1pump": chain("L1pump", "D3", [LOW_HR]), "L2pump": chain("L2pump", "D4", [LOW_HR]),
+              "L3pump": chain("L3pump", "D5", [LOW_HR])}
+    rpc = Rpc(chains)
+    sw = SmartWallets(st, rpc, None, cfg(min_wins=2, min_tokens=2, min_hit_rate=0.5, min_balance_usd=500,
+                                         ready_min_decided_tokens=1, ready_min_winners=1, ready_min_smart_wallets=1,
+                                         ready_min_validation_tokens=0, ready_min_lift=0))
+    for m in chains:
+        asyncio.run(sw.scan(m))
+    _decided(st, {"W1pump": 1, "W2pump": 1, "L1pump": 0, "L2pump": 0, "L3pump": 0})
+    sw.rescore()
+    rpc.holdings = {RICH: {"lamports": int(10e9)}, POOR: {"lamports": int(1e9)}, INS: {"lamports": int(10e9)}}
+    asyncio.run(sw.refresh_balances(sol_usd=150.0))
+    st.save_wallet_funder({"wallet": INS, "funder": "CF", "complete": True, "hub": False})
+    acc = {"data": {"parsed": {"info": {"tokenAmount": {"uiAmountString": "10"}}}}}
+    new = str(Pubkey.new_unique())
+    rpc.holdings.update({ata(w, new): acc for w in (RICH, INS)})
+    asyncio.run(sw.report(new, "NEW", creator="DEV", creator_funder="CF"))
+    log = {(r["wallet"], r["mint"], r["event"], r["reason"]) for r in st.q("SELECT * FROM sw_log")}
+    assert (RICH, "", "chosen", "smart") in log and (LOW_HR, "", "discarded", "hit_rate") in log
+    assert (RICH, new, "chosen", "counted") in log and (INS, new, "discarded", "insider") in log
+    assert not any(w == POOR for w, *_ in log)                          # under $500: never logged
+    n = len(log)
+    sw.rescore()
+    asyncio.run(sw.report(new, "NEW", creator="DEV", creator_funder="CF"))
+    assert len(st.q("SELECT * FROM sw_log")) == n                       # the same choice is written once
+    hv = wa.harvest(st.path, 0.1)
+    assert hv["log"]["chosen:counted"] == 1 and hv["log"]["discarded:insider"] == 1
+    text = wa.harvest_section(sw.efficiency(), hv, __import__("desk.config", fromlist=["Config"]).Config())
+    assert "registro delle scelte" in text and "insider del creatore 1" in text

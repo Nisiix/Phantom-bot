@@ -206,7 +206,7 @@ def harvest(db_path, min_buy_sol: float, now: float | None = None) -> dict:
     db.row_factory = sqlite3.Row
     out = {"tokens_24h": 0, "rows": 0, "usable": 0, "bundle": 0, "relayed": 0, "dust": 0, "creator": 0,
            "sells": 0, "analyst_tokens": 0, "analyst_read": 0, "analyst_complete": 0,
-           "smart": 0, "smart_funder": 0, "smart_balance": 0}
+           "smart": 0, "smart_funder": 0, "smart_balance": 0, "log": {}}
     try:
         try:
             r = db.execute(
@@ -231,6 +231,9 @@ def harvest(db_path, min_buy_sol: float, now: float | None = None) -> dict:
                            "SUM(s.balance_usd IS NOT NULL) AS bal FROM sw_smart s "
                            "LEFT JOIN wallet_funders f ON f.wallet = s.wallet").fetchone()
             out.update(smart=r["n"] or 0, smart_funder=r["funder"] or 0, smart_balance=r["bal"] or 0)
+            out["log"] = {f"{x['event']}:{x['reason']}": x["n"] for x in db.execute(
+                "SELECT event, reason, COUNT(*) AS n FROM sw_log WHERE ts >= ? GROUP BY event, reason",
+                (now - 86400,))}
         except sqlite3.OperationalError:          # Whale checker never ran
             pass
     finally:
@@ -324,6 +327,23 @@ def harvest_section(eff: dict | None, hv: dict | None, cfg) -> str:
     if hv and hv.get("smart"):
         lines.append(f"- wallet bravi: {hv['smart']}, finanziatore noto per {hv['smart_funder']}, saldo letto per "
                      f"{hv['smart_balance']} ({eff['smart']} sopra ${c.min_balance_usd:,.0f})")
+    lg = (hv or {}).get("log") or {}
+    if lg:
+        names = {"chosen:smart": "entrati nella lista", "dropped:criteria": "usciti dalla lista",
+                 "dropped:balance_unknown": "usciti (saldo non letto)", "discarded:hit_rate": "quasi bravi (% successi bassa)",
+                 "discarded:list_size": "fuori dai primi della lista", "chosen:counted": "contati per un token",
+                 "discarded:self_proof": "scartati: bravi solo grazie a quel token",
+                 "discarded:insider": "scartati: insider del creatore", "discarded:selling": "scartati: stavano vendendo",
+                 "discarded:same_operator": "scartati: stesso operatore di un altro",
+                 "discarded:sold": "scartati: hanno venduto durante l'attesa dell'Executor"}
+        lines.append("- registro delle scelte (ultime 24 h): " + "; ".join(
+            f"{names.get(k, k)} {v}" for k, v in sorted(lg.items(), key=lambda kv: -kv[1])))
+        disc = sum(v for k, v in lg.items() if k.startswith("discarded:") and k not in ("discarded:hit_rate",
+                                                                                        "discarded:list_size"))
+        chosen = lg.get("chosen:counted", 0)
+        if disc + chosen >= 20 and disc > 2 * chosen:
+            lines.append(f"- [INFO] per i token valutati i wallet bravi scartati ({disc}) sono più del doppio di quelli "
+                         f"contati ({chosen}): guarda i motivi qui sopra")
     checks = harvest_checks(eff)
     lines += [f"- [{x['level'].upper()}] {x['check']}: {x['detail']}" for x in checks] or ["- nessun problema"]
     props = harvest_proposals(eff, hv, cfg)

@@ -43,12 +43,19 @@ SAFEGUARDS (devil's-advocate review, 2026-11-12):
   * proof before use: "sufficient data" also needs the list to have proved itself on tokens it had not seen
     (validate(): wallets chosen on the older 70% of the decided tokens must pick winners on the newer 30% at least
     `ready_min_lift` times the base rate, on >= `ready_min_validation_tokens` tokens);
+  * every choice is logged with its reason in `sw_log` (user 2026-11-12, read by the Controller): a wallet chosen
+    as smart (wins / tokens / hit rate / balance), dropped from the list, discarded as a near miss (enough wins but
+    hit rate too low, or outside the list size), and for every token reported to the Analyst the holders counted
+    and the ones not counted (self_proof, insider, selling, same_operator) plus the ones that sold while the
+    Executor waited. Wallets under $500 are NOT logged (user 2026-11-12: no space spent on them); the early buyers
+    of every token are in `sw_trades` with their flags (bundle, signer, creator) and dust buys are not stored;
   * RPC budget: holders are cached 60 s; open positions are watched every minute, the Analyst's tokens every
     `watch_analyst_seconds` (the Analyst asks again itself at every re-score).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import sqlite3
 import time
@@ -79,6 +86,8 @@ CREATE INDEX IF NOT EXISTS sw_trades_mint ON sw_trades(mint);
 CREATE TABLE IF NOT EXISTS sw_smart (wallet TEXT PRIMARY KEY, tokens INTEGER, wins INTEGER, hit_rate REAL,
   sol_in REAL, last_ts REAL, ts REAL);
 CREATE INDEX IF NOT EXISTS ix_dec_mint ON decisions(mint);
+CREATE TABLE IF NOT EXISTS sw_log (ts REAL, wallet TEXT, mint TEXT, event TEXT, reason TEXT, data TEXT);
+CREATE INDEX IF NOT EXISTS sw_log_ts ON sw_log(ts);
 CREATE TABLE IF NOT EXISTS sw_hits (mint TEXT, wallet TEXT, symbol TEXT, ts REAL, stage TEXT, held_at_start INTEGER,
   tokens REAL, wins INTEGER, n INTEGER, PRIMARY KEY (mint, wallet));
 """
@@ -179,6 +188,7 @@ class SmartWallets:
         self._scans: deque = deque(maxlen=600)      # one entry per token read (or failed)
         self._reps: deque = deque(maxlen=600)       # one entry per report to the Analyst
         self.backlog = 0                            # followed tokens not read yet
+        self._logged: set[tuple] = set()            # (wallet, mint, event, reason) already in sw_log
 
     # ── RPC, paced: the public node is shared with the Filter, DevWatch and the funder backfill ──
     async def call(self, method: str, params: list):
@@ -371,12 +381,17 @@ class SmartWallets:
             "SELECT b.wallet, COUNT(*) AS tokens, COUNT(DISTINCT CASE WHEN d.won=1 THEN d.op END) AS wins, "
             "SUM(b.sol) AS sol_in, MAX(b.ts) AS last_ts FROM b JOIN d ON d.mint = b.mint GROUP BY b.wallet "
             "HAVING wins >= ? AND tokens >= ?", args + (int(c.min_wins), int(c.min_tokens)))
-        smart = {}
+        smart, misses = {}, []
         for r in rows:
             hr = (r["wins"] or 0) / max(1, r["tokens"])
             if hr >= float(c.min_hit_rate):
                 smart[r["wallet"]] = {**r, "hit_rate": round(hr, 3), "ts": now}
-        ranked = sorted(smart.values(), key=lambda r: (-r["hit_rate"], -r["wins"]))[: int(c.max_smart_wallets)]
+            else:
+                misses.append((r["wallet"], "hit_rate", {"wins": r["wins"], "tokens": r["tokens"], "hit_rate": round(hr, 3)}))
+        order = sorted(smart.values(), key=lambda r: (-r["hit_rate"], -r["wins"]))
+        ranked = order[: int(c.max_smart_wallets)]
+        misses += [(r["wallet"], "list_size", {"wins": r["wins"], "tokens": r["tokens"], "hit_rate": r["hit_rate"]})
+                   for r in order[int(c.max_smart_wallets):]]
         contrib: dict[str, dict[str, tuple[int, str]]] = {r["wallet"]: {} for r in ranked}
         ws = list(contrib)
         for i in range(0, len(ws), 400):
@@ -385,20 +400,51 @@ class SmartWallets:
                                   f"d.op FROM b JOIN d ON d.mint = b.mint WHERE b.wallet IN "
                                   f"({','.join('?' * len(chunk))})", args + tuple(chunk)):
                 contrib[r["wallet"]][r["mint"]] = (int(r["won"] or 0), r["op"])
-        return ranked, contrib, self.validate(now, q)
+        return ranked, contrib, self.validate(now, q), misses
 
-    def _apply(self, now: float, ranked: list[dict], contrib: dict, validation: dict) -> None:
+    def _apply(self, now: float, ranked: list[dict], contrib: dict, validation: dict, misses: list | None = None) -> None:
         self.store.db.execute("DELETE FROM sw_smart")       # derived list: rebuilt from sw_trades every time
         self.store.db.executemany("INSERT INTO sw_smart(wallet,tokens,wins,hit_rate,sol_in,last_ts,ts,balance_usd) "
                                   "VALUES(?,?,?,?,?,?,?,?)",
                                   [(r["wallet"], r["tokens"], r["wins"], r["hit_rate"], r["sol_in"] or 0.0,
                                     r["last_ts"], now, self._balance.get(r["wallet"])) for r in ranked
                                    if not self._poor(r["wallet"])])
+        prev = set(self.smart)
         self.all_smart = {r["wallet"]: r for r in ranked}
         self.smart = {w: r for w, r in self.all_smart.items() if self.balance_ok(w)}
         self._contrib = contrib
         self._validation = validation
         self._ready = {}
+        for w, why, data in misses or []:
+            if not self._poor(w):
+                self.log(w, "discarded", why, data=data)
+        self._log_changes(prev)
+
+    # ── the log of choices (sw_log, user 2026-11-12) ──
+    def log(self, wallet: str, event: str, reason: str, mint: str = "", data: dict | None = None) -> None:
+        """One row per (wallet, token, event, reason): the same choice is not written twice."""
+        key = (wallet, mint, event, reason)
+        if key in self._logged:
+            return
+        if len(self._logged) > 50000:
+            self._logged.clear()
+        self._logged.add(key)
+        self.store.db.execute("INSERT INTO sw_log(ts,wallet,mint,event,reason,data) VALUES(?,?,?,?,?,?)",
+                              (time.time(), wallet, mint, event, reason, json.dumps(data or {})))
+
+    def _log_changes(self, prev: set) -> None:
+        """Wallets that entered or left the counted list. Leaving because the balance fell under the line is not
+        logged (user 2026-11-12)."""
+        for w in set(self.smart) - prev:
+            r = self.smart[w]
+            self._logged.discard((w, "", "dropped", "criteria"))
+            self.log(w, "chosen", "smart", data={"wins": r.get("wins"), "tokens": r.get("tokens"),
+                                                 "hit_rate": r.get("hit_rate"), "balance_usd": self._balance.get(w)})
+        for w in prev - set(self.smart):
+            if self._poor(w):
+                continue
+            self._logged.discard((w, "", "chosen", "smart"))
+            self.log(w, "dropped", "criteria" if w not in self.all_smart else "balance_unknown")
 
     # ── real money only (user 2026-11-12) ──
     def _poor(self, wallet: str) -> bool:
@@ -450,8 +496,9 @@ class SmartWallets:
                                   [(v, w) for w, v in usd.items() if v >= need])
         # under the line: not stored at all (user 2026-11-12)
         self.store.db.executemany("DELETE FROM sw_smart WHERE wallet=?", [(w,) for w, v in usd.items() if v < need])
-        before = len(self.smart)
+        before, prev = len(self.smart), set(self.smart)
         self.smart = {w: {**r, "balance_usd": usd.get(w)} for w, r in self.all_smart.items() if self.balance_ok(w)}
+        self._log_changes(prev)
         if len(self.smart) != before:
             self._ready = {}
         return len(self.smart)
@@ -602,7 +649,10 @@ class SmartWallets:
         if not wallets:
             return []
         held = await self.holders(mint)
-        return [w for w in wallets if w not in held or self.selling(mint, w, held[w])]
+        out = [w for w in wallets if w not in held or self.selling(mint, w, held[w])]
+        for w in out:
+            self.log(w, "discarded", "sold", mint, {"held": held.get(w, 0.0)})
+        return out
 
     def selling(self, mint: str, wallet: str, amt: float) -> bool:
         """Already sold half of the largest amount we saw it hold."""
@@ -686,26 +736,38 @@ class SmartWallets:
         inside = {w for w in (insiders or set()) if w} | {w for w in (creator, creator_funder) if w}
         skipped = {"self_proof": 0, "insider": 0, "selling": 0, "same_operator": 0}
         counted: dict[str, tuple[str, dict]] = {}          # operator -> (wallet, record)
+        out_why: dict[str, str] = {}
         for w, amt in held.items():
             rec = self.smart_for(w, mint)
             if rec is None:
                 skipped["self_proof"] += 1
+                out_why[w] = "self_proof"
                 continue
             op = self.operator(w)
             fund = (self.store.wallet_funder(w) or {}).get("funder")
             if w in inside or op in inside or (creator and fund == creator):
                 skipped["insider"] += 1
+                out_why[w] = "insider"
                 continue
             if self.selling(mint, w, amt):
                 skipped["selling"] += 1
+                out_why[w] = "selling"
                 continue
             if op in counted:
                 skipped["same_operator"] += 1
                 if rec["hit_rate"] > counted[op][1]["hit_rate"]:
+                    out_why[counted[op][0]] = "same_operator"
                     counted[op] = (w, rec)
+                else:
+                    out_why[w] = "same_operator"
                 continue
             counted[op] = (w, rec)
         valid = {w: held[w] for w, _ in counted.values()}
+        for w, rec in counted.values():
+            self.log(w, "chosen", "counted", mint, {"hit_rate": rec.get("hit_rate"), "wins": rec.get("wins"),
+                                                    "tokens": rec.get("tokens"), "operator": self.operator(w)})
+        for w, why in out_why.items():
+            self.log(w, "discarded", why, mint, {"operator": self.operator(w)})
         self.record(mint, symbol, valid, "analyst", quiet=True)
         top = sorted(counted.values(), key=lambda x: -x[1]["hit_rate"])
         # Their own buy price: the Executor buys only near it (desk/whale_entry.py). SOL-weighted average.
