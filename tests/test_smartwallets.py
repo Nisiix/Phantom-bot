@@ -357,7 +357,8 @@ def _whale_desk(tmp_path):
 
     class Smart:
         def __init__(self):
-            self.reports = {"M": {"wallets": ["SMARTWALLET"], "entry_sol": 0.00001}}
+            self.reports = {"M": {"wallets": ["SMARTWALLET"], "entry_sol": 0.00001,
+                                  "entries": {"SMARTWALLET": 0.00001}}}
             self.sellers: list[str] = []
 
         async def sold(self, mint, wallets):
@@ -445,3 +446,25 @@ def test_smart_wallet_needs_500_usd_balance(tmp_path):
     assert st.q("SELECT balance_usd FROM sw_smart WHERE wallet=?", (POOR,))[0]["balance_usd"] == 150.0
     sw2 = SmartWallets(st, rpc, None, cfg(min_balance_usd=500))          # restart: balances kept
     assert set(sw2.smart) == {RICH, USDC_ONLY}
+
+
+def test_dropped_token_comes_back_only_with_other_smart_wallets(tmp_path):
+    desk, dex, ex = _whale_desk(tmp_path)
+    dex.price = 0.0016
+
+    async def go():
+        await ex.handle_verdict(_whale_verdict(desk))
+        p = ex.whale_plans["M"]
+        desk.smart.sellers = ["SMARTWALLET"]
+        assert await ex.whale_look("M", p, await dex.snapshot("M"), p["t0"] + 60) == "sold"
+        assert ex.whale_blocked["M"]["sellers"] == {"SMARTWALLET"}
+        await ex.handle_verdict(_whale_verdict(desk))                 # same wallet only: still dropped
+        assert not ex.whale_plans
+        # another smart wallet now holds it, bought at 0.000012 SOL; price 0.000014 = +17%
+        desk.smart.reports["M"] = {"wallets": ["SMARTWALLET", "OTHER"], "entry_sol": 0.000011,
+                                   "entries": {"SMARTWALLET": 0.00001, "OTHER": 0.000012}}
+        dex.price = 0.0014
+        await ex.handle_verdict(_whale_verdict(desk))
+    asyncio.run(go())
+    assert "M" in desk.portfolio.positions
+    assert "altri wallet bravi" in desk.portfolio.positions["M"].entry_reason

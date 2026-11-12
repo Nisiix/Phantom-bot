@@ -7,8 +7,9 @@ any price: we must not become the smart wallet's exit liquidity, nor buy the top
   * buy only while our price is at most `max_entry_premium_pct` (30%) above that reference AND the token is not
     spiking (5-minute change <= `whale_max_m5_pct`);
   * otherwise WAIT, watching the price, up to `whale_wait_minutes`, for it to come back near the smart entry;
-  * if one of those smart wallets SELLS while we wait, the token is dropped (and not bought for
-    `whale_sold_block_hours`, whatever the other rules say): they are leaving, we don't go in;
+  * if one of those smart wallets SELLS while we wait, the token is dropped for `whale_sold_block_hours`, whatever
+    the other rules say: they are leaving, we don't go in. In that time it is bought only if OTHER smart wallets
+    (not the sellers) hold it, near their own buy price (user 2026-11-12);
   * a liquidity drop of [entry] max_liq_drop_pct while waiting also cancels (a rug is not a discount).
 
 The buy itself still needs a fresh Filter + Analyst clearance and every Executor check (Risk, price impact,

@@ -17,7 +17,8 @@ moment doesn't come, or liquidity leaves while waiting, the token is dropped.
 WHALE ENTRY (user 2026-11-12, desk/whale_entry.py): a token approved while smart wallets hold it (Whale checker,
 51% of the score) is bought only within +30% of the smart wallets' own buy price and not on a 5-minute spike;
 otherwise the Executor waits (up to [smart_wallets] whale_wait_minutes) for the price to come back. If one of those
-smart wallets sells meanwhile, the token is dropped and not bought for whale_sold_block_hours. Same checks as above.
+smart wallets sells meanwhile, the token is dropped for whale_sold_block_hours: in that time it is bought only if
+OTHER smart wallets (not the ones that sold) hold it, again near their own buy price. Same checks as above.
 Size = max_position_pct (<= 8%, hard ceiling) of the CURRENT balance. Never more.
 Exits run on their own loop and never wait for an entry (no shared swap lock).
 """
@@ -68,7 +69,7 @@ class Executor(Agent):
         self.timing_done: dict[str, float] = {}  # mint -> when its plan ended without a buy (no new plan for 1 h)
         self.timing_notes: dict[str, str] = {}   # mint -> why this moment was chosen (goes in the buy reason)
         self.whale_plans: dict[str, dict] = {}   # mint -> token approved thanks to smart wallets, waiting for a price
-        self.whale_blocked: dict[str, float] = {}  # mint -> when a smart wallet sold while we waited
+        self.whale_blocked: dict[str, dict] = {}   # mint -> {"ts", "sellers"}: a smart wallet sold while we waited
         # No swap lock: fills are measured per transaction (Jupiter's result / tx metadata), so an exit
         # never waits for an entry's swap to land.
 
@@ -156,12 +157,19 @@ class Executor(Agent):
         ok, why = self.risk.approve_entry(v.mint)
         if not ok:
             return self.reject(v, f"Risk: {why}")
-        blocked = self.whale_blocked.get(v.mint)
-        if blocked and now() - blocked < float(self.cfg.smart_wallets.whale_sold_block_hours) * 3600:
-            return self.reject(v, "a smart wallet sold this token while we waited to buy it: dropped "
-                                  f"for {self.cfg.smart_wallets.whale_sold_block_hours:g} h")
+        blk = self.whale_blocked.get(v.mint)
+        exclude: set = set()
+        if blk and now() - blk["ts"] < float(self.cfg.smart_wallets.whale_sold_block_hours) * 3600 \
+                and v.mint not in self.whale_plans:
+            # dropped because a smart wallet sold: bought again only if OTHER smart wallets hold it (user 2026-11-12)
+            exclude = set(blk["sellers"])
+            others = [w for w in self._smart_wallets(v.mint) if w not in exclude] if self.is_whale(v) else []
+            if not others:
+                return self.reject(v, "a smart wallet sold this token while we waited to buy it: dropped for "
+                                      f"{self.cfg.smart_wallets.whale_sold_block_hours:g} h unless other smart "
+                                      f"wallets buy it")
         if v.mint in self.whale_plans or self.is_whale(v):
-            if not await self.whale_allows(v):
+            if not await self.whale_allows(v, exclude):
                 return
         elif not await self.timing_allows(v):
             return
@@ -180,6 +188,11 @@ class Executor(Agent):
         return bool(f.get("whale_free_score") is not None and (f.get("whale_holders") or 0) > 0
                     and f.get("whale_entry_sol") and getattr(self.desk, "smart", None) is not None)
 
+    def _smart_wallets(self, mint: str) -> list[str]:
+        """The smart wallets counted for this token in the Whale checker's last report to the Analyst."""
+        sw = getattr(self.desk, "smart", None)
+        return list(((sw.reports.get(mint) or {}) if sw is not None else {}).get("wallets") or [])
+
     def _price_sol(self, snap) -> float:
         if snap is None:
             return 0.0
@@ -188,8 +201,9 @@ class Executor(Agent):
         usd = self.desk.portfolio.sol_usd
         return snap.price_usd / usd if usd and snap.price_usd > 0 else 0.0
 
-    async def whale_allows(self, v: Verdict) -> bool:
-        """True = buy now. False = waiting for a price near the smart wallets' own (or dropped)."""
+    async def whale_allows(self, v: Verdict, exclude: set | None = None) -> bool:
+        """True = buy now. False = waiting for a price near the smart wallets' own (or dropped).
+        exclude: smart wallets that sold this token before (their price and holdings don't count any more)."""
         p = self.whale_plans.get(v.mint)
         if p is not None:
             p["verdict"] = v
@@ -205,6 +219,13 @@ class Executor(Agent):
         rep = (sw.reports.get(v.mint) or {}) if sw is not None else {}
         ref = float((v.features or {}).get("whale_entry_sol") or rep.get("entry_sol") or 0)
         wallets = list(rep.get("wallets") or [])
+        if exclude:
+            wallets = [w for w in wallets if w not in exclude]
+            entries = [e for w, e in (rep.get("entries") or {}).items() if w in wallets and e]
+            ref = sum(entries) / len(entries) if entries else 0.0
+            if not wallets or not ref:
+                self.reject(v, "other smart wallets hold it, but their buy price can't be read: still dropped")
+                return False
         if len(self.whale_plans) >= 20:
             self.reject(v, "too many smart-wallet tokens already waiting for their price")
             return False
@@ -215,15 +236,17 @@ class Executor(Agent):
         t = now()
         p = {"t0": t, "ref_sol": ref, "wallets": wallets, "verdict": v, "symbol": v.symbol, "state": "wait",
              "why": "", "ref_liq": snap.liquidity_usd, "ref_pair": snap.pair_address, "armed_ts": 0.0,
-             "sold_check": 0.0}
+             "sold_check": 0.0, "exclude": set(exclude or ())}
         self.whale_plans[v.mint] = p
         st = await self.whale_look(v.mint, p, snap, t)
         if st == "buy":
             self.whale_plans.pop(v.mint, None)
-            self.timing_notes[v.mint] = "wallet bravi: " + p["why"]
+            self.timing_notes[v.mint] = "wallet bravi: " + p["why"] + (" (altri wallet bravi dopo una vendita)"
+                                                                        if exclude else "")
             return True
         if st == "wait":
-            msg = f"approvato grazie ai wallet bravi, aspetto il prezzo: {p['why']}"
+            msg = (f"approvato grazie ai wallet bravi{' (altri, dopo una vendita)' if exclude else ''}, "
+                   f"aspetto il prezzo: {p['why']}")
             self.desk.store.add_decision(t, "executor", "wait", v.mint, v.symbol, msg,
                                          {"score": v.score, "whale_entry_sol": ref, "wallets": wallets})
             self.emit("info", msg, v.mint, v.symbol)
@@ -245,14 +268,18 @@ class Executor(Agent):
         liq = snap.liquidity_usd / p["ref_liq"] if snap is not None and p["ref_liq"] > 0 else None
         st, why = whale_entry.decide(t - p["t0"], price, p["ref_sol"], snap.change_m5 if snap else 0.0, liq, sold, c,
                                      self.cfg.entry.max_liq_drop_pct)
+        p["sold"] = sold
         p["why"] = why
         if st == "buy":
             p["state"], p["armed_ts"] = "buy", t
         elif st in ("skip", "cancel", "sold"):
             self.whale_plans.pop(mint, None)
             if st == "sold":
-                self.whale_blocked[mint] = t
-            self.timing_done[mint] = t
+                prev = (self.whale_blocked.get(mint) or {}).get("sellers") or set()
+                self.whale_blocked[mint] = {"ts": t, "sellers": set(prev) | set(p.get("exclude") or ())
+                                            | set(p.get("sold") or ())}
+            else:
+                self.timing_done[mint] = t        # a sale has its own block (lifted by other smart wallets)
             self.state.bump("whale_drop")
             self.desk.store.add_decision(t, "executor", "reject", mint, p["symbol"], f"whale entry: {why}",
                                          {"score": p["verdict"].score})
