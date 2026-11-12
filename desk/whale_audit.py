@@ -89,9 +89,9 @@ def audit(rows: list[dict], hits: list[dict], tokens: dict[str, dict], min_score
     ready = [r for r in rows if r["f"].get("whale_ready") is True]
     with_ = [r["ret"] for r in ready if (r["f"].get("whale_holders") or 0) > 0]
     without = [r["ret"] for r in ready if (r["f"].get("whale_holders") or 0) == 0]
-    promoted = [r["ret"] for r in ready if (r["f"].get("whale_bonus") or 0) > 0
+    promoted = [r["ret"] for r in ready if isinstance(r["f"].get("whale_free_score"), (int, float))
                 and isinstance(r["f"].get("score"), (int, float))
-                and r["f"]["score"] >= min_score > r["f"]["score"] - r["f"]["whale_bonus"]]
+                and r["f"]["score"] >= min_score > r["f"]["whale_free_score"]]
 
     first_seen: dict[str, float] = {}
     for r in rows:
@@ -130,33 +130,28 @@ def audit(rows: list[dict], hits: list[dict], tokens: dict[str, dict], min_score
 
 
 def proposals(a: dict | None, cfg) -> list[dict]:
-    """Proposals only (the user decides): bonus off when it demonstrably loses, higher when it demonstrably wins."""
+    """Proposals only (the user decides): switch the smart-wallet weight off when the tokens it carried over the
+    threshold demonstrably lose. Its value (51%) is the user's rule: never proposed higher or lower."""
     if not a:
         return []
-    an, p, d = cfg.analyst, a["promoted"], a["diff"]
-    out = []
-    base = {"agent": "Analyst", "situation": "all", "kind": "whale", "n": p["n"], "valid_n": p["n"], "also": [],
-            "gain": 0.0, "lo": 0.0, "hi": 0.0}
-    if an.whale_bonus_per_wallet > 0 and p["n"] >= MIN_GROUP and p["hi"] < 0:
-        out.append({**base, "label": "Whale checker: i token promossi dal bonus perdono",
-                    "changes": ["[analyst] whale_bonus_per_wallet = 0"], "verdict": "solida",
-                    "gain": -p["mean"], "lo": -p["hi"], "hi": -p["lo"]})
-    elif an.whale_bonus_per_wallet > 0 and p["n"] >= MIN_GROUP and p["lo"] > 0 and d["ok"] and d["lo"] > 0 \
-            and a["with"]["n"] >= MIN_GROUP and a["without"]["n"] >= MIN_GROUP:
-        per, mx = round(an.whale_bonus_per_wallet * 1.5, 3), round(an.whale_bonus_max * 1.5, 3)
-        out.append({**base, "label": "Whale checker: i token con wallet bravi rendono di più",
-                    "changes": [f"[analyst] whale_bonus_per_wallet = {per:g}", f"[analyst] whale_bonus_max = {mx:g}"],
-                    "verdict": "promettente", "gain": d["mean"], "lo": d["lo"], "hi": d["hi"]})
-    return out
+    p = a["promoted"]
+    if cfg.analyst.whale_weight > 0 and p["n"] >= MIN_GROUP and p["hi"] < 0:
+        return [{"agent": "Analyst", "situation": "all", "kind": "whale", "n": p["n"], "valid_n": p["n"], "also": [],
+                 "label": "Whale checker: i token approvati grazie ai wallet bravi perdono",
+                 "changes": ["[analyst] whale_weight = 0"], "verdict": "solida",
+                 "gain": -p["mean"], "lo": -p["hi"], "hi": -p["lo"]}]
+    return []
 
 
 def report_section(a: dict | None, cfg, readiness: dict | None = None) -> str:
     sw, an = cfg.smart_wallets, cfg.analyst
     lines = ["", "", "## Whale checker — precisione delle informazioni",
              f"Regola: con dati sufficienti (almeno {sw.ready_min_decided_tokens} token decisi, "
-             f"{sw.ready_min_winners} vincenti, {sw.ready_min_smart_wallets} wallet bravi) ogni wallet bravo presente "
-             f"aggiunge +{an.whale_bonus_per_wallet:g} al punteggio dell'Analyst, al massimo +{an.whale_bonus_max:g}; "
-             f"senza dati sufficienti l'informazione è ignorata."]
+             f"{sw.ready_min_winners} vincenti, {sw.ready_min_smart_wallets} wallet bravi, prova fuori campione) "
+             f"un wallet bravo presente vale il {an.whale_weight:.0%} del punteggio dell'Analyst e l'Executor compra "
+             f"entro +{sw.max_entry_premium_pct:g}% dal prezzo d'acquisto dei wallet bravi (altrimenti aspetta fino "
+             f"a {sw.whale_wait_minutes:g} min, e scarta il token se il wallet vende); senza dati sufficienti "
+             f"l'informazione è ignorata."]
     if readiness:
         lines.append(f"- stato: {'dati sufficienti' if readiness.get('ready') else 'dati NON sufficienti'} "
                      f"({readiness.get('why', '')})")
@@ -178,7 +173,7 @@ def report_section(a: dict | None, cfg, readiness: dict | None = None) -> str:
     if d["ok"] and a["with"]["n"] >= MIN_GROUP and a["without"]["n"] >= MIN_GROUP:
         verdict = "MEGLIO" if d["lo"] > 0 else "PEGGIO" if d["hi"] < 0 else "nessuna differenza certa per ora"
         lines.append(f"- differenza: {d['mean']:+.2f} punti % [{d['lo']:+.2f}, {d['hi']:+.2f}] -> {verdict}")
-    lines += ["### B. Token passati alla soglia solo grazie al bonus", grp("promossi dal bonus", a["promoted"])]
+    lines += ["### B. Token approvati solo grazie ai wallet bravi", grp("approvati grazie ai wallet bravi", a["promoted"])]
     lines += [f"### C. Precisione sul traguardo ${cfg.smart_wallets.win_mcap_usd / 1000:.0f}k",
               f"- {a['hits']} segnalazioni su {a['hit_tokens']} token, {a['hit_decided']} già decisi: "
               f"{pct(a['precision'])} hanno raggiunto il traguardo",

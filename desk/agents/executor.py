@@ -14,6 +14,10 @@ Entry timing ([entry], desk/entry.py): with a mode other than "now" an approved 
 The Executor watches its price for up to [entry] window_minutes and buys at the moment the rule finds (a dip,
 a bounce off a dip, a confirmation), always with a FRESH Analyst verdict and all the checks above; if the
 moment doesn't come, or liquidity leaves while waiting, the token is dropped.
+WHALE ENTRY (user 2026-11-12, desk/whale_entry.py): a token approved while smart wallets hold it (Whale checker,
+51% of the score) is bought only within +30% of the smart wallets' own buy price and not on a 5-minute spike;
+otherwise the Executor waits (up to [smart_wallets] whale_wait_minutes) for the price to come back. If one of those
+smart wallets sells meanwhile, the token is dropped and not bought for whale_sold_block_hours. Same checks as above.
 Size = max_position_pct (<= 8%, hard ceiling) of the CURRENT balance. Never more.
 Exits run on their own loop and never wait for an entry (no shared swap lock).
 """
@@ -29,6 +33,7 @@ from ..models import ExitOrder, FilterPass, Position, Verdict, now
 from .. import rugnames
 from ..pools import pin_labels, quote_ok, route_check, route_text
 from ..entry import EntryPlan, plan_from, settings as entry_settings
+from .. import whale_entry
 from ..portfolio import AveragingDownError
 from ..quant import label_outcome, outcome_row
 from .analyst import ANALYSIS_MAX_SECONDS
@@ -62,6 +67,8 @@ class Executor(Agent):
         self.plans: dict[str, dict] = {}         # mint -> approved token waiting for its entry moment
         self.timing_done: dict[str, float] = {}  # mint -> when its plan ended without a buy (no new plan for 1 h)
         self.timing_notes: dict[str, str] = {}   # mint -> why this moment was chosen (goes in the buy reason)
+        self.whale_plans: dict[str, dict] = {}   # mint -> token approved thanks to smart wallets, waiting for a price
+        self.whale_blocked: dict[str, float] = {}  # mint -> when a smart wallet sold while we waited
         # No swap lock: fills are measured per transaction (Jupiter's result / tx metadata), so an exit
         # never waits for an entry's swap to land.
 
@@ -71,7 +78,8 @@ class Executor(Agent):
                           f"of balance per trade, max {self.e.max_open_positions} positions")
         await asyncio.gather(self.supervised("executor-exits", self.exit_loop),
                              self.supervised("executor-entries", self.loop),
-                             self.supervised("executor-timing", self.timing_loop))
+                             self.supervised("executor-timing", self.timing_loop),
+                             self.supervised("executor-whales", self.whale_loop))
 
     async def exit_loop(self) -> None:
         """Exits run on their own loop: a stop is never queued behind an entry's quotes and checks.
@@ -148,7 +156,14 @@ class Executor(Agent):
         ok, why = self.risk.approve_entry(v.mint)
         if not ok:
             return self.reject(v, f"Risk: {why}")
-        if not await self.timing_allows(v):
+        blocked = self.whale_blocked.get(v.mint)
+        if blocked and now() - blocked < float(self.cfg.smart_wallets.whale_sold_block_hours) * 3600:
+            return self.reject(v, "a smart wallet sold this token while we waited to buy it: dropped "
+                                  f"for {self.cfg.smart_wallets.whale_sold_block_hours:g} h")
+        if v.mint in self.whale_plans or self.is_whale(v):
+            if not await self.whale_allows(v):
+                return
+        elif not await self.timing_allows(v):
             return
         self.desk.in_flight.add(v.mint)
         self.status("working")
@@ -157,6 +172,121 @@ class Executor(Agent):
         finally:
             self.desk.in_flight.discard(v.mint)
             self.timing_notes.pop(v.mint, None)
+
+    # ── whale entry (desk/whale_entry.py) ──
+    def is_whale(self, v: Verdict) -> bool:
+        """Approved with smart wallets weighing in (Whale checker), and their buy price is known."""
+        f = v.features or {}
+        return bool(f.get("whale_free_score") is not None and (f.get("whale_holders") or 0) > 0
+                    and f.get("whale_entry_sol") and getattr(self.desk, "smart", None) is not None)
+
+    def _price_sol(self, snap) -> float:
+        if snap is None:
+            return 0.0
+        if snap.price_native > 0:
+            return snap.price_native
+        usd = self.desk.portfolio.sol_usd
+        return snap.price_usd / usd if usd and snap.price_usd > 0 else 0.0
+
+    async def whale_allows(self, v: Verdict) -> bool:
+        """True = buy now. False = waiting for a price near the smart wallets' own (or dropped)."""
+        p = self.whale_plans.get(v.mint)
+        if p is not None:
+            p["verdict"] = v
+            if p["state"] == "buy":
+                self.whale_plans.pop(v.mint, None)
+                self.timing_notes[v.mint] = "wallet bravi: " + p["why"]
+                return True
+            return False
+        done = self.timing_done.get(v.mint)
+        if done and now() - done < self.cfg.quant.horizon_minutes * 60:
+            return False                          # its price didn't come back: not re-planned for an hour
+        sw = self.desk.smart
+        rep = (sw.reports.get(v.mint) or {}) if sw is not None else {}
+        ref = float((v.features or {}).get("whale_entry_sol") or rep.get("entry_sol") or 0)
+        wallets = list(rep.get("wallets") or [])
+        if len(self.whale_plans) >= 20:
+            self.reject(v, "too many smart-wallet tokens already waiting for their price")
+            return False
+        snap = await self.desk.dex.snapshot(v.mint)
+        if snap is None or snap.price_usd <= 0:
+            self.reject(v, "whale entry: no price to start from")
+            return False
+        t = now()
+        p = {"t0": t, "ref_sol": ref, "wallets": wallets, "verdict": v, "symbol": v.symbol, "state": "wait",
+             "why": "", "ref_liq": snap.liquidity_usd, "ref_pair": snap.pair_address, "armed_ts": 0.0,
+             "sold_check": 0.0}
+        self.whale_plans[v.mint] = p
+        st = await self.whale_look(v.mint, p, snap, t)
+        if st == "buy":
+            self.whale_plans.pop(v.mint, None)
+            self.timing_notes[v.mint] = "wallet bravi: " + p["why"]
+            return True
+        if st == "wait":
+            msg = f"approvato grazie ai wallet bravi, aspetto il prezzo: {p['why']}"
+            self.desk.store.add_decision(t, "executor", "wait", v.mint, v.symbol, msg,
+                                         {"score": v.score, "whale_entry_sol": ref, "wallets": wallets})
+            self.emit("info", msg, v.mint, v.symbol)
+        return False
+
+    async def whale_look(self, mint: str, p: dict, snap, t: float) -> str:
+        """One look at a waiting whale token: price vs the smart wallets' buy price, spike, liquidity, sellers."""
+        c = self.cfg.smart_wallets
+        sold: list[str] = []
+        if p["wallets"] and t - p["sold_check"] >= 30 and getattr(self.desk, "smart", None) is not None:
+            p["sold_check"] = t
+            try:
+                sold = await self.desk.smart.sold(mint, p["wallets"])
+            except Exception:  # noqa: BLE001 - RPC busy: checked again on the next look
+                sold = []
+        if snap is not None and p.get("ref_pair") and snap.pair_address and snap.pair_address != p["ref_pair"]:
+            snap = None                                   # another pool's price: not comparable
+        price = self._price_sol(snap)
+        liq = snap.liquidity_usd / p["ref_liq"] if snap is not None and p["ref_liq"] > 0 else None
+        st, why = whale_entry.decide(t - p["t0"], price, p["ref_sol"], snap.change_m5 if snap else 0.0, liq, sold, c,
+                                     self.cfg.entry.max_liq_drop_pct)
+        p["why"] = why
+        if st == "buy":
+            p["state"], p["armed_ts"] = "buy", t
+        elif st in ("skip", "cancel", "sold"):
+            self.whale_plans.pop(mint, None)
+            if st == "sold":
+                self.whale_blocked[mint] = t
+            self.timing_done[mint] = t
+            self.state.bump("whale_drop")
+            self.desk.store.add_decision(t, "executor", "reject", mint, p["symbol"], f"whale entry: {why}",
+                                         {"score": p["verdict"].score})
+            self.emit("reject", f"no trade: {why}", mint, p["symbol"], deep=True)
+        return st
+
+    async def whale_loop(self) -> None:
+        """Waiting whale tokens: a look every 12 s; when the price is right, the freshest verdict
+        goes back through handle_verdict (all checks again). An armed plan waits 150 s for a fresh verdict."""
+        while not self.desk.stop.is_set():
+            # every 12 s: the "entry" DexScreener lane (10/min) is shared with the normal entry plans
+            if not await self.sleep(max(12.0, 2 * float(self.cfg.entry.poll_seconds))):
+                return
+            if not self.whale_plans:
+                continue
+            try:
+                snaps = await self.desk.dex.snapshots(list(self.whale_plans), fresh=True, lane="entry")
+            except Exception:  # noqa: BLE001 - next tick retries
+                continue
+            t = now()
+            for mint, p in list(self.whale_plans.items()):
+                if p["state"] == "buy":
+                    if t - p["armed_ts"] > 150:
+                        self.whale_plans.pop(mint, None)
+                        self.desk.store.add_decision(t, "executor", "reject", mint, p["symbol"],
+                                                     f"whale entry: {p['why']}, ma nessun segnale fresco dell'Analyst "
+                                                     f"entro 150 s", {"score": p["verdict"].score})
+                    elif self.verify_clearance(p["verdict"])[0]:
+                        await self.desk.verdicts.put(p["verdict"])
+                    continue
+                if await self.whale_look(mint, p, (snaps or {}).get(mint), t) == "buy":
+                    self.emit("info", f"prezzo giusto per i wallet bravi: {p['why']}", mint, p["symbol"])
+                    if self.verify_clearance(p["verdict"])[0]:
+                        await self.desk.verdicts.put(p["verdict"])
 
     # ── entry timing ──
     def rule_text(self) -> str:

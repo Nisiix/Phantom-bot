@@ -117,10 +117,10 @@ class AnalystCfg:
     young_age_hours: float = 4.0
     old_late_entry_h6_pct: float = 300.0   # older token up more than this in 6h -> capped (young: no 6h cap)
     old_parabolic_h1_pct: float = 200.0    # older token up more than this in 1h -> capped (young: 400%)
-    # Whale checker (user 2026-11-12): smart wallets holding the token, counted only when the Whale checker has
-    # sufficient data ([smart_wallets] ready_min_*). Added to the score before the hard caps; 0 = ignore it.
-    whale_bonus_per_wallet: float = 0.05
-    whale_bonus_max: float = 0.10
+    # Whale checker (user 2026-11-12): when it has sufficient data ([smart_wallets] ready_min_*) and at least one
+    # smart wallet holds the token, that counts for whale_weight (51%) of the score, the other components for the
+    # rest: such a token is approved almost always (the hard caps still apply). No smart wallet: the usual score.
+    whale_weight: float = 0.51
 
 
 @dataclass
@@ -264,7 +264,7 @@ class SmartWalletsCfg:
     rescore_minutes: float = 30.0
     watch_seconds: float = 60.0         # open positions: smart holders read this often
     watch_analyst_seconds: float = 300.0  # the Analyst's tokens (it also asks at every re-score, cached 60 s)
-    min_buy_sol: float = 0.05           # early buys smaller than this are not scored (volume / spam bots)
+    min_buy_sol: float = 0.1            # early buys smaller than this are not scored (user 2026-11-12: 0.1 SOL)
     # Report to the Analyst (user 2026-11-12): used only with sufficient data, otherwise ignored.
     ready_min_decided_tokens: int = 300  # tokens read and decided (won, or older than decide_hours)
     ready_min_winners: int = 20          # ...of which reached win_mcap_usd
@@ -273,6 +273,12 @@ class SmartWalletsCfg:
     ready_min_lift: float = 1.2           # ...that won at least this many times the base rate
     validation_lookback_days: float = 14.0
     analyst_timeout_seconds: float = 15.0  # holders not read in time -> the Analyst scores without them
+    entry_lookup_seconds: float = 12.0     # time to read the smart wallets' own buy price (their token account)
+    # Buying a token approved thanks to smart wallets (user 2026-11-12, desk/whale_entry.py):
+    max_entry_premium_pct: float = 30.0   # our price at most this % above the smart wallets' average buy price
+    whale_max_m5_pct: float = 10.0        # ...and not on a spike: 5-minute change at most this
+    whale_wait_minutes: float = 60.0      # otherwise wait this long for the price to come back
+    whale_sold_block_hours: float = 6.0   # a smart wallet sold while we waited: token dropped for this long
 
 
 @dataclass

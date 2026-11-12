@@ -171,7 +171,7 @@ def test_whale_checker_agent_orders_and_watches():
 
 
 # ── report to the Analyst (user 2026-11-12) ──
-def test_analyst_bonus_only_with_sufficient_data():
+def test_smart_wallets_weigh_51_percent_only_with_sufficient_data():
     from desk.agents.analyst import score_token
     from desk.controller import BASE_WEIGHTS, analyst_score
     from tests.test_rules import snap
@@ -180,16 +180,15 @@ def test_analyst_bonus_only_with_sufficient_data():
     plain, b0, _ = score_token(snap(), rug, web)
     ignored, _, why = score_token(snap(), {**rug, "whales": {"ready": False, "why": "not enough data yet"}}, web)
     assert ignored == plain and any("ignored" in w for w in why)
-    none_held, _, _ = score_token(snap(), {**rug, "whales": {"ready": True, "holders": 0}}, web)
-    assert none_held == plain                                          # no smart holder: no penalty
+    none_held, b1, _ = score_token(snap(), {**rug, "whales": {"ready": True, "holders": 0}}, web)
+    assert none_held == plain and "whales" not in b1                    # no smart holder: the usual rules
     info: dict = {}
-    two, b2, why = score_token(snap(), {**rug, "whales": {"ready": True, "holders": 2, "wallets": ["Ab12cd"]}},
-                               web, None, info)
-    assert abs(two - min(1.0, plain + 0.10)) < 1e-3 and b2 == b0 and any("+0.10" in w for w in why)
-    five, _, _ = score_token(snap(), {**rug, "whales": {"ready": True, "holders": 5}}, web)
-    assert abs(five - two) < 1e-9                                      # capped at whale_bonus_max
+    one, b2, why = score_token(snap(), {**rug, "whales": {"ready": True, "holders": 1, "wallets": ["Ab12cd"],
+                                                          "entry_sol": 2e-7}}, web, None, info)
+    assert b2["whales"] == 1.0 and abs(one - (0.51 + 0.49 * plain)) < 1e-3 and one >= 0.6
+    assert info["whale_free_score"] == round(plain, 4) and info["whale_entry_sol"] == 2e-7
     f = {**{f"c_{k}": v for k, v in b2.items()}, **info}
-    assert abs(analyst_score(f, BASE_WEIGHTS) - two) < 0.01           # the Controller re-scores it the same way
+    assert abs(analyst_score(f, BASE_WEIGHTS) - one) < 0.01           # the Controller re-scores it the same way
 
 
 def test_readiness_and_report(tmp_path):
@@ -198,7 +197,7 @@ def test_readiness_and_report(tmp_path):
     rpc = Rpc(chains)
     sw = SmartWallets(st, rpc, None, cfg(ready_min_decided_tokens=3, ready_min_winners=2,
                                          ready_min_smart_wallets=1, min_hit_rate=0.5,
-                                         ready_min_validation_tokens=0, ready_min_lift=0))
+                                         ready_min_validation_tokens=0, ready_min_lift=0, entry_lookup_seconds=2))
     rep = asyncio.run(sw.report("Xpump"))
     assert rep["ready"] is False and "0/3 tokens decided" in rep["why"]
     for m in chains:
@@ -333,3 +332,90 @@ def test_win_line_is_100k_and_old_verdicts_follow_it(tmp_path):
     SmartWallets(st, Rpc({}), None, cfg(win_mcap_usd=100_000))        # restart with the new line
     assert st.q("SELECT won FROM sw_tokens")[0]["won"] == 1
     assert sw is not None
+
+
+# ── buying a smart-wallet token (user 2026-11-12, desk/whale_entry.py) ──
+def test_whale_entry_decide():
+    from desk.whale_entry import decide
+    c = SmartWalletsCfg()
+    assert decide(10, 1.25, 1.0, 2.0, 1.0, [], c)[0] == "buy"                      # +25% <= +30%
+    st, why = decide(10, 1.5, 1.0, 2.0, 1.0, [], c)
+    assert st == "wait" and "+50%" in why                                          # too far above their price
+    assert decide(10, 1.1, 1.0, 25.0, 1.0, [], c)[0] == "wait"                     # spiking: not the top
+    assert decide(10, 1.1, 1.0, 2.0, 1.0, ["SELLER"], c)[0] == "sold"              # they leave: we don't go in
+    assert decide(10, 1.1, 1.0, 2.0, 0.5, [], c)[0] == "cancel"                    # liquidity leaving
+    assert decide(3601, 1.5, 1.0, 2.0, 1.0, [], c)[0] == "skip"                    # 60 min without the price
+
+
+def _whale_desk(tmp_path):
+    from desk.agents.executor import Executor
+    from desk.agents.risk import Risk
+    from desk.brokers.paper import PaperBroker
+    from tests.test_entry import FakeDex, FakeJup
+    from tests.test_rules import make_desk
+
+    class Smart:
+        def __init__(self):
+            self.reports = {"M": {"wallets": ["SMARTWALLET"], "entry_sol": 0.00001}}
+            self.sellers: list[str] = []
+
+        async def sold(self, mint, wallets):
+            return [w for w in wallets if w in self.sellers]
+
+    desk = make_desk(tmp_path)
+    desk.cfg.entry.mode = "now"
+    dex = FakeDex()                       # price_native = price_usd / 100
+    desk.jup, desk.dex, desk.smart = FakeJup(), dex, Smart()
+    ex = Executor(desk, PaperBroker(desk.portfolio), Risk(desk))
+    return desk, dex, ex
+
+
+def _whale_verdict(desk):
+    from tests.test_rules import signed_verdict
+    v = signed_verdict(desk)
+    v.clearance.report.rug["decimals"] = 6
+    v.features = {"whale_free_score": 0.3, "whale_holders": 1, "whale_entry_sol": 0.00001}
+    return v
+
+
+def test_executor_waits_for_the_smart_price_then_buys(tmp_path):
+    desk, dex, ex = _whale_desk(tmp_path)
+    dex.price = 0.0015                    # 0.000015 SOL = +50% over the smart wallets' 0.00001
+
+    async def go():
+        await ex.handle_verdict(_whale_verdict(desk))
+        assert "M" not in desk.portfolio.positions and "M" in ex.whale_plans
+        p = ex.whale_plans["M"]
+        dex.price = 0.0012                # +20%: the price is right
+        assert await ex.whale_look("M", p, await dex.snapshot("M"), p["t0"] + 60) == "buy"
+        await ex.handle_verdict(_whale_verdict(desk))
+    asyncio.run(go())
+    assert "M" in desk.portfolio.positions and "wallet bravi" in desk.portfolio.positions["M"].entry_reason
+
+
+def test_executor_drops_token_when_the_smart_wallet_sells(tmp_path):
+    desk, dex, ex = _whale_desk(tmp_path)
+    dex.price = 0.0016
+
+    async def go():
+        await ex.handle_verdict(_whale_verdict(desk))
+        p = ex.whale_plans["M"]
+        desk.smart.sellers = ["SMARTWALLET"]
+        dex.price = 0.0011                # even at a good price: they sold, we don't buy
+        p["sold_check"] = 0
+        assert await ex.whale_look("M", p, await dex.snapshot("M"), p["t0"] + 60) == "sold"
+        assert "M" not in ex.whale_plans and "M" in ex.whale_blocked
+        await ex.handle_verdict(_whale_verdict(desk))                  # re-approved: still dropped
+    asyncio.run(go())
+    assert "M" not in desk.portfolio.positions
+    last = desk.store.q("SELECT reason FROM decisions WHERE stage='executor' ORDER BY id DESC LIMIT 1")[0]["reason"]
+    assert last.startswith("a smart wallet sold")
+
+
+def test_token_without_smart_wallets_keeps_the_usual_entry(tmp_path):
+    from tests.test_rules import signed_verdict
+    desk, dex, ex = _whale_desk(tmp_path)
+    v = signed_verdict(desk)
+    v.clearance.report.rug["decimals"] = 6
+    asyncio.run(ex.handle_verdict(v))                                   # entry mode "now": bought at once
+    assert "M" in desk.portfolio.positions and not ex.whale_plans

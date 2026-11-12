@@ -21,11 +21,13 @@ trades, the desk's own DexScreener readings for the market cap. No paid API, no 
    is stored in `sw_hits` and shown as an event.
 5. REPORT TO THE ANALYST (user 2026-11-12). For every token the Analyst scores, the Whale checker reads the smart
    holders on the spot and reports them. Only when the data is sufficient (readiness(): enough decided tokens,
-   winners and smart wallets) does the Analyst use it, as a bonus on its score; otherwise it ignores it.
-   Nothing here buys or sells by itself: the Analyst's threshold, its caps and the Executor's checks still decide.
+   winners and smart wallets) does the Analyst use it: one smart holder = 51% of its score ([analyst] whale_weight);
+   otherwise it ignores it. The report also carries the smart wallets' own average buy price (read from their token
+   account): the Executor buys only within +30% of it and drops the token if they sell (desk/whale_entry.py).
+   Nothing here buys or sells by itself: the Analyst's caps and the Executor's checks still decide.
 
 SAFEGUARDS (devil's-advocate review, 2026-11-12):
-  * dust buys don't count: an early buy under `min_buy_sol` (volume/spam bots buy 0.001-0.01 SOL) is not scored;
+  * dust buys don't count: an early buy under `min_buy_sol` (0.1 SOL; volume/spam bots buy 0.001-0.01 SOL);
   * one operator = one win: wins are counted on distinct creators (their funder when known), so a pump group
     relaunching through fresh creators with the same wallets does not collect a "win" per relaunch;
   * no self-proof: a token never counts as proof for itself - a holder is smart for THIS token only if it is still
@@ -151,6 +153,8 @@ class SmartWallets:
         self._hcache: dict[str, tuple[float, dict]] = {}
         self._max_amt: dict[tuple[str, str], float] = {}
         self._validation: dict = {}
+        self._entries: dict[tuple[str, str], tuple[float, float | None]] = {}   # (mint, wallet) -> (ts, SOL/token)
+        self.reports: dict[str, dict] = {}          # mint -> last report to the Analyst (full wallets, for the Executor)
         self.funding = Funding(store, _Paced(self), hops=1)
         self.stats = {"scanned": 0, "too_long": 0, "trades": 0, "errors": 0, "hits": 0, "backfilled": 0,
                       "reports": 0}
@@ -467,6 +471,38 @@ class SmartWallets:
         self._hcache[mint] = (time.time(), dict(out))
         return out
 
+    async def entry_price(self, mint: str, wallet: str, max_txs: int = 6) -> float | None:
+        """The wallet's average buy price for `mint` in SOL per token, read from its token account's history (a
+        handful of transactions). None when it can't be read (no SOL spent seen, e.g. a buy paid in wrapped SOL).
+        Cached 10 minutes."""
+        hit = self._entries.get((mint, wallet))
+        if hit and time.time() - hit[0] < 600:
+            return hit[1]
+        prog = await self.token_program(mint)
+        acc = ata(wallet, mint, prog)
+        price = None
+        if acc:
+            sigs = await self.call("getSignaturesForAddress", [acc, {"limit": 50}]) or []
+            sol = tok = 0.0
+            for sg in [x for x in reversed(sigs) if not x.get("err")][:max_txs]:      # oldest first: the buys
+                tx = await self.call("getTransaction", [sg["signature"], {"encoding": "jsonParsed",
+                                                                          "maxSupportedTransactionVersion": 1}])
+                for t in parse_trades(tx, mint):
+                    if t["wallet"] == wallet and t["side"] == "buy" and t["signer"] and t["sol"] > 0:
+                        sol, tok = sol + t["sol"], tok + t["tokens"]
+            price = sol / tok if tok > 0 and sol > 0 else None
+        if len(self._entries) > 5000:
+            self._entries.clear()
+        self._entries[(mint, wallet)] = (time.time(), price)
+        return price
+
+    async def sold(self, mint: str, wallets: list[str]) -> list[str]:
+        """Which of these smart wallets sold `mint`: no longer hold it, or hold under half of the most seen."""
+        if not wallets:
+            return []
+        held = await self.holders(mint)
+        return [w for w in wallets if w not in held or self.selling(mint, w, held[w])]
+
     def selling(self, mint: str, wallet: str, amt: float) -> bool:
         """Already sold half of the largest amount we saw it hold."""
         return amt < 0.5 * self._max_amt.get((mint, wallet), amt)
@@ -530,7 +566,7 @@ class SmartWallets:
         return out
 
     async def report(self, mint: str, symbol: str = "", creator: str | None = None, creator_funder: str | None = None,
-                     insiders: set | None = None) -> dict:
+                     insiders: set | None = None, price_sol: float | None = None) -> dict:
         """What the Whale checker tells the Analyst about a token it is scoring:
         {"ready": False, "why"} when the data is not sufficient (the Analyst ignores it), else
         {"ready": True, "holders": n operators, "wallets": [...], "skipped": {...}}. Holders are read on-chain now
@@ -568,15 +604,40 @@ class SmartWallets:
         valid = {w: held[w] for w, _ in counted.values()}
         self.record(mint, symbol, valid, "analyst", quiet=True)
         top = sorted(counted.values(), key=lambda x: -x[1]["hit_rate"])
+        # Their own buy price: the Executor buys only near it (desk/whale_entry.py). SOL-weighted average.
+        entries: dict[str, float] = {}
+        if top:
+            async def read_all():
+                for w, _ in top[:5]:
+                    e = await self.entry_price(mint, w)
+                    if e:
+                        entries[w] = e
+            try:
+                await asyncio.wait_for(read_all(), timeout=float(self.c.entry_lookup_seconds))
+            except Exception:  # noqa: BLE001 - slow RPC: whatever was read is used
+                pass
+        entry = None
+        if entries:
+            amounts = {w: max(valid.get(w, 0.0), self._max_amt.get((mint, w), 0.0)) for w in entries}
+            tot = sum(amounts.values())
+            entry = (sum(entries[w] * amounts[w] for w in entries) / tot) if tot > 0 else \
+                sum(entries.values()) / len(entries)
+        prem = (price_sol / entry - 1) * 100 if entry and price_sol else None
         out = {"ready": True, "holders": len(counted), "wallets": [w[:6] for w, _ in top[:5]],
                "best_hit_rate": top[0][1]["hit_rate"] if top else None, "seen": len(held),
-               "skipped": {k: v for k, v in skipped.items() if v}, "why": r["why"]}
+               "skipped": {k: v for k, v in skipped.items() if v}, "why": r["why"],
+               "entry_sol": entry, "premium_pct": round(prem, 1) if prem is not None else None}
+        self.reports[mint] = {"ts": time.time(), "wallets": [w for w, _ in top], "entry_sol": entry,
+                              "entries": entries}
+        if len(self.reports) > 2000:
+            self.reports = dict(list(self.reports.items())[-1000:])
         if held:
             best = top[0][1] if top else {}
             sk = ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in out["skipped"].items())
             self.emit("info", f"-> Analyst: {len(counted)} smart wallet(s) count for {symbol or mint[:6]}"
                               + (f" (best {best.get('wins', 0)}/{best.get('tokens', 0)} early buys reached "
                                  f"${float(self.c.win_mcap_usd) / 1000:.0f}k)" if top else "")
+                              + (f"; their buy price {entry:.3g} SOL, now {prem:+.0f}%" if prem is not None else "")
                               + (f"; not counted: {sk}" if sk else ""), mint, symbol, wallets=out["wallets"])
         return out
 

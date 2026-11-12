@@ -9,10 +9,11 @@ remaining weights are renormalised, so a missing site neither helps nor hurts th
 With GMGN data a ninth component, smart money (.10: smart/renowned wallets holding, penalised
 for fresh-wallet / bot / rat-trader crowds), is added and the others are scaled by 0.9.
 WHALE CHECKER (user 2026-11-12, desk/smartwallets.py): for every token the Whale checker reports how many of its
-smart wallets (wallets that keep buying early the tokens that reach $100k) hold it. With sufficient data each one
-adds whale_bonus_per_wallet to the score (at most whale_bonus_max), which can lift a token over the threshold and
-on to the Executor; without sufficient data the report is ignored (no bonus, no penalty).
-Then hard caps for wash trading, insider clusters and parabolic blow-off tops (they apply after the bonus).
+smart wallets (wallets that keep buying early the tokens that reach $100k) hold it. With sufficient data and at
+least one smart holder, the smart wallets weigh whale_weight (51%) of the score and every other component 49%
+together: such a token is approved almost always and the Executor buys it near the smart wallets' own price
+(desk/whale_entry.py). No smart holder, or not enough data: the usual score, nothing changes.
+Then hard caps for wash trading, insider clusters and parabolic blow-off tops (they apply after the whales).
 Every verdict carries its full breakdown and human-readable rationale.
 """
 from __future__ import annotations
@@ -172,17 +173,22 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None,
         weights["website"] *= 0.3
     score = sum(weights[k] * b[k] for k in weights) / sum(weights.values())
 
-    # Whale checker: a bonus only with sufficient data; an empty or "not ready" report changes nothing.
+    # Whale checker: smart holders weigh 51% of the score, only with sufficient data and at least one of them.
     wh = rug.get("whales") or None
-    whale_bonus, whale_holders = 0.0, None
+    whale_holders, whale_free, ww = None, None, 0.0
     if wh is not None:
         if wh.get("ready"):
             whale_holders = int(wh.get("holders") or 0)
-            whale_bonus = min(float(getattr(cfg, "whale_bonus_max", 0.10)),
-                              float(getattr(cfg, "whale_bonus_per_wallet", 0.05)) * whale_holders)
-            score = min(1.0, score + whale_bonus)
-            why.append(f"whale checker: {whale_holders} smart wallet(s) hold it"
-                       + (f" (+{whale_bonus:.2f}, {', '.join(wh.get('wallets') or [])})" if whale_bonus else ""))
+            ww = min(1.0, max(0.0, float(getattr(cfg, "whale_weight", 0.51))))
+            if whale_holders > 0 and ww > 0:
+                whale_free = score
+                b["whales"] = 1.0
+                score = ww * 1.0 + (1 - ww) * whale_free
+                why.append(f"whale checker: {whale_holders} smart wallet(s) hold it ({', '.join(wh.get('wallets') or [])})"
+                           f" -> {ww:.0%} of the score; without them {whale_free:.2f}")
+            else:
+                ww = 0.0
+                why.append("whale checker: no smart wallet holds it (usual score)")
         else:
             why.append(f"whale checker ignored ({wh.get('why') or 'not enough data'})")
     raw_score, cap_score = score, None
@@ -216,7 +222,10 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None,
             why.append(f"CAP {cap:.2f}: {reason}")
     if info is not None:
         info.update(raw_score=round(raw_score, 4), cap_score=cap_score, has_site=has_site,
-                    whale_bonus=round(whale_bonus, 4), whale_holders=whale_holders,
+                    whale_holders=whale_holders, whale_weight=ww if whale_free is not None else 0.0,
+                    whale_free_score=round(whale_free, 4) if whale_free is not None else None,
+                    whale_entry_sol=(wh or {}).get("entry_sol") if whale_free is not None else None,
+                    whale_premium_pct=(wh or {}).get("premium_pct") if whale_free is not None else None,
                     whale_ready=None if wh is None else bool(wh.get("ready")))
     return round(max(0.0, min(1.0, score)), 4), {k: round(v, 3) for k, v in b.items()}, why
 
@@ -275,13 +284,14 @@ class Analyst(Agent):
             finally:
                 self._busy.discard(mint)
 
-    async def _whales(self, mint: str, symbol: str) -> dict | None:
+    async def _whales(self, mint: str, symbol: str, price_sol: float = 0.0) -> dict | None:
         """The Whale checker's report on this token, or None when it cannot answer (never blocks scoring)."""
         d = self.desk
         try:
             g = d.devwatch.groups.get(mint) if d.devwatch is not None else None
             insiders = set((g.wallets or {}).keys()) if g is not None else set()
-            return await d.smart.report(mint, symbol, d.creators.get(mint), d.funders.get(mint), insiders)
+            return await d.smart.report(mint, symbol, d.creators.get(mint), d.funders.get(mint), insiders,
+                                        price_sol or None)
         except Exception:  # noqa: BLE001 - a Whale checker problem must never stop a verdict
             return None
 
@@ -309,7 +319,7 @@ class Analyst(Agent):
         if m is None:
             return
         # The Whale checker reads the smart holders while the website is checked (desk/smartwallets.py).
-        whales_task = asyncio.create_task(self._whales(rep.mint, rep.symbol)) \
+        whales_task = asyncio.create_task(self._whales(rep.mint, rep.symbol, m.price_native)) \
             if getattr(self.desk, "smart", None) is not None else None
         # Use the freshest market data, not what the Filter saw seconds ago.
         fresh = await self.desk.dex.snapshot(rep.mint)

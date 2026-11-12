@@ -363,6 +363,7 @@ def analyst_score(f: dict, weights: dict) -> float | None:
     comps = {k[2:]: v for k, v in f.items() if k.startswith("c_") and isinstance(v, (int, float))}
     if "raw_score" not in f or not comps:
         return None
+    whales = comps.pop("whales", None)           # Whale checker: 51% of the score when smart wallets hold it
     w = {k: weights[k] for k in BASE_WEIGHTS if k in comps}
     if "traction" in comps:
         w["traction"] = weights.get("traction", 0.14)
@@ -375,9 +376,9 @@ def analyst_score(f: dict, weights: dict) -> float | None:
     if tot <= 0:
         return None
     s = sum(w[k] * comps[k] for k in w) / tot
-    wb = f.get("whale_bonus")                    # Whale checker bonus (score_token), before the caps
-    if isinstance(wb, (int, float)):
-        s = min(1.0, s + wb)
+    ww = f.get("whale_weight")
+    if whales is not None and isinstance(ww, (int, float)) and ww > 0:
+        s = ww * whales + (1 - ww) * s
     cap = f.get("cap_score")
     if isinstance(cap, (int, float)):
         s = min(s, cap)
