@@ -16,10 +16,13 @@ trades, the desk's own DexScreener readings for the market cap. No paid API, no 
 3. SCORE. For every wallet, over the decided tokens it bought early (signer, not bundle, not creator): tokens, wins,
    hit rate. A wallet is "smart" with >= min_wins wins, >= min_tokens tokens and a hit rate >= min_hit_rate: a sniper
    that buys everything has many wins but a low hit rate, a creator's fresh bundle wallet never repeats.
-4. WATCH (observation only: nothing here buys or blocks). For the tokens the Analyst is following and the open
-   positions, the smart wallets' token accounts are read in one getMultipleAccounts call (100 wallets each) every
-   `watch_seconds`. A smart wallet holding the token is stored in `sw_hits` and shown as an event, so the signal can
-   be measured against the shadow outcomes before it is wired into any decision.
+4. WATCH. For the tokens the Analyst is following and the open positions, the smart wallets' token accounts are
+   read in one getMultipleAccounts call (100 wallets each) every `watch_seconds`. A smart wallet holding the token
+   is stored in `sw_hits` and shown as an event.
+5. REPORT TO THE ANALYST (user 2026-11-12). For every token the Analyst scores, the Whale checker reads the smart
+   holders on the spot and reports them. Only when the data is sufficient (readiness(): enough decided tokens,
+   winners and smart wallets) does the Analyst use it, as a bonus on its score; otherwise it ignores it.
+   Nothing here buys or sells by itself: the Analyst's threshold, its caps and the Executor's checks still decide.
 """
 from __future__ import annotations
 
@@ -108,7 +111,9 @@ class SmartWallets:
         self._backfill_ts = 0.0
         self._bot_peaks: dict[str, tuple[float, float]] = {}
         self._fails: dict[str, int] = {}
-        self.stats = {"scanned": 0, "too_long": 0, "trades": 0, "errors": 0, "hits": 0, "backfilled": 0}
+        self._ready: dict = {}
+        self.stats = {"scanned": 0, "too_long": 0, "trades": 0, "errors": 0, "hits": 0, "backfilled": 0,
+                      "reports": 0}
 
     # ── RPC, paced: the public node is shared with the Filter, DevWatch and the funder backfill ──
     async def call(self, method: str, params: list):
@@ -289,9 +294,8 @@ class SmartWallets:
                     out[w] = amt
         return out
 
-    async def watch(self, mint: str, symbol: str = "", stage: str = "") -> list[str]:
-        """Record the smart wallets that hold a followed token. Returns the wallets seen for the first time."""
-        held = await self.holders(mint)
+    def record(self, mint: str, symbol: str, held: dict[str, float], stage: str, quiet: bool = False) -> list[str]:
+        """Store the smart wallets holding a token (one row per wallet and token). Returns the new ones."""
         first_check = mint not in self._held
         seen = self._held.setdefault(mint, set())
         new = [w for w in held if w not in seen]
@@ -302,11 +306,65 @@ class SmartWallets:
                                   (mint, w, symbol, time.time(), stage, int(first_check), held[w],
                                    s.get("wins") or 0, s.get("tokens") or 0))
             self.stats["hits"] += 1
-            self.emit("info", f"smart wallet {w[:6]} {'holds' if first_check else 'bought'} {symbol or mint[:6]} "
-                              f"({s.get('wins', 0)}/{s.get('tokens', 0)} early buys reached "
-                              f"${float(self.c.win_mcap_usd) / 1000:.0f}k) - observation only",
-                      mint, symbol, wallet=w, wins=s.get("wins"), tokens=s.get("tokens"))
+            if not quiet:
+                self.emit("info", f"smart wallet {w[:6]} {'holds' if first_check else 'bought'} {symbol or mint[:6]} "
+                                  f"({s.get('wins', 0)}/{s.get('tokens', 0)} early buys reached "
+                                  f"${float(self.c.win_mcap_usd) / 1000:.0f}k)",
+                          mint, symbol, wallet=w, wins=s.get("wins"), tokens=s.get("tokens"))
         return new
+
+    async def watch(self, mint: str, symbol: str = "", stage: str = "") -> list[str]:
+        """Record the smart wallets that hold a followed token. Returns the wallets seen for the first time."""
+        return self.record(mint, symbol, await self.holders(mint), stage)
+
+    # ── 5. report to the Analyst (user 2026-11-12) ──
+    def readiness(self, now: float | None = None) -> dict:
+        """Is there enough data for the Analyst to use the smart wallets? Cached for 5 minutes.
+        ready = >= ready_min_decided_tokens tokens read and decided, >= ready_min_winners of them winners and
+        >= ready_min_smart_wallets smart wallets. Below that the Analyst ignores the Whale checker."""
+        now = now or time.time()
+        if self._ready and now - self._ready.get("ts", 0) < 300:
+            return self._ready
+        c = self.c
+        r = self.store.q("SELECT COUNT(*) AS n, COALESCE(SUM(won), 0) AS w FROM sw_tokens WHERE complete=1 "
+                         "AND (won=1 OR create_ts < ?)", (now - float(c.decide_hours) * 3600,))[0]
+        out = {"decided": int(r["n"]), "winners": int(r["w"]), "smart": len(self.smart), "ts": now}
+        missing = []
+        if out["decided"] < int(c.ready_min_decided_tokens):
+            missing.append(f"{out['decided']}/{c.ready_min_decided_tokens} tokens decided")
+        if out["winners"] < int(c.ready_min_winners):
+            missing.append(f"{out['winners']}/{c.ready_min_winners} winners")
+        if out["smart"] < int(c.ready_min_smart_wallets):
+            missing.append(f"{out['smart']}/{c.ready_min_smart_wallets} smart wallets")
+        out["ready"] = not missing
+        out["why"] = ("not enough data yet: " + ", ".join(missing)) if missing else \
+            f"{out['smart']} smart wallets from {out['decided']} tokens ({out['winners']} winners)"
+        self._ready = out
+        return out
+
+    async def report(self, mint: str, symbol: str = "") -> dict:
+        """What the Whale checker tells the Analyst about a token it is scoring:
+        {"ready": False, "why"} when the data is not sufficient (the Analyst ignores it), else
+        {"ready": True, "holders": n, "wallets": [...], "best_hit_rate"}. Holders are read on-chain now."""
+        r = self.readiness()
+        if not r["ready"]:
+            return {"ready": False, "why": r["why"]}
+        try:
+            held = await asyncio.wait_for(self.holders(mint), timeout=float(self.c.analyst_timeout_seconds))
+        except Exception as e:  # noqa: BLE001 - RPC slow / down: the Analyst scores without it
+            return {"ready": False, "why": f"holders not read in time ({e.__class__.__name__})"}
+        self.stats["reports"] += 1
+        self.record(mint, symbol, held, "analyst", quiet=True)
+        top = sorted(held, key=lambda w: -(self.smart.get(w) or {}).get("hit_rate", 0))
+        out = {"ready": True, "holders": len(held), "wallets": [w[:6] for w in top[:5]],
+               "best_hit_rate": (self.smart.get(top[0]) or {}).get("hit_rate") if top else None,
+               "why": r["why"]}
+        if held:
+            best = self.smart.get(top[0]) or {}
+            self.emit("info", f"-> Analyst: {len(held)} smart wallet(s) hold {symbol or mint[:6]} (best "
+                              f"{best.get('wins', 0)}/{best.get('tokens', 0)} early buys reached "
+                              f"${float(self.c.win_mcap_usd) / 1000:.0f}k)", mint, symbol, wallets=out["wallets"])
+        return out
 
     # ── background loop ──
     def backfill_next(self) -> tuple[str, int] | None:

@@ -375,6 +375,9 @@ def analyst_score(f: dict, weights: dict) -> float | None:
     if tot <= 0:
         return None
     s = sum(w[k] * comps[k] for k in w) / tot
+    wb = f.get("whale_bonus")                    # Whale checker bonus (score_token), before the caps
+    if isinstance(wb, (int, float)):
+        s = min(1.0, s + wb)
     cap = f.get("cap_score")
     if isinstance(cap, (int, float)):
         s = min(s, cap)

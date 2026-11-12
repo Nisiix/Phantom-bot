@@ -556,7 +556,7 @@ const AG = {
   Risk:     { c: "#fb923c", g: "⛨", role: "Stop, trailing e limiti giornalieri" },
   Logger:   { c: "#f472b6", g: "▤", role: "Registra tutto, recap periodico e follow-up a 60 min" },
   Controller: { c: "#facc15", g: "◉", role: "Controllore: verifica gli agenti, prova configurazioni e applica i miglioramenti confermati" },
-  "Whale checker": { c: "#2dd4bf", g: "≋", role: "Wallet bravi sui token da $200k (solo osservazione)" },
+  "Whale checker": { c: "#2dd4bf", g: "≋", role: "Wallet bravi sui token da $200k: li segnala all'Analyst" },
 };
 const agc = (n) => (AG[n] || { c: "#9ca3af" }).c;
 const KEYS = { Scout: [["watching", "in osservazione"], ["sent", "inviati"], ["dropped", "scartati"]],
@@ -565,7 +565,7 @@ const KEYS = { Scout: [["watching", "in osservazione"], ["sent", "inviati"], ["d
   Executor: [["sells", "vendite"], ["wins", "vinti"], ["losses", "persi"], ["declined", "rifiutati"], ["ev_block", "bloccati EV"]],
   Risk: [], Logger: [["logged", "eventi"], ["shadowing", "in follow-up"], ["shadow_done", "follow-up chiusi"], ["recaps", "recap"]],
   Controller: [["checks", "verifiche"], ["alerts", "anomalie ora"], ["rounds", "cicli di test"], ["trials", "configurazioni provate"], ["proposals", "proposte"], ["applied", "decisioni passate"]],
-  "Whale checker": [["wallets", "wallet bravi"], ["hits", "segnali"], ["watching", "sorvegliati"], ["scanned", "letti"], ["backfilled", "dal passato"]] };
+  "Whale checker": [["wallets", "wallet bravi"], ["reports", "rapporti all'Analyst"], ["hits", "segnali"], ["scanned", "letti"], ["backfilled", "dal passato"]] };
 const MAIN = { Scout: ["discovered", "scoperti"], Filter: ["evaluated", "valutati"], Analyst: ["scored", "valutati"],
   Executor: ["buys", "acquisti"], Risk: ["open", "posizioni sorvegliate"] };
 const ST = { working: "attivo", idle: "in attesa", error: "errore", starting: "avvio", halted: "fermo" };
@@ -982,7 +982,7 @@ const CNT = { discovered: "scoperti", watching: "in osservazione", sent: "inviat
   sells: "vendite", wins: "vinti", losses: "persi", declined: "rifiutati", ev_block: "bloccati EV", open: "posizioni",
   logged: "eventi", shadowing: "in follow-up", shadow_done: "follow-up chiusi", recaps: "recap",
   wallets: "wallet bravi", hits: "segnali", scanned: "token letti", backfilled: "dal passato", too_long: "storia troppo lunga",
-  rpc_errors: "errori RPC" };
+  rpc_errors: "errori RPC", reports: "rapporti all'Analyst" };
 const BREAK = { liquidity: "Liquidità", volume: "Volume", momentum: "Momentum", flow: "Flusso acquisti", buys: "Acquisti", holders: "Holder",
   safety: "Sicurezza", website: "Sito web", social: "Social", age: "Età", smart: "Smart money" };
 const ST3 = { working: "attivo", idle: "in attesa", error: "errore", starting: "avvio", halted: "fermo" };

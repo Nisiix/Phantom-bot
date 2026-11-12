@@ -5,8 +5,10 @@
   * scores the wallets that keep buying early the tokens that reach $200k of real market cap;
   * every minute, checks whether one of those wallets holds a token the Analyst is following or an open position.
 
-OBSERVATION ONLY: its hits are stored (`sw_hits`) and shown in the feed, nothing buys, sells or blocks on them until
-the user decides to use them.
+It reports to the Analyst (user 2026-11-12): for every token the Analyst scores, how many smart wallets hold it.
+The Analyst uses that report only once the data is sufficient ([smart_wallets] ready_min_*): a bonus on the score
+that can carry the token over the threshold to the Executor. Without sufficient data the Analyst ignores it. The
+Whale checker never buys, sells or blocks by itself.
 """
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ class WhaleChecker(Agent):
     def __init__(self, desk) -> None:
         super().__init__(desk)
         self.sw = None
+        self._was_ready = None
 
     def _shadow(self) -> list:
         sh = self.desk.shadow
@@ -54,7 +57,7 @@ class WhaleChecker(Agent):
         self.status("working")
         self.emit("info", f"Whale checker online: first {c.scan_trades} trades of every followed token read on-chain, "
                           f"win = ${float(c.win_mcap_usd) / 1000:.0f}k real market cap, "
-                          f"{len(self.sw.smart)} smart wallets known (observation only)")
+                          f"{len(self.sw.smart)} smart wallets known")
         await asyncio.gather(self.supervised("whale-engine", self.engine), self.supervised("whale-stats", self.stats))
 
     async def engine(self) -> None:
@@ -68,5 +71,11 @@ class WhaleChecker(Agent):
             cnt["scanned"], cnt["backfilled"], cnt["hits"] = s["scanned"], s["backfilled"], s["hits"]
             cnt["too_long"], cnt["rpc_errors"] = s["too_long"], s["errors"]
             cnt["watching"] = len(self.watched())
+            cnt["reports"] = s.get("reports", 0)
+            r = self.sw.readiness()
+            if r.get("ready") != self._was_ready:
+                self._was_ready = r.get("ready")
+                self.emit("info", ("data sufficient: the Analyst now uses the smart wallets (" + r["why"] + ")")
+                          if r["ready"] else f"the Analyst ignores the smart wallets for now ({r['why']})")
             if not await self.sleep(5):
                 return

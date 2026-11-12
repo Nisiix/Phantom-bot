@@ -8,7 +8,11 @@ actually has a project website: with none listed (or website checks off) it is l
 remaining weights are renormalised, so a missing site neither helps nor hurts the score.
 With GMGN data a ninth component, smart money (.10: smart/renowned wallets holding, penalised
 for fresh-wallet / bot / rat-trader crowds), is added and the others are scaled by 0.9.
-Then hard caps for wash trading, insider clusters and parabolic blow-off tops.
+WHALE CHECKER (user 2026-11-12, desk/smartwallets.py): for every token the Whale checker reports how many of its
+smart wallets (wallets that keep buying early the tokens that reach $200k) hold it. With sufficient data each one
+adds whale_bonus_per_wallet to the score (at most whale_bonus_max), which can lift a token over the threshold and
+on to the Executor; without sufficient data the report is ignored (no bonus, no penalty).
+Then hard caps for wash trading, insider clusters and parabolic blow-off tops (they apply after the bonus).
 Every verdict carries its full breakdown and human-readable rationale.
 """
 from __future__ import annotations
@@ -167,6 +171,20 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None,
     if not has_site:
         weights["website"] *= 0.3
     score = sum(weights[k] * b[k] for k in weights) / sum(weights.values())
+
+    # Whale checker: a bonus only with sufficient data; an empty or "not ready" report changes nothing.
+    wh = rug.get("whales") or None
+    whale_bonus, whale_holders = 0.0, None
+    if wh is not None:
+        if wh.get("ready"):
+            whale_holders = int(wh.get("holders") or 0)
+            whale_bonus = min(float(getattr(cfg, "whale_bonus_max", 0.10)),
+                              float(getattr(cfg, "whale_bonus_per_wallet", 0.05)) * whale_holders)
+            score = min(1.0, score + whale_bonus)
+            why.append(f"whale checker: {whale_holders} smart wallet(s) hold it"
+                       + (f" (+{whale_bonus:.2f}, {', '.join(wh.get('wallets') or [])})" if whale_bonus else ""))
+        else:
+            why.append(f"whale checker ignored ({wh.get('why') or 'not enough data'})")
     raw_score, cap_score = score, None
 
     # Hard caps — any one of these makes the token untradeable regardless of the rest.
@@ -197,7 +215,9 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None,
             cap_score = cap
             why.append(f"CAP {cap:.2f}: {reason}")
     if info is not None:
-        info.update(raw_score=round(raw_score, 4), cap_score=cap_score, has_site=has_site)
+        info.update(raw_score=round(raw_score, 4), cap_score=cap_score, has_site=has_site,
+                    whale_bonus=round(whale_bonus, 4), whale_holders=whale_holders,
+                    whale_ready=None if wh is None else bool(wh.get("ready")))
     return round(max(0.0, min(1.0, score)), 4), {k: round(v, 3) for k, v in b.items()}, why
 
 
@@ -255,6 +275,13 @@ class Analyst(Agent):
             finally:
                 self._busy.discard(mint)
 
+    async def _whales(self, mint: str, symbol: str) -> dict | None:
+        """The Whale checker's report on this token, or None when it cannot answer (never blocks scoring)."""
+        try:
+            return await self.desk.smart.report(mint, symbol)
+        except Exception:  # noqa: BLE001 - a Whale checker problem must never stop a verdict
+            return None
+
     async def _website(self, m: MarketSnapshot, metadata_uri: str | None) -> dict:
         extra, meta = [], {}
         if not pick_website(m.websites):
@@ -278,6 +305,9 @@ class Analyst(Agent):
             return
         if m is None:
             return
+        # The Whale checker reads the smart holders while the website is checked (desk/smartwallets.py).
+        whales_task = asyncio.create_task(self._whales(rep.mint, rep.symbol)) \
+            if getattr(self.desk, "smart", None) is not None else None
         # Use the freshest market data, not what the Filter saw seconds ago.
         fresh = await self.desk.dex.snapshot(rep.mint)
         if fresh:
@@ -292,8 +322,10 @@ class Analyst(Agent):
                 web = {"url": pick_website(m.websites), "score": 0.2, "legit": 0.2, "tasty": 0.1,
                        "flags": ["website check timed out"], "notes": []}
 
+        whales = await whales_task if whales_task is not None else None
+        rug = {**rep.rug, "whales": whales} if whales is not None else rep.rug
         info: dict = {}
-        score, breakdown, why = score_token(m, rep.rug, web, self.cfg.analyst, info)
+        score, breakdown, why = score_token(m, rug, web, self.cfg.analyst, info)
         min_score = self.cfg.analyst.min_score
         trade = score >= min_score
         issued = now()

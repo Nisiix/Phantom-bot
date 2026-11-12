@@ -168,3 +168,51 @@ def test_whale_checker_agent_orders_and_watches():
     wc = WhaleChecker(desk)
     assert [m for m, _ in wc.followed()] == ["Ppump", "Apump", "Npump", "Fpump"]
     assert [(m, st) for m, _, st in wc.watched()] == [("Ppump", "position"), ("Apump", "analyst")]
+
+
+# ── report to the Analyst (user 2026-11-12) ──
+def test_analyst_bonus_only_with_sufficient_data():
+    from desk.agents.analyst import score_token
+    from desk.controller import BASE_WEIGHTS, analyst_score
+    from tests.test_rules import snap
+    web = {"url": "https://example.org", "score": 0.6, "legit": 0.6, "tasty": 0.5, "flags": []}
+    rug = {"top10_pct": 12, "holders_total": 900, "insider_pct": 3, "risks": []}
+    plain, b0, _ = score_token(snap(), rug, web)
+    ignored, _, why = score_token(snap(), {**rug, "whales": {"ready": False, "why": "not enough data yet"}}, web)
+    assert ignored == plain and any("ignored" in w for w in why)
+    none_held, _, _ = score_token(snap(), {**rug, "whales": {"ready": True, "holders": 0}}, web)
+    assert none_held == plain                                          # no smart holder: no penalty
+    info: dict = {}
+    two, b2, why = score_token(snap(), {**rug, "whales": {"ready": True, "holders": 2, "wallets": ["Ab12cd"]}},
+                               web, None, info)
+    assert abs(two - min(1.0, plain + 0.10)) < 1e-3 and b2 == b0 and any("+0.10" in w for w in why)
+    five, _, _ = score_token(snap(), {**rug, "whales": {"ready": True, "holders": 5}}, web)
+    assert abs(five - two) < 1e-9                                      # capped at whale_bonus_max
+    f = {**{f"c_{k}": v for k, v in b2.items()}, **info}
+    assert abs(analyst_score(f, BASE_WEIGHTS) - two) < 0.01           # the Controller re-scores it the same way
+
+
+def test_readiness_and_report(tmp_path):
+    st = Store(tmp_path / "p.db")
+    chains = {m: chain(m, "D" + m, ["A"]) for m in ("W1pump", "W2pump", "L1pump")}
+    rpc = Rpc(chains)
+    sw = SmartWallets(st, rpc, None, cfg(ready_min_decided_tokens=3, ready_min_winners=2,
+                                         ready_min_smart_wallets=1, min_hit_rate=0.5))
+    rep = asyncio.run(sw.report("Xpump"))
+    assert rep["ready"] is False and "0/3 tokens decided" in rep["why"]
+    for m in chains:
+        asyncio.run(sw.scan(m))
+    st.db.execute("UPDATE sw_tokens SET create_ts=?", (time.time() - 7200,))
+    st.db.execute("UPDATE sw_tokens SET won=1 WHERE mint IN ('W1pump','W2pump')")
+    sw.rescore()
+    sw._ready = {}                                                     # drop the 5-minute cache
+    assert sw.readiness()["ready"]
+    from solders.pubkey import Pubkey
+
+    from desk.devwatch import ata
+    real, mint = str(Pubkey.new_unique()), str(Pubkey.new_unique())
+    sw.smart = {real: {**sw.smart["A"], "wallet": real}}
+    rpc.holdings = {ata(real, mint): {"data": {"parsed": {"info": {"tokenAmount": {"uiAmountString": "5"}}}}}}
+    rep = asyncio.run(sw.report(mint, "TOK"))
+    assert rep["ready"] and rep["holders"] == 1 and rep["wallets"] == [real[:6]]
+    assert st.q("SELECT stage FROM sw_hits")[0]["stage"] == "analyst"

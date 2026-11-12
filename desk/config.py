@@ -117,6 +117,10 @@ class AnalystCfg:
     young_age_hours: float = 4.0
     old_late_entry_h6_pct: float = 300.0   # older token up more than this in 6h -> capped (young: no 6h cap)
     old_parabolic_h1_pct: float = 200.0    # older token up more than this in 1h -> capped (young: 400%)
+    # Whale checker (user 2026-11-12): smart wallets holding the token, counted only when the Whale checker has
+    # sufficient data ([smart_wallets] ready_min_*). Added to the score before the hard caps; 0 = ignore it.
+    whale_bonus_per_wallet: float = 0.05
+    whale_bonus_max: float = 0.10
 
 
 @dataclass
@@ -240,7 +244,7 @@ class GmgnCfg:
 @dataclass
 class SmartWalletsCfg:
     """User 2026-11-12 (desk/smartwallets.py): wallets that keep buying the winners early, found with plain RPC (no
-    paid API). Observation only: the hits are stored and shown, nothing buys or blocks on them yet."""
+    paid API). Agent "Whale checker": the Analyst adds a bonus for smart holders only once the data is sufficient."""
     enabled: bool = True
     win_mcap_usd: float = 200_000.0     # a token "won" when its real market cap reached this
     scan_trades: int = 40               # first N trades of every followed token read from the chain
@@ -258,6 +262,11 @@ class SmartWalletsCfg:
     max_smart_wallets: int = 300        # watched with getMultipleAccounts (100 per call)
     rescore_minutes: float = 30.0
     watch_seconds: float = 60.0         # tokens the Analyst follows + open positions: smart holders read this often
+    # Report to the Analyst (user 2026-11-12): used only with sufficient data, otherwise ignored.
+    ready_min_decided_tokens: int = 300  # tokens read and decided (won, or older than decide_hours)
+    ready_min_winners: int = 20          # ...of which reached win_mcap_usd
+    ready_min_smart_wallets: int = 5
+    analyst_timeout_seconds: float = 15.0  # holders not read in time -> the Analyst scores without them
 
 
 @dataclass
