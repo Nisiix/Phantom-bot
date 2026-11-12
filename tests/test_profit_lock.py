@@ -268,3 +268,58 @@ def test_wider_stop_under_fifty_percent():
     assert abs(lock_level(rule, 61.0) - 42.0) < 1e-9        # from +50%: 70% of the peak
     off = rule._replace(keep_low=0.0)
     assert abs(lock_level(off, 31.0) - 21.0) < 1e-9         # band off: the old 70% share
+
+
+def test_partial_sale_keeps_the_percentages_and_records_the_whole_trade(tmp_path):
+    """User 2026-11-12: at +30% net sell 30% of the position once; the rest keeps the same % and stops."""
+    from desk.portfolio import Portfolio
+    from desk.store import Store
+    pf = Portfolio(Store(tmp_path / "p.db"), "paper", 10.0)
+    p = pos(1.35, 1.40, 600)
+    pf.open(p)                                   # cash 10 - 1 = 9
+    f = pf.scale_out("M", 0.40, 300)             # 30% of 1000 tokens sold for 0.40 SOL
+    assert abs(f - 0.3) < 1e-9 and p.scaled_out
+    assert abs(p.tokens - 700) < 1e-9 and abs(p.cost_sol - 0.7) < 1e-9
+    assert abs(p.pnl_pct - 35.0) < 1e-9 and abs(p.peak_pnl_pct - 40.0) < 1e-9
+    assert abs(pf.cash_sol - 9.40) < 1e-9
+    trade = pf.close("M", 0.84, "PROFIT_LOCK: test")     # the remaining 70% sold at +20%
+    assert abs(pf.cash_sol - 10.24) < 1e-9
+    assert abs(trade["cost_sol"] - 1.0) < 1e-9 and abs(trade["proceeds_sol"] - 1.24) < 1e-9
+    assert abs(trade["pnl_pct"] - 24.0) < 1e-9 and abs(trade["peak_pnl_pct"] - 40.0) < 1e-9
+    assert trade["data"]["scale_out"]["proceeds_sol"] == 0.40
+
+
+def test_risk_issues_one_partial_sale_and_the_executor_sells_30pct(tmp_path):
+    import asyncio
+    from desk.agents.executor import Executor
+    from desk.agents.risk import Risk
+    from desk.brokers.paper import PaperBroker
+    from tests.test_rules import make_desk, snap
+    desk = make_desk(tmp_path)
+    desk.cfg.risk.scale_out_at_pct, desk.cfg.risk.scale_out_fraction_pct = 30.0, 30.0
+    desk.cfg.risk.trail_activate_pct = 1000
+    risk = Risk(desk)
+    p = pos(1.0, 1.0, age_s=120)
+    desk.portfolio.open(p)
+
+    class Dex:
+        px = 0.00136                     # 1000 tokens: 1.36 SOL, 1.3464 after the 1% exit cost = +34.6%
+
+        async def snapshots(self, mints, **kw):
+            return {"M": snap(price_native=self.px, liquidity_usd=80_000)}
+
+    class Jup:
+        async def quote(self, i, o, amount, bps, lane="", **kw):
+            return {"outAmount": str(int(amount / 1e6 * Dex.px * 0.99 * 1e9)), "inAmount": str(amount)}
+
+    desk.dex, desk.jup = Dex(), Jup()
+    t = time.time()
+    asyncio.run(risk.mark_positions(t))
+    order = desk.exits.get_nowait()
+    assert order.reason == "SCALE_OUT" and abs(order.fraction - 0.3) < 1e-9
+    ex = Executor(desk, PaperBroker(desk.portfolio), risk)
+    asyncio.run(ex.handle_exit(order))
+    assert p.scaled_out and abs(p.tokens - 700) < 1e-6 and "M" in desk.portfolio.positions
+    assert "M" not in risk.exiting
+    asyncio.run(risk.mark_positions(t + 13))       # still +34%: no second partial sale
+    assert desk.exits.empty()

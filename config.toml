@@ -67,7 +67,7 @@ serial_dev_dead_ratio = 0.8        # ...of which >= 80% died (< $10k mcap) = rug
 deep_workers = 3                   # deep checks in parallel (RugCheck keeps its own rate limit)
 deep_max_wait_seconds = 60         # drop queued deep checks whose market data got stale
 # ── instant-rug guards (2026-11-10) ──
-graduation_wait_minutes = 45       # no buy in the first N min after pump.fun -> PumpSwap graduation (0 = off)
+graduation_wait_minutes = 30       # no buy in the first N min after pump.fun -> PumpSwap graduation (0 = off). 30: user 2026-11-12 (was 45)
 early_release = true               # lift the wait early for a token steady since graduation, only if ALL hold:
 early_release_min_minutes = 20     #   at least N min since graduation (instant rugs hit 5-26 min after it)
 early_release_first_seen_minutes = 15  # watched from the start (first holder reading within N min of graduation)
@@ -221,8 +221,16 @@ profit_lock_speed_seconds = 60.0
 # tokens +0.9 pts/token, all tokens -0.8, both far inside the noise ([-6.3, +8.1] / [-4.5, +2.8]), one extra
 # losing trade on all tokens; 60% under +50% gave +1.1 / +0.4. Only 10 of 57 paths peaked between +20% and +50%.
 # 0 = band off.
-profit_lock_keep_low_pct = 50.0
+profit_lock_keep_low_pct = 60.0   # 60: user 2026-11-12 after the replay above (+50% -> stop +30%)
 profit_lock_keep_high_from_pct = 50.0
+# PARTIAL SALE (user's rule 2026-11-12): when the position is up scale_out_at_pct NET (sale costs included, checked
+# on a real Jupiter quote) sell scale_out_fraction_pct of the tokens, once; the rest stays open under the stops above
+# (60% of the peak under +50%, then 70% and the 6% trailing). The trade is recorded whole when the rest is sold.
+# Replay 2026-11-12 10:20 UTC (57 paths, current stops): 30% at +30% = -1.5 pts/token on all tokens ([-6.0, +3.0]),
+# -5.9 on the 19 approved ([-18.4, +6.5]), same losing trades: it gives up part of the big runs in exchange for a
+# surer profit on the ones that fall back. Not modelled in the Controller's replays. 0 = off.
+scale_out_at_pct = 30.0
+scale_out_fraction_pct = 30.0
 # Fee rule: the lock also waits until the NET profit is at least this many times the trade's round-trip fees
 # (1 = "profit = 100% of the fees"). With today's fees (median 2.5%, max 3.1%) the +8% level decides; it only
 # matters for an expensive token.

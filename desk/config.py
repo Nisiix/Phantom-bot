@@ -192,6 +192,10 @@ class RiskCfg:
     # profit_lock_keep_low_pct of the peak instead of profit_lock_keep_pct. 0 = off.
     profit_lock_keep_low_pct: float = 0.0
     profit_lock_keep_high_from_pct: float = 0.0
+    # Partial sale (user 2026-11-12): once the position is up scale_out_at_pct NET, sell scale_out_fraction_pct of
+    # it once; the rest stays under the usual stops. 0 = off.
+    scale_out_at_pct: float = 0.0
+    scale_out_fraction_pct: float = 0.0
 
 
 @dataclass
@@ -416,6 +420,8 @@ def enforce_hard_limits(cfg: Config) -> None:
         clamp(r, "profit_lock_keep_low_pct", lambda v: 0 <= v <= 90, 0.0, "mid-peak keep share must be 0-90%")
         clamp(r, "profit_lock_keep_high_from_pct", lambda v: 0 <= v <= 500, 0.0,
               "mid-peak band must end at 0-500%")
+    clamp(r, "scale_out_at_pct", lambda v: v == 0 or 5 <= v <= 1000, 0.0, "partial sale must trigger at +5% net or more")
+    clamp(r, "scale_out_fraction_pct", lambda v: 0 <= v <= 90, 0.0, "partial sale share must be 0-90%")
     clamp(r, "hot_poll_seconds", lambda v: 1.0 <= v <= 10.0, 1.0, "hot_poll_seconds must be 1-10 s")
     clamp(f, "max_top10_pct", lambda v: 0 < v <= HARD_MAX_TOP10_PCT, HARD_MAX_TOP10_PCT,
           "top-10 holder ceiling can never exceed 20%")

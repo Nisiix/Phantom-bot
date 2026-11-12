@@ -382,6 +382,18 @@ class Risk(Agent):
             dl = self.r.data_loss_exit_seconds
             if reason is None and dl > 0 and t - pos.last_price_ts > dl:
                 reason, detail = "DATA_LOSS", f"no price and no sell quote for {dl:g}s"
+            partial = None
+            if reason is None and self.wants_scale_out(pos):
+                # Partial sale (user 2026-11-12): confirmed on a real Jupiter quote, like the stops.
+                if mint not in quoted:
+                    v = await self.quote_value(pos, lane="stop")
+                    if v is not None:
+                        self._last_quote[mint] = t
+                        pos.mark_value_sol = v
+                        pos.last_price_ts = t
+                if self.wants_scale_out(pos):
+                    partial = (f"up {pos.pnl_pct:+.1f}% net: selling {self.r.scale_out_fraction_pct:g}% of the "
+                               f"position, the rest stays under the stops")
             if pos.trailing_active and mint not in self.trail_announced:
                 self.trail_announced.add(mint)
                 self.emit("risk", f"trailing stop ARMED at peak {pos.peak_pnl_pct:+.1f}%", mint, pos.symbol)
@@ -400,7 +412,21 @@ class Risk(Agent):
                 self.exiting[mint] = t
                 self.emit("exit", f"{reason}: {detail}", mint, pos.symbol, pnl_pct=pos.pnl_pct)
                 await self.desk.exits.put(ExitOrder(mint, reason, detail))
+            elif partial:
+                self.exiting[mint] = t
+                self.emit("exit", f"SCALE_OUT: {partial}", mint, pos.symbol, pnl_pct=pos.pnl_pct)
+                await self.desk.exits.put(ExitOrder(mint, "SCALE_OUT", partial,
+                                                    fraction=self.r.scale_out_fraction_pct / 100))
         self._hot = any(self.is_hot(p) for m, p in pf.positions.items() if m not in self.exiting)
+
+    def wants_scale_out(self, pos: Position) -> bool:
+        r = self.r
+        return (not pos.scaled_out and r.scale_out_at_pct > 0 and r.scale_out_fraction_pct > 0
+                and pos.pnl_pct >= r.scale_out_at_pct)
+
+    def scale_out_done(self, mint: str) -> None:
+        # The position stays open: only the sale lock is released (peaks and speed history are kept).
+        self.exiting.pop(mint, None)
 
     async def quote_value(self, pos: Position, lane: str = "risk") -> float | None:
         raw = int(pos.tokens * 10 ** pos.decimals)

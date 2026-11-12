@@ -64,10 +64,35 @@ class Portfolio:
         if self.positions.get(pos.mint) is pos:
             self.store.save_position(pos.mint, pos.to_dict())
 
+    def scale_out(self, mint: str, proceeds_sol: float, tokens_sold: float) -> float:
+        """Book a partial sale: cash in, the sold share leaves the position (cost and values scaled, so the price
+        per token and every % stay the same). Returns the share sold."""
+        pos = self.positions[mint]
+        f = min(1.0, max(0.0, tokens_sold / pos.tokens)) if pos.tokens > 0 else 0.0
+        part = pos.cost_sol * f
+        pos.partial_cost_sol += part
+        pos.partial_proceeds_sol += proceeds_sol
+        pos.tokens -= pos.tokens * f
+        pos.cost_sol -= part
+        pos.mark_value_sol *= 1 - f
+        pos.peak_value_sol *= 1 - f
+        pos.scaled_out = True
+        self.set_cash(self.cash_sol + proceeds_sol)
+        self.persist(pos)
+        return f
+
     def close(self, mint: str, proceeds_sol: float, reason: str, tx_out: str = "", extra: dict | None = None) -> dict:
         pos = self.positions.pop(mint)
         self.store.delete_position(mint)
         self.set_cash(self.cash_sol + proceeds_sol)
+        if pos.partial_cost_sol:
+            # The whole trade in one record: the part sold earlier (SCALE_OUT) plus this final sale.
+            extra = {**(extra or {}), "scale_out": {"cost_sol": pos.partial_cost_sol,
+                                                    "proceeds_sol": pos.partial_proceeds_sol,
+                                                    "final_proceeds_sol": proceeds_sol}}
+            pos.cost_sol += pos.partial_cost_sol
+            proceeds_sol += pos.partial_proceeds_sol
+            pos.peak_value_sol = pos.peak_value_sol / max(1e-12, pos.cost_sol - pos.partial_cost_sol) * pos.cost_sol
         pnl = proceeds_sol - pos.cost_sol
         self.realized_sol += pnl
         self.store.kv_set("realized_sol", self.realized_sol)

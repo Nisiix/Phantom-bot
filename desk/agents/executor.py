@@ -480,9 +480,56 @@ class Executor(Agent):
         self.status("working")
         self.desk.in_flight.add(order.mint)
         try:
-            await self._exit(order, pos)
+            if order.fraction < 1:
+                await self._scale_out(order, pos)
+            else:
+                await self._exit(order, pos)
         finally:
             self.desk.in_flight.discard(order.mint)
+
+    async def _scale_out(self, order: ExitOrder, pos: Position) -> None:
+        """Partial sale (user's rule 2026-11-12): sell `fraction` of the held tokens once; the rest stays open
+        under the usual stops. If no attempt fills, Risk re-issues it on a later tick (the position is untouched)."""
+        pf = self.desk.portfolio
+        t0 = time.monotonic()
+        tokens = pos.tokens * order.fraction
+        err = ""
+        for i, bps in enumerate([None] + list(self.e.exit_slippage_ladder_bps)):
+            raw = int(tokens * 10 ** pos.decimals)
+            if raw <= 0:
+                err = "nothing to sell"
+                break
+            try:
+                quote = await self.broker.quote_sell(self.desk.jup, order.mint, raw, bps)
+            except Exception as e:  # noqa: BLE001
+                quote, err = None, f"quote error: {e}"
+            if not quote:
+                err = err or "no sell route"
+                continue
+            fill = await self.broker.sell(order.mint, tokens, pos.decimals, quote)
+            if fill.ok:
+                if pf.positions.get(order.mint) is not pos:
+                    break                        # closed meanwhile (cannot happen while it is in flight)
+                cost_before = pos.cost_sol
+                f = pf.scale_out(order.mint, fill.sol, fill.tokens or tokens)
+                await self._reconcile_cash(order.mint)
+                self.risk.scale_out_done(order.mint)
+                part_cost = cost_before * f
+                pnl = fill.sol - part_cost
+                ms = round((time.monotonic() - t0) * 1000)
+                self.desk.exec_stats.append({"side": "sell", "exit_ms": ms, "attempts": i + 1, "route": fill.route})
+                self.desk.store.add_decision(now(), "executor", "scale_out", order.mint, pos.symbol,
+                                             f"SCALE_OUT: {order.detail}",
+                                             {"share": f, "proceeds_sol": fill.sol, "cost_sol": part_cost,
+                                              "pnl_sol": pnl, "pnl_pct": (fill.sol / part_cost - 1) * 100
+                                              if part_cost else 0.0})
+                self.emit("trade", f"PARTIAL SELL {pos.symbol} {f * 100:.0f}%: {fill.sol:.4f} SOL "
+                                   f"({pnl:+.4f} SOL on that part); {pos.tokens:,.0f} tokens still open",
+                          order.mint, pos.symbol, pnl_sol=pnl)
+                return
+            err = fill.error or "sell failed"
+        self.emit("warn", f"partial sale not done ({err}); Risk will retry", order.mint, pos.symbol)
+        self.risk.exit_failed(order.mint)
 
     async def _exit(self, order: ExitOrder, pos: Position) -> None:
         """Get OUT, fast. First try: Jupiter's own slippage estimate (best price). If that fails, retry

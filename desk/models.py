@@ -188,6 +188,7 @@ class ExitOrder:
     reason: str
     detail: str = ""
     ts: float = field(default_factory=now)
+    fraction: float = 1.0         # share of the held tokens to sell (< 1 = partial sale, SCALE_OUT; the rest stays open)
 
 
 @dataclass
@@ -229,6 +230,12 @@ class Position:
     lock_speed: float = 0.0              # fastest rise seen while armed, % points per minute (for the records)
     trigger_pnl_pct: float | None = None # marked net % when Risk issued the exit (slippage = this - realized)
     exit_rules: dict = field(default_factory=dict)   # exit settings at entry (stop, trailing, time, lock)
+    # Partial sale (user's rule 2026-11-12, [risk] scale_out_*): once done, tokens / cost_sol / values describe only
+    # the part still held (same price per token, so every % and every stop is unchanged); the sold part is here and
+    # is added back on the final close, so the trade is recorded whole.
+    scaled_out: bool = False
+    partial_cost_sol: float = 0.0        # cost of the tokens already sold
+    partial_proceeds_sol: float = 0.0    # SOL received for them
 
     @property
     def pnl_pct(self) -> float:
