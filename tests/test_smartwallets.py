@@ -151,3 +151,20 @@ def test_bot_peak_ignores_dust_pool_caps(tmp_path):
     sw = SmartWallets(st, Rpc({}), None, cfg())
     assert sw.bot_peak("Xpump") == (250_000.0, 2)
     assert sw.bot_peaks()["Xpump"][0] == 250_000.0
+
+
+def test_whale_checker_agent_orders_and_watches():
+    from types import SimpleNamespace as NS
+
+    from desk.agents.whale import WhaleChecker
+    from desk.hub import AGENTS, Hub
+
+    assert "Whale checker" in AGENTS
+    sh = NS(active={"a": NS(mint="Fpump", symbol="F", stage="filter", start=2.0),
+                    "b": NS(mint="Apump", symbol="A", stage="analyst", start=1.0),
+                    "c": NS(mint="Npump", symbol="N", stage="grad45", start=3.0)})
+    desk = NS(cfg=NS(smart_wallets=SmartWalletsCfg()), hub=Hub(), shadow=sh,
+              portfolio=NS(positions={"Ppump": NS(symbol="P")}))
+    wc = WhaleChecker(desk)
+    assert [m for m, _ in wc.followed()] == ["Ppump", "Apump", "Npump", "Fpump"]
+    assert [(m, st) for m, _, st in wc.watched()] == [("Ppump", "position"), ("Apump", "analyst")]

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from .models import Event
 
-AGENTS = ("Scout", "Filter", "Analyst", "Executor", "Risk", "Logger", "Controller")
+AGENTS = ("Scout", "Filter", "Analyst", "Executor", "Risk", "Logger", "Controller", "Whale checker")
 
 
 @dataclass

@@ -175,6 +175,7 @@ button { font: inherit; }
 .st-error i, .st-halted i { background: var(--critical); }
 .st-starting i { background: var(--warning); }
 .logger { margin-top: 14px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; cursor: pointer; }
+.logger[hidden] { display: none; }
 .logger .agent-l { display: flex; align-items: center; gap: 12px; }
 .logger .stats { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
 .logger .stats span { font-size: 11.5px; color: var(--ink-2); background: var(--surface-2); border-radius: 7px; padding: 3px 9px; }
@@ -443,6 +444,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
     <div class="sec-h"><h2>Gli agenti al lavoro</h2><p>Il percorso di ogni token, da sinistra a destra · clicca un agente per vederne le azioni</p></div>
     <div class="pipe" id="pipe"></div>
     <div class="card logger" id="logger" role="button" tabindex="0"></div>
+    <div class="card logger" id="whale" role="button" tabindex="0" hidden></div>
   </section>
 
   <section class="sec" id="operazioni">
@@ -554,6 +556,7 @@ const AG = {
   Risk:     { c: "#fb923c", g: "⛨", role: "Stop, trailing e limiti giornalieri" },
   Logger:   { c: "#f472b6", g: "▤", role: "Registra tutto, recap periodico e follow-up a 60 min" },
   Controller: { c: "#facc15", g: "◉", role: "Controllore: verifica gli agenti, prova configurazioni e applica i miglioramenti confermati" },
+  "Whale checker": { c: "#2dd4bf", g: "≋", role: "Wallet bravi sui token da $200k (solo osservazione)" },
 };
 const agc = (n) => (AG[n] || { c: "#9ca3af" }).c;
 const KEYS = { Scout: [["watching", "in osservazione"], ["sent", "inviati"], ["dropped", "scartati"]],
@@ -561,7 +564,8 @@ const KEYS = { Scout: [["watching", "in osservazione"], ["sent", "inviati"], ["d
   Analyst: [["approved", "approvati"], ["rejected", "bocciati"]],
   Executor: [["sells", "vendite"], ["wins", "vinti"], ["losses", "persi"], ["declined", "rifiutati"], ["ev_block", "bloccati EV"]],
   Risk: [], Logger: [["logged", "eventi"], ["shadowing", "in follow-up"], ["shadow_done", "follow-up chiusi"], ["recaps", "recap"]],
-  Controller: [["checks", "verifiche"], ["alerts", "anomalie ora"], ["rounds", "cicli di test"], ["trials", "configurazioni provate"], ["proposals", "proposte"], ["applied", "decisioni passate"]] };
+  Controller: [["checks", "verifiche"], ["alerts", "anomalie ora"], ["rounds", "cicli di test"], ["trials", "configurazioni provate"], ["proposals", "proposte"], ["applied", "decisioni passate"]],
+  "Whale checker": [["wallets", "wallet bravi"], ["hits", "segnali"], ["watching", "sorvegliati"], ["scanned", "letti"], ["backfilled", "dal passato"]] };
 const MAIN = { Scout: ["discovered", "scoperti"], Filter: ["evaluated", "valutati"], Analyst: ["scored", "valutati"],
   Executor: ["buys", "acquisti"], Risk: ["open", "posizioni sorvegliate"] };
 const ST = { working: "attivo", idle: "in attesa", error: "errore", starting: "avvio", halted: "fermo" };
@@ -742,13 +746,18 @@ function renderAgents(s) {
     c.append(stats, el("div", "last", a.last || "—"), el("div", "when", a.last_ts ? "ultima azione " + ago(a.last_ts) : "nessuna azione ancora"));
     wrap.append(c); pipe.append(wrap);
   });
-  const lg = byName.Logger, box = $("logger"); box.replaceChildren();
+  sideBox(byName, "Logger", "logger");
+  sideBox(byName, "Whale checker", "whale");
+}
+function sideBox(byName, name, id) {
+  const lg = byName[name], box = $(id); if (!box) return; box.replaceChildren();
   if (!lg) { box.hidden = true; return; }
-  box.style.setProperty("--ac", agc("Logger")); box.onclick = () => focusAgent("Logger");
-  box.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); focusAgent("Logger"); } };
+  box.hidden = false;
+  box.style.setProperty("--ac", agc(name)); box.onclick = () => focusAgent(name);
+  box.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); focusAgent(name); } };
   const head = el("div", "agent-l"); const h = agentHead(lg); h.style.flex = "1"; head.append(h);
   const stats = el("div", "stats");
-  for (const [k, lab] of KEYS.Logger) { const sp = el("span"); sp.append(el("b", null, int(lg.counters[k])), document.createTextNode(lab)); stats.append(sp); }
+  for (const [k, lab] of KEYS[name] || []) { const sp = el("span"); sp.append(el("b", null, int(lg.counters[k])), document.createTextNode(lab)); stats.append(sp); }
   box.append(head, stats, el("div", "last", (lg.last || "—") + (lg.last_ts ? " · " + ago(lg.last_ts) : "")));
 }
 
@@ -875,7 +884,7 @@ function renderTrades(s) {
 // ── feed ──
 function renderChips() {
   const box = $("chips"); box.replaceChildren();
-  for (const n of ["Tutti", "Scout", "Filter", "Analyst", "Executor", "Risk", "Logger", "Controller"]) {
+  for (const n of ["Tutti", "Scout", "Filter", "Analyst", "Executor", "Risk", "Logger", "Controller", "Whale checker"]) {
     const b = el("button", "chip"); b.type = "button"; b.setAttribute("aria-pressed", String(agentFilter === n));
     if (n !== "Tutti") { b.style.setProperty("--ac", agc(n)); b.append(el("i")); } b.append(document.createTextNode(n));
     b.onclick = () => { agentFilter = n; renderChips(); if (S) renderFeed(S); }; box.append(b);
@@ -960,7 +969,7 @@ const hms = (ts) => new Date(ts * 1000).toLocaleTimeString("it-IT", { hour12: fa
 const int = (x) => Number(x || 0).toLocaleString("it-IT");
 function ago(ts) { const s = Math.max(0, Date.now() / 1000 - ts); if (!ts) return "—";
   if (s < 60) return Math.floor(s) + "s fa"; if (s < 3600) return Math.floor(s / 60) + " min fa"; return Math.floor(s / 3600) + " h fa"; }
-const POS = { Scout: [-20, 0, 6], Filter: [-10.5, 0, -1.5], Analyst: [0, 0, -4], Executor: [10.5, 0, -1.5], Risk: [20, 0, 6], Logger: [0, 7, -19], Controller: [-22, 9, -18] };
+const POS = { Scout: [-20, 0, 6], Filter: [-10.5, 0, -1.5], Analyst: [0, 0, -4], Executor: [10.5, 0, -1.5], Risk: [20, 0, 6], Logger: [0, 7, -19], Controller: [-22, 9, -18], "Whale checker": [22, 9, -18] };
 const PIPE = ["Scout", "Filter", "Analyst", "Executor", "Risk"];
 const KDESC = { trade: "Acquisto o vendita eseguiti", exit: "Segnale di uscita", risk: "Gestione del rischio", kill: "Token escluso per sempre",
   reject: "Token scartato con il motivo", pass: "Promosso allo stadio successivo", score: "Punteggio sopra soglia", error: "Errore gestito",
@@ -971,7 +980,9 @@ const agc = (n) => (AG[n] || { c: "#9ca3af" }).c;
 const CNT = { discovered: "scoperti", watching: "in osservazione", sent: "inviati", dropped: "scartati", evaluated: "valutati",
   passed: "promossi", rejected: "respinti", blacklisted: "esclusi", scored: "valutati", approved: "approvati", buys: "acquisti",
   sells: "vendite", wins: "vinti", losses: "persi", declined: "rifiutati", ev_block: "bloccati EV", open: "posizioni",
-  logged: "eventi", shadowing: "in follow-up", shadow_done: "follow-up chiusi", recaps: "recap" };
+  logged: "eventi", shadowing: "in follow-up", shadow_done: "follow-up chiusi", recaps: "recap",
+  wallets: "wallet bravi", hits: "segnali", scanned: "token letti", backfilled: "dal passato", too_long: "storia troppo lunga",
+  rpc_errors: "errori RPC" };
 const BREAK = { liquidity: "Liquidità", volume: "Volume", momentum: "Momentum", flow: "Flusso acquisti", buys: "Acquisti", holders: "Holder",
   safety: "Sicurezza", website: "Sito web", social: "Social", age: "Età", smart: "Smart money" };
 const ST3 = { working: "attivo", idle: "in attesa", error: "errore", starting: "avvio", halted: "fermo" };
@@ -1148,7 +1159,7 @@ async function boot3D() {
   const GEO = { Scout: new THREE.IcosahedronGeometry(1.25, 0), Filter: new THREE.OctahedronGeometry(1.35, 0),
     Analyst: new THREE.DodecahedronGeometry(1.25, 0), Executor: new THREE.TorusKnotGeometry(0.8, 0.26, 96, 12),
     Risk: new THREE.CylinderGeometry(1.1, 1.1, 1.6, 6), Logger: new THREE.BoxGeometry(1.8, 1.8, 1.8),
-    Controller: new THREE.IcosahedronGeometry(1.35, 1) };
+    Controller: new THREE.IcosahedronGeometry(1.35, 1), "Whale checker": new THREE.TorusGeometry(0.95, 0.4, 16, 48) };
   const nodes = {}, pickables = [], CORE_Y = 2.6;
   function makeNode(name) {
     const color = new THREE.Color(agc(name)), g = new THREE.Group(); g.position.set(...(POS[name] || [0, 0, 18]));
@@ -1186,6 +1197,9 @@ async function boot3D() {
   addLink("Risk", "Executor", -1.6, 0.18, 0xfb923c);
   for (const n of PIPE) { const c = arc(P(n), P("Logger"), 6); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
     new THREE.LineDashedMaterial({ color: 0xf472b6, transparent: true, opacity: 0.18, dashSize: 0.6, gapSize: 0.5 })).computeLineDistances()); }
+  // the Whale checker watches the tokens the Analyst follows and the open positions (dashed teal lines)
+  for (const n of ["Analyst", "Risk"]) { const c = arc(P("Whale checker"), P(n), 2); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
+    new THREE.LineDashedMaterial({ color: 0x2dd4bf, transparent: true, opacity: 0.22, dashSize: 0.5, gapSize: 0.6 })).computeLineDistances()); }
   // the Controller watches every agent from above (dashed yellow lines)
   for (const n of [...PIPE, "Logger"]) { const c = arc(P("Controller"), P(n), 2); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
     new THREE.LineDashedMaterial({ color: 0xfacc15, transparent: true, opacity: 0.22, dashSize: 0.5, gapSize: 0.6 })).computeLineDistances()); }

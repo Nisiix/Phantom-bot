@@ -18,7 +18,7 @@ from .context import Desk
 from .hub import AGENTS
 
 AGENT_COLORS = {"Scout": "cyan", "Filter": "yellow", "Analyst": "magenta", "Executor": "green",
-                "Risk": "red", "Logger": "blue"}
+                "Risk": "red", "Logger": "blue", "Controller": "bright_yellow", "Whale checker": "bright_cyan"}
 KIND_STYLE = {"trade": "bold green", "exit": "bold red", "risk": "red", "kill": "dark_orange",
               "reject": "grey62", "pass": "yellow", "score": "magenta", "error": "bold red",
               "warn": "orange3", "recap": "bold blue", "info": "white"}
@@ -96,7 +96,7 @@ class Terminal:
 
     def agents(self) -> Panel:
         tb = Table(expand=True, box=None, padding=(0, 1), show_edge=False)
-        tb.add_column("Agent", style="bold", width=9)
+        tb.add_column("Agent", style="bold", width=13)
         tb.add_column("State", width=8)
         tb.add_column("Counters", ratio=2, overflow="ellipsis", no_wrap=True)
         tb.add_column("Last action", ratio=3, overflow="ellipsis", no_wrap=True)
@@ -107,13 +107,14 @@ class Terminal:
             "Executor": ("buys", "sells", "wins", "losses", "declined", "ev_block"),
             "Risk": ("open",),
             "Logger": ("logged", "shadowing", "shadow_done", "recaps"),
+            "Whale checker": ("wallets", "scanned", "backfilled", "hits", "watching"),
         }
         for name in AGENTS:
             st = self.desk.hub.agents[name]
-            cnt = " ".join(f"{k[:4]}:{st.counters.get(k, 0)}" for k in keys[name])
+            cnt = " ".join(f"{k[:4]}:{st.counters.get(k, 0)}" for k in keys.get(name, ()))
             if st.errors:
                 cnt += f" err:{st.errors}"
-            tb.add_row(Text(name, style=AGENT_COLORS[name]),
+            tb.add_row(Text(name, style=AGENT_COLORS.get(name, "white")),
                        Text(st.status, style=STATUS_STYLE.get(st.status, "white")), cnt, st.last)
         return Panel(tb, title="Agents", border_style="cyan")
 

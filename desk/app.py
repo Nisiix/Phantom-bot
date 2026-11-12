@@ -15,6 +15,7 @@ from .agents.filter import Filter
 from .agents.logger import Logger
 from .agents.risk import Risk
 from .agents.scout import Scout
+from .agents.whale import WhaleChecker
 from .brokers.paper import PaperBroker
 from .clients.dexscreener import DexScreener
 from .clients.http import Http
@@ -248,7 +249,7 @@ async def run_desk(cfg: Config, use_tui: bool = True) -> bool:
     risk = Risk(desk)
     logger = Logger(desk)
     agents = [Scout(desk), Filter(desk), Analyst(desk), Executor(desk, broker, risk), risk, logger,
-              Controller(desk, risk)]
+              Controller(desk, risk), WhaleChecker(desk)]
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler(desk))
