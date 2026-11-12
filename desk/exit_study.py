@@ -45,7 +45,7 @@ def replay(path, cost: float, stop: float, trail_on: float, trail_dist: float, m
         peak = max(peak, net)
         if peak >= trail_on:
             trail = True
-        if trail and 1 + net / 100 <= (1 + peak / 100) * (1 - trail_dist / 100):
+        if trail and trail_dist > 0 and 1 + net / 100 <= (1 + peak / 100) * (1 - trail_dist / 100):
             kind, out, at = "TRAIL", net, i
             break
         if lock.enabled:

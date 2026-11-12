@@ -101,7 +101,7 @@ def update_shadow(s: Shadow, price: float, t: float, stop: float, up: float, tra
         else:
             if s.sim_peak >= up:
                 s.sim_trail = True
-            if s.sim_trail and val <= (1 + s.sim_peak / 100) * (1 - trail_dist / 100):
+            if s.sim_trail and trail_dist > 0 and val <= (1 + s.sim_peak / 100) * (1 - trail_dist / 100):
                 s.sim_open, s.sim_ret = False, net
             elif lock is not None and lock.enabled:
                 speed = rise_speed(s.sim_hist, t - s.start, s.sim_peak, lock.speed_s) if lock.speed_full > 0 else 0.0

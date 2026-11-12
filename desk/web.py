@@ -77,7 +77,7 @@ class Dashboard:
             "symbol": p.symbol, "mint": p.mint, "cost": p.cost_sol, "value": p.mark_value_sol,
             "pnl_pct": p.pnl_pct, "peak_pct": p.peak_pnl_pct, "trailing": p.trailing_active,
             "stop_pct": max(((p.peak_value_sol * (1 - d.cfg.risk.trail_distance_pct / 100)) / p.cost_sol - 1) * 100
-                            if p.trailing_active and p.cost_sol else (d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct),
+                            if p.trailing_active and p.cost_sol and d.cfg.risk.trail_distance_pct > 0 else (d.cfg.risk.exit_stop_pct or d.cfg.risk.hard_stop_pct),
                             (position_lock_level(p) + p.lock_buffer) if p.lock_armed_on else -100.0)
             if d.cfg.risk.loss_stop or p.trailing_active or p.lock_armed_on else None,   # None = no stop at a loss
             "profit_lock": position_lock_level(p) if p.lock_armed_on else None,

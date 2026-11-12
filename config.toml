@@ -152,7 +152,7 @@ poll_seconds = 6.0        # price check of waiting tokens (one batched DexScreen
 [risk]
 # NO STOP AT A LOSS (user's rule 2026-11-11, paper AND live): while a position is at break-even or at a loss no stop
 # sells it (no hard stop, no time exit). Only the profit stops sell (profit lock armed at +30%, the stop rising
-# from +20% at 50% of the peak, 70% from +50%, the trailing from +50%). The emergency exits are off too (liquidity_drop_exit_pct = 0,
+# from +20% at 60% of the peak, 70% from +50%; no trailing). The emergency exits are off too (liquidity_drop_exit_pct = 0,
 # data_loss_exit_seconds = 0): a rug is held to the end. true = back to hard_stop_pct / paper_hard_stop_pct and
 # max_hold_minutes.
 loss_stop = false
@@ -162,7 +162,7 @@ paper_hard_stop_pct = -25.0   # PAPER ONLY, user's choice 2026-11-11: trial of a
                               # 0 = off. Live always uses hard_stop_pct (max -6%). Range -30..0.
 trail_activate_pct = 50.0     # user rule: trailing starts only after +12% (50: user 2026-11-12, "under +50% the stop must
                               # be wider: at +50% the stop is +25%"; tighter only above, as before. Was 30.)
-trail_distance_pct = 6.0      # trailing stop distance below the peak (6: Controller 2026-11-11, kept by the user 2026-11-12)
+trail_distance_pct = 0        # 0 = NO trailing stop (user 2026-11-12: only the profit stop's percentages sell). Was 6.
 cooldown_after_loss_minutes = 20     # unused: after a loss only that token is blocked (forever), other pairs stay open
 max_consecutive_losses = 3           # ...and a longer pause after a losing streak
 streak_pause_minutes = 0               # 0 = no pause after a losing streak (set e.g. 30 to pause new buys after 3 losses in a row)

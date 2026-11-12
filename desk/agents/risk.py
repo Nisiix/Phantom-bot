@@ -45,9 +45,10 @@ def exit_decision(pos: Position, cfg, t: float, liquidity_usd: float | None,
     stop = getattr(cfg, "exit_stop_pct", 0) or cfg.hard_stop_pct    # paper stop trial, else the hard stop
     if getattr(cfg, "loss_stop", True) and pnl <= stop:
         return "HARD_STOP", f"P&L {pnl:+.2f}% <= {stop}%"
-    if not pos.trailing_active and pos.peak_pnl_pct >= cfg.trail_activate_pct:
+    # trail_distance_pct = 0: no trailing stop (user 2026-11-12: only the profit stop's percentages sell)
+    if cfg.trail_distance_pct > 0 and not pos.trailing_active and pos.peak_pnl_pct >= cfg.trail_activate_pct:
         pos.trailing_active = True
-    if pos.trailing_active:
+    if pos.trailing_active and cfg.trail_distance_pct > 0:
         trail_level = pos.peak_value_sol * (1 - cfg.trail_distance_pct / 100)
         if pos.mark_value_sol <= trail_level:
             locked = (trail_level / pos.cost_sol - 1) * 100

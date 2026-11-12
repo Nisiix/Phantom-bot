@@ -392,8 +392,8 @@ def enforce_hard_limits(cfg: Config) -> None:
               "no time exit while loss_stop = false (it would sell at a loss)")
     clamp(r, "trail_activate_pct", lambda v: v >= HARD_TRAIL_ACTIVATE_PCT, HARD_TRAIL_ACTIVATE_PCT,
           "trailing may only start after +12%")
-    clamp(r, "trail_distance_pct", lambda v: 0 < v < HARD_TRAIL_ACTIVATE_PCT, 6.0,
-          "trail distance must be between 0 and 12%")
+    clamp(r, "trail_distance_pct", lambda v: 0 <= v < HARD_TRAIL_ACTIVATE_PCT, 6.0,
+          "trail distance must be between 0 (off) and 12%")
     # BASE RULE of the engine (user 2026-11-11): the stop in profit is never turned off, by anyone (the
     # Controller turned it off at 19:41 UTC that day: with no stop at a loss a trade that rose and fell back
     # would never have been sold).

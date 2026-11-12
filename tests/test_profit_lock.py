@@ -323,3 +323,17 @@ def test_risk_issues_one_partial_sale_and_the_executor_sells_30pct(tmp_path):
     assert "M" not in risk.exiting
     asyncio.run(risk.mark_positions(t + 13))       # still +34%: no second partial sale
     assert desk.exits.empty()
+
+
+def test_no_trailing_when_distance_is_zero():
+    """User 2026-11-12: trail_distance_pct = 0 -> no trailing stop; only the profit stop's levels sell."""
+    r = RiskCfg()
+    r.loss_stop, r.trail_activate_pct, r.trail_distance_pct = False, 50.0, 0.0
+    p = pos(1.95, 2.0, 600)                       # peak +100%, now +95%: a 6% trailing would have sold
+    reason, _ = exit_decision(p, r, time.time(), None, lock_rule({"profit_lock_activate_pct": 30,
+                              "profit_lock_fast_activate_pct": 30, "profit_lock_pct": 4,
+                              "profit_lock_keep_pct": 70, "profit_lock_keep_from_pct": 20}, 1.0))
+    assert reason is None and not p.trailing_active
+    assert simulate_exit([(0, 0.0), (60, 100.0), (120, 95.0), (180, 60.0)], 0.0, -100.0, 50.0, 0.0, 0.0,
+                         lock_rule({"profit_lock_activate_pct": 30, "profit_lock_pct": 4,
+                                    "profit_lock_keep_pct": 70, "profit_lock_keep_from_pct": 20}, 1.0)) == 60.0   # not 95 (trailing): the 70% stop

@@ -346,7 +346,7 @@ def simulate_exit(path: list[tuple[float, float]], cost: float, stop: float, tra
         peak = max(peak, net)
         if peak >= trail_on:
             trail = True
-        if trail and 1 + net / 100 <= (1 + peak / 100) * (1 - trail_dist / 100):
+        if trail and trail_dist > 0 and 1 + net / 100 <= (1 + peak / 100) * (1 - trail_dist / 100):
             return clip_ret(net)
         if lock.enabled:
             speed = rise_speed(hist, sec, peak, lock.speed_s) if lock.speed_full > 0 else 0.0
@@ -471,6 +471,8 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
     trail_on = sorted({max(12.0, r.trail_activate_pct), 12.0, 15.0, 20.0, 25.0, 30.0, 40.0})
     trail_on = [x for x in trail_on if x >= 12.0]
     dists = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
+    if r.trail_distance_pct <= 0:
+        dists = [0.0]     # trailing off (user 2026-11-12): the Controller does not propose turning it back on
     holds = [0.0, 15.0, 30.0, 45.0] if r.loss_stop else [0.0]    # no time exit while there is no loss stop
     cur_r = {"hard_stop_pct": exit_stop, "trail_activate_pct": r.trail_activate_pct,
              "trail_distance_pct": r.trail_distance_pct, "max_hold_minutes": float(r.max_hold_minutes),
