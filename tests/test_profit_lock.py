@@ -253,3 +253,18 @@ def test_risk_checks_faster_while_a_position_pumps(tmp_path):
     Dex.px = 0.0014                                            # dump under the stop: confirmed and sold
     asyncio.run(risk.mark_positions(t + 34.5))
     assert not desk.exits.empty() and lanes[-1] == "stop"
+
+
+def test_wider_stop_under_fifty_percent():
+    """User 2026-11-12: under a +50% peak the stop keeps 50% of the peak (+50% -> +25%), from +50% the 70% share."""
+    from desk.exits import lock_level
+    rule = lock_rule({"profit_lock_activate_pct": 12, "profit_lock_fast_activate_pct": 15, "profit_lock_pct": 4,
+                      "profit_lock_keep_pct": 70, "profit_lock_keep_from_pct": 20, "profit_lock_keep_fast_pct": 70,
+                      "profit_lock_speed_full": 60, "profit_lock_keep_low_pct": 50,
+                      "profit_lock_keep_high_from_pct": 50}, 1.0)
+    assert lock_level(rule, 15.0) == 4.0                    # under +20%: the fixed floor
+    assert abs(lock_level(rule, 31.0) - 15.0) < 1e-9        # +30% net -> +15%
+    assert abs(lock_level(rule, 49.0, speed=100) - 24.0) < 1e-9   # no speed boost in the wide band
+    assert abs(lock_level(rule, 61.0) - 42.0) < 1e-9        # from +50%: 70% of the peak
+    off = rule._replace(keep_low=0.0)
+    assert abs(lock_level(off, 31.0) - 21.0) < 1e-9         # band off: the old 70% share

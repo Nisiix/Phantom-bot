@@ -46,6 +46,10 @@ class LockRule(NamedTuple):
     keep_fast: float = 0.0   # share kept instead when the price is rising very fast (0 = no speed rule)
     speed_full: float = 0.0  # rise of the net peak, in points per minute, at which keep_fast is fully reached
     speed_s: float = 60.0    # the rise is measured over this many seconds
+    # Wider stop on mid peaks (user's rule 2026-11-12, "a +50% the stop is +25%"): under a net peak of
+    # keep_high_from the share kept is keep_low (no speed boost); from keep_high_from on, keep / keep_fast.
+    keep_low: float = 0.0        # share of the net peak kept below keep_high_from (0 = band off)
+    keep_high_from: float = 0.0  # net peak % from which the normal keep share applies
 
     @property
     def enabled(self) -> bool:
@@ -70,7 +74,9 @@ def lock_rule(r, buffer: float | None = None) -> LockRule:
                     keep_from=float(g("profit_lock_keep_from_pct", 0.0) or 0.0),
                     keep_fast=float(g("profit_lock_keep_fast_pct", 0.0) or 0.0) / 100,
                     speed_full=float(g("profit_lock_speed_full", 0.0) or 0.0),
-                    speed_s=float(g("profit_lock_speed_seconds", 60.0) or 60.0))
+                    speed_s=float(g("profit_lock_speed_seconds", 60.0) or 60.0),
+                    keep_low=float(g("profit_lock_keep_low_pct", 0.0) or 0.0) / 100,
+                    keep_high_from=float(g("profit_lock_keep_high_from_pct", 0.0) or 0.0))
 
 
 def arm_level(rule: LockRule, cost: float = 0.0) -> float:
@@ -129,7 +135,10 @@ def lock_level(rule: LockRule, peak: float, speed: float = 0.0) -> float:
     the trade too early: measured 2026-11-11). User's figures: +30% -> stop +20%, +100% -> +70% (70% of the
     peak), more when the rise is fast. Callers keep the highest level reached (the stop never goes down)."""
     net_peak = peak - rule.buffer
-    share = keep_share(rule, speed)
+    if rule.keep_low > 0 and net_peak < rule.keep_high_from:
+        share = rule.keep_low        # mid peaks: a wider stop, so a token still climbing is left running
+    else:
+        share = keep_share(rule, speed)
     if share <= 0 or net_peak < rule.keep_from:
         return rule.at
     return max(rule.at, share * net_peak)

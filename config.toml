@@ -151,7 +151,7 @@ poll_seconds = 6.0        # price check of waiting tokens (one batched DexScreen
 [risk]
 # NO STOP AT A LOSS (user's rule 2026-11-11, paper AND live): while a position is at break-even or at a loss no stop
 # sells it (no hard stop, no time exit). Only the profit stops sell (profit lock +12/+15 -> +4%, the stop rising
-# from +20% at 70% of the peak, the trailing). The emergency exits are off too (liquidity_drop_exit_pct = 0,
+# from +20% at 50% of the peak, 70% from +50%, the trailing from +50%). The emergency exits are off too (liquidity_drop_exit_pct = 0,
 # data_loss_exit_seconds = 0): a rug is held to the end. true = back to hard_stop_pct / paper_hard_stop_pct and
 # max_hold_minutes.
 loss_stop = false
@@ -159,7 +159,8 @@ hard_stop_pct = -4.0          # user rule: hard stop at -6% (can only be tighten
 paper_hard_stop_pct = -25.0   # PAPER ONLY, user's choice 2026-11-11: trial of a stop wider than the -6% hard limit
                               # (Controller measure "Stop più larghi": -25% did +5.8 pts/token on 41 tokens, still uncertain).
                               # 0 = off. Live always uses hard_stop_pct (max -6%). Range -30..0.
-trail_activate_pct = 30.0     # user rule: trailing starts only after +12% (30: Controller 2026-11-11, kept by the user 2026-11-12)
+trail_activate_pct = 50.0     # user rule: trailing starts only after +12% (50: user 2026-11-12, "under +50% the stop must
+                              # be wider: at +50% the stop is +25%"; tighter only above, as before. Was 30.)
 trail_distance_pct = 6.0      # trailing stop distance below the peak (6: Controller 2026-11-11, kept by the user 2026-11-12)
 cooldown_after_loss_minutes = 20     # unused: after a loss only that token is blocked (forever), other pairs stay open
 max_consecutive_losses = 3           # ...and a longer pause after a losing streak
@@ -212,6 +213,16 @@ profit_lock_keep_pct = 70.0
 profit_lock_keep_fast_pct = 70.0
 profit_lock_speed_full = 60.0
 profit_lock_speed_seconds = 60.0
+# WIDER STOP UNDER +50% (user's rule 2026-11-12: "up to +50% the stop must be further away: at +50% it is +25%;
+# from +70/+80/+100% a stop close to the profit is fine, as now"). Under a net peak of profit_lock_keep_high_from_pct
+# the stop keeps profit_lock_keep_low_pct of the peak (+20% -> +10%, +30% -> +15%, +50% -> +25%; never under the
+# +4% floor, never going down); from that peak on it keeps profit_lock_keep_pct (fast: keep_fast) and the 6%
+# trailing starts (trail_activate_pct = 50). Replay 2026-11-12 10:10 UTC, 57 paths, vs trailing 30/6 + 70%: approved
+# tokens +0.9 pts/token, all tokens -0.8, both far inside the noise ([-6.3, +8.1] / [-4.5, +2.8]), one extra
+# losing trade on all tokens; 60% under +50% gave +1.1 / +0.4. Only 10 of 57 paths peaked between +20% and +50%.
+# 0 = band off.
+profit_lock_keep_low_pct = 50.0
+profit_lock_keep_high_from_pct = 50.0
 # Fee rule: the lock also waits until the NET profit is at least this many times the trade's round-trip fees
 # (1 = "profit = 100% of the fees"). With today's fees (median 2.5%, max 3.1%) the +8% level decides; it only
 # matters for an expensive token.

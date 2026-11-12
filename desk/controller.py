@@ -480,7 +480,9 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
              "profit_lock_fee_multiple": float(r.profit_lock_fee_multiple),
              "profit_lock_keep_from_pct": float(r.profit_lock_keep_from_pct),
              "profit_lock_keep_fast_pct": float(r.profit_lock_keep_fast_pct),
-             "profit_lock_speed_full": float(r.profit_lock_speed_full)}
+             "profit_lock_speed_full": float(r.profit_lock_speed_full),
+             "profit_lock_keep_low_pct": float(r.profit_lock_keep_low_pct),
+             "profit_lock_keep_high_from_pct": float(r.profit_lock_keep_high_from_pct)}
     # Profit lock (user's rule: arm around +5/+6% net, sell around +2/+3% net): the Controller tries other
     # arming / selling levels, keeping the lock always in profit (sell >= +1.5% net, 1+ point under arming).
     lock_on = sorted({float(r.profit_lock_activate_pct), 0.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0})

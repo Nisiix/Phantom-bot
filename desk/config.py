@@ -188,6 +188,10 @@ class RiskCfg:
     profit_lock_keep_fast_pct: float = 0.0
     profit_lock_speed_full: float = 0.0
     profit_lock_speed_seconds: float = 60.0
+    # Wider stop on mid peaks (user 2026-11-12): under profit_lock_keep_high_from_pct net peak the stop keeps
+    # profit_lock_keep_low_pct of the peak instead of profit_lock_keep_pct. 0 = off.
+    profit_lock_keep_low_pct: float = 0.0
+    profit_lock_keep_high_from_pct: float = 0.0
 
 
 @dataclass
@@ -409,6 +413,9 @@ def enforce_hard_limits(cfg: Config) -> None:
               "the share kept on a fast rise must be between profit_lock_keep_pct and 95% (0 = off)")
         clamp(r, "profit_lock_speed_full", lambda v: 0 <= v <= 1000, 30.0, "profit_lock_speed_full must be 0-1000")
         clamp(r, "profit_lock_speed_seconds", lambda v: 20 <= v <= 600, 60.0, "speed window must be 20-600 s")
+        clamp(r, "profit_lock_keep_low_pct", lambda v: 0 <= v <= 90, 0.0, "mid-peak keep share must be 0-90%")
+        clamp(r, "profit_lock_keep_high_from_pct", lambda v: 0 <= v <= 500, 0.0,
+              "mid-peak band must end at 0-500%")
     clamp(r, "hot_poll_seconds", lambda v: 1.0 <= v <= 10.0, 1.0, "hot_poll_seconds must be 1-10 s")
     clamp(f, "max_top10_pct", lambda v: 0 < v <= HARD_MAX_TOP10_PCT, HARD_MAX_TOP10_PCT,
           "top-10 holder ceiling can never exceed 20%")
