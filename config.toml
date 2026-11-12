@@ -150,7 +150,7 @@ poll_seconds = 6.0        # price check of waiting tokens (one batched DexScreen
 
 [risk]
 # NO STOP AT A LOSS (user's rule 2026-11-11, paper AND live): while a position is at break-even or at a loss no stop
-# sells it (no hard stop, no time exit). Only the profit stops sell (profit lock +8/+10 -> +4%, the stop rising
+# sells it (no hard stop, no time exit). Only the profit stops sell (profit lock +12/+15 -> +4%, the stop rising
 # from +20% at 70% of the peak, the trailing). The emergency exits are off too (liquidity_drop_exit_pct = 0,
 # data_loss_exit_seconds = 0): a rug is held to the end. true = back to hard_stop_pct / paper_hard_stop_pct and
 # max_hold_minutes.
@@ -181,8 +181,13 @@ hot_poll_seconds = 1.0               # while a position is pumping (peak up 5+ p
 # NET = after buy fees, sale fees and sale slippage: every level is raised by the sell buffer (1% minimum; Risk
 # uses the slippage it measured on its last stop exits when that is larger). The Controller keeps tuning it (never
 # arming under +6%). It can never be turned off: base rule of the engine (user 2026-11-11).
-profit_lock_activate_pct = 8.0
-profit_lock_fast_activate_pct = 10.0
+# User 2026-11-12 (FLC sold at +3.8% net, ~$2.80, after a +12.1% peak): arm higher so small gains are not cut.
+# Re-measured 2026-11-12 08:30 UTC on 57 Analyst price paths (14 days, no loss stop): arming +12% (+15% if reached
+# within 3 min), still selling at +4%: +3.5 pts/token vs +8/+10 ([+0.5, +6.5]), no extra losing trade, 10 lock
+# sales instead of 14 (4 fewer premature); approved tokens only (19): +2.5 ([-0.9, +5.9]). +20% gave the same mean
+# with a worse worst-10%. Trade-off: a token that peaks between +8% and +12% and then falls is no longer sold.
+profit_lock_activate_pct = 12.0
+profit_lock_fast_activate_pct = 15.0
 profit_lock_fast_minutes = 3.0
 profit_lock_pct = 4.0
 profit_lock_sell_buffer_pct = 1.0
