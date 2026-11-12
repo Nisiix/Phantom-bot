@@ -9,6 +9,9 @@ It reports to the Analyst (user 2026-11-12): for every token the Analyst scores,
 The Analyst uses that report only once the data is sufficient ([smart_wallets] ready_min_*): a bonus on the score
 that can carry the token over the threshold to the Executor. Without sufficient data the Analyst ignores it. The
 Whale checker never buys, sells or blocks by itself.
+
+It also answers the Executor (user 2026-11-12, desk/whale_entry.py): the smart wallets' own buy price for a token
+(the Executor buys only within +30% of it) and, every 30 s while the Executor waits, whether they sold.
 """
 from __future__ import annotations
 

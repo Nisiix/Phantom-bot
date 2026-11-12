@@ -1197,8 +1197,9 @@ async function boot3D() {
   addLink("Risk", "Executor", -1.6, 0.18, 0xfb923c);
   for (const n of PIPE) { const c = arc(P(n), P("Logger"), 6); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
     new THREE.LineDashedMaterial({ color: 0xf472b6, transparent: true, opacity: 0.18, dashSize: 0.6, gapSize: 0.5 })).computeLineDistances()); }
-  // the Whale checker watches the tokens the Analyst follows and the open positions (dashed teal lines)
-  for (const n of ["Analyst", "Risk"]) { const c = arc(P("Whale checker"), P(n), 2); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
+  // the Whale checker reports to the Analyst (smart holders) and the Executor (their buy price, their sales),
+  // and watches the open positions (dashed teal lines)
+  for (const n of ["Analyst", "Executor", "Risk"]) { const c = arc(P("Whale checker"), P(n), 2); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
     new THREE.LineDashedMaterial({ color: 0x2dd4bf, transparent: true, opacity: 0.22, dashSize: 0.5, gapSize: 0.6 })).computeLineDistances()); }
   // the Controller watches every agent from above (dashed yellow lines)
   for (const n of [...PIPE, "Logger"]) { const c = arc(P("Controller"), P(n), 2); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(40)),
