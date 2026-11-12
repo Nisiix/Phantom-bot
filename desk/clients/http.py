@@ -71,6 +71,8 @@ HOST_LIMITS = {
     "lite-api.jup.ag#exec": 60,          # live orders/executes: rare, but never wait behind quotes
     "api.geckoterminal.com": 8,
     "api.mainnet-beta.solana.com": 90,
+    "api.mainnet-beta.solana.com#smart": 90,  # smart-wallet scans (desk/smartwallets.py): own budget, never
+                                              # in front of the Filter / DevWatch calls (public limit ~600/min)
 }
 
 

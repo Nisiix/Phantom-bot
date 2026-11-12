@@ -18,9 +18,10 @@ class SolanaRPC:
         self.url = url
         self._ids = itertools.count(1)
 
-    async def call(self, method: str, params: list | None = None):
+    async def call(self, method: str, params: list | None = None, lane: str = ""):
         body = {"jsonrpc": "2.0", "id": next(self._ids), "method": method, "params": params or []}
-        res = await self.http.post(self.url, json=body, retries=3)
+        res = await (self.http.post(self.url, json=body, retries=3, lane=lane) if lane
+                     else self.http.post(self.url, json=body, retries=3))
         if res is None:
             raise RuntimeError(f"RPC {method}: empty response")
         if "error" in res:

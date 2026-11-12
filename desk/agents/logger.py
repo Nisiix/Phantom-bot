@@ -38,7 +38,42 @@ class Logger(Agent):
                           f"telegram={'on' if self._tg() else 'off'} discord={'on' if self._dc() else 'off'}")
         await asyncio.gather(self.supervised("persist", self.persist_loop),
                              self.supervised("recap", self.recap_loop),
-                             self.supervised("shadow", self.shadow_loop))
+                             self.supervised("shadow", self.shadow_loop),
+                             self.supervised("smart-wallets", self.smart_loop))
+
+    async def smart_loop(self) -> None:
+        """Smart wallets (desk/smartwallets.py): early buyers of the followed tokens, scored on the winners.
+        Observation only."""
+        c = self.cfg.smart_wallets
+        if not c.enabled or self.desk.rpc is None:
+            return
+        from ..smartwallets import SmartWallets
+        sw = SmartWallets(self.desk.store, self.desk.rpc, self.desk.dex, c, self.emit)
+        self.desk.smart = sw
+        self.emit("info", f"Smart wallets on: first {c.scan_trades} trades of every followed token read on-chain, "
+                          f"{len(sw.smart)} smart wallets known (observation only)")
+
+        def followed():
+            pos = [(m, getattr(p, "symbol", "")) for m, p in list(self.desk.portfolio.positions.items())]
+            # the Analyst's tokens first, then the newest follow-ups (younger token = shorter history to page back)
+            act = sorted(self.shadow.active.values(), key=lambda s: -s.start)
+            sh = [(s.mint, s.symbol) for s in act if s.stage == "analyst"] +                  [(s.mint, s.symbol) for s in act if s.stage != "analyst"]
+            return pos + sh
+
+        def watched():
+            out = {m: (m, getattr(p, "symbol", ""), "position") for m, p in list(self.desk.portfolio.positions.items())}
+            for s in list(self.shadow.active.values()):
+                if s.stage == "analyst" and s.mint not in out:
+                    out[s.mint] = (s.mint, s.symbol, "analyst")
+            return list(out.values())
+
+        task = asyncio.create_task(sw.loop(followed, watched, self.desk.stop))
+        while not self.desk.stop.is_set() and not task.done():
+            for k, v in sw.stats.items():
+                self.state.counters[f"smart_{k}"] = v
+            self.state.counters["smart_wallets"] = len(sw.smart)
+            await asyncio.sleep(5)
+        await task
 
     async def shadow_loop(self) -> None:
         if not self.cfg.quant.shadow_tracking:

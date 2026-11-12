@@ -238,6 +238,29 @@ class GmgnCfg:
 
 
 @dataclass
+class SmartWalletsCfg:
+    """User 2026-11-12 (desk/smartwallets.py): wallets that keep buying the winners early, found with plain RPC (no
+    paid API). Observation only: the hits are stored and shown, nothing buys or blocks on them yet."""
+    enabled: bool = True
+    win_mcap_usd: float = 200_000.0     # a token "won" when its real market cap reached this
+    scan_trades: int = 40               # first N trades of every followed token read from the chain
+    max_sig_pages: int = 60             # 1000 signatures each (~1.3 s a page): measured 2026-11-12, followed tokens
+                                        # 30-60 min old had 2k-80k signatures; longer histories are not read
+    backfill: bool = True               # read the past tokens the desk followed, when idle
+    backfill_winner_pages: int = 120    # past winners: page back further to reach their first trades
+    rpc_interval_seconds: float = 0.6   # pacing (own 90/min budget on the public node, desk/clients/http.py)
+    peak_check_minutes: float = 15.0    # DexScreener check of the recent tokens' market cap
+    peak_track_hours: float = 48.0
+    decide_hours: float = 24.0          # a token that did not win within this counts as a loss
+    min_wins: int = 3
+    min_tokens: int = 3
+    min_hit_rate: float = 0.3           # wins / tokens bought early
+    max_smart_wallets: int = 300        # watched with getMultipleAccounts (100 per call)
+    rescore_minutes: float = 30.0
+    watch_seconds: float = 60.0         # tokens the Analyst follows + open positions: smart holders read this often
+
+
+@dataclass
 class DevWatchCfg:
     """User's rule 2026-11-11 (desk/devwatch.py): the creator and its linked wallets must not sell more than
     max_sold_pct of what they held from the start. No position -> permanent kill; open position -> sell."""
@@ -335,6 +358,7 @@ class Config:
     quant: QuantCfg = field(default_factory=QuantCfg)
     gmgn: GmgnCfg = field(default_factory=GmgnCfg)
     devwatch: DevWatchCfg = field(default_factory=DevWatchCfg)
+    smart_wallets: SmartWalletsCfg = field(default_factory=SmartWalletsCfg)
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
     pages: PagesCfg = field(default_factory=PagesCfg)
     controller: ControllerCfg = field(default_factory=ControllerCfg)
@@ -518,7 +542,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "entry", "risk", "recap", "quant", "gmgn", "devwatch", "dashboard", "pages", "controller", "model", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "entry", "risk", "recap", "quant", "gmgn", "devwatch", "smart_wallets", "dashboard", "pages", "controller", "model", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()
