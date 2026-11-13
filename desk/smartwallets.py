@@ -21,7 +21,7 @@ trades, the desk's own DexScreener readings for the market cap. No paid API, no 
    is stored in `sw_hits` and shown as an event.
 5. REPORT TO THE ANALYST (user 2026-11-12). For every token the Analyst scores, the Whale checker reads the smart
    holders on the spot and reports them. Only when the data is sufficient (readiness(): enough decided tokens,
-   winners and smart wallets) does the Analyst use it: one smart holder = 51% of its score ([analyst] whale_weight);
+   winners and smart wallets) does the Analyst use it: one smart holder = whale_weight (30%) of its score ([analyst] whale_weight);
    otherwise it ignores it. The report also carries the smart wallets' own average buy price (read from their token
    account): the Executor buys only within +30% of it and drops the token if they sell (desk/whale_entry.py).
    Nothing here buys or sells by itself: the Analyst's caps and the Executor's checks still decide.

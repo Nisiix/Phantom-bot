@@ -186,7 +186,7 @@ def test_smart_wallets_weigh_51_percent_only_with_sufficient_data():
     info: dict = {}
     one, b2, why = score_token(snap(), {**rug, "whales": {"ready": True, "holders": 1, "wallets": ["Ab12cd"],
                                                           "entry_sol": 2e-7}}, web, None, info)
-    assert b2["whales"] == 1.0 and abs(one - (0.51 + 0.49 * plain)) < 1e-3 and one >= 0.6
+    assert b2["whales"] == 1.0 and abs(one - (0.30 + 0.70 * plain)) < 1e-3 and one >= 0.6
     assert info["whale_free_score"] == round(plain, 4) and info["whale_entry_sol"] == 2e-7
     f = {**{f"c_{k}": v for k, v in b2.items()}, **info}
     assert abs(analyst_score(f, BASE_WEIGHTS) - one) < 0.01           # the Controller re-scores it the same way

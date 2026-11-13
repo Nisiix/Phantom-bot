@@ -1,6 +1,6 @@
 """WHALE ENTRY — when to buy a token approved because a smart wallet holds it (user 2026-11-12).
 
-A token the Analyst approved thanks to the Whale checker (smart wallets weigh 51% of its score) is not bought at
+A token the Analyst approved thanks to the Whale checker (smart wallets weigh whale_weight, 30%, of its score) is not bought at
 any price: we must not become the smart wallet's exit liquidity, nor buy the top of a candle.
 
   * reference = the smart wallets' own average buy price (SOL per token, read on-chain from their token account);

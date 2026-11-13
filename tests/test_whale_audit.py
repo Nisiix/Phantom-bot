@@ -29,7 +29,7 @@ def test_groups_promoted_and_precision():
     assert a["precision"] == 8 / 20 and abs(a["base_rate"] - 11 / 52) < 1e-9 and a["lift"] > 1.5
     assert a["wallets"][0][0] == "SMART" and a["wallets"][0][1:] == (8, 10)
     cfg = Config()
-    assert wa.proposals(a, cfg) == []                                     # the 51% is the user's rule: never raised
+    assert wa.proposals(a, cfg) == []                                     # the weight is the user's rule: never raised
     text = wa.report_section(a, cfg, {"ready": True, "why": "6 smart wallets"})
     assert "MEGLIO" in text and "approvati grazie ai wallet bravi: 20 token" in text and "1.9 volte la base" in text
 

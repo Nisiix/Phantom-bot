@@ -118,9 +118,9 @@ class AnalystCfg:
     old_late_entry_h6_pct: float = 300.0   # older token up more than this in 6h -> capped (young: no 6h cap)
     old_parabolic_h1_pct: float = 200.0    # older token up more than this in 1h -> capped (young: 400%)
     # Whale checker (user 2026-11-12): when it has sufficient data ([smart_wallets] ready_min_*) and at least one
-    # smart wallet holds the token, that counts for whale_weight (51%) of the score, the other components for the
+    # smart wallet holds the token, that counts for whale_weight (30%, user 2026-11-13; was 51%) of the score, the other components for the
     # rest: such a token is approved almost always (the hard caps still apply). No smart wallet: the usual score.
-    whale_weight: float = 0.51
+    whale_weight: float = 0.30
 
 
 @dataclass

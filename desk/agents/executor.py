@@ -15,7 +15,7 @@ The Executor watches its price for up to [entry] window_minutes and buys at the 
 a bounce off a dip, a confirmation), always with a FRESH Analyst verdict and all the checks above; if the
 moment doesn't come, or liquidity leaves while waiting, the token is dropped.
 WHALE ENTRY (user 2026-11-12, desk/whale_entry.py): a token approved while smart wallets hold it (Whale checker,
-51% of the score) is bought only within +30% of the smart wallets' own buy price and not on a 5-minute spike;
+30% of the score) is bought only within +30% of the smart wallets' own buy price and not on a 5-minute spike;
 otherwise the Executor waits (up to [smart_wallets] whale_wait_minutes) for the price to come back. If one of those
 smart wallets sells meanwhile, the token is dropped for whale_sold_block_hours: in that time it is bought only if
 OTHER smart wallets (not the ones that sold) hold it, again near their own buy price. Same checks as above.

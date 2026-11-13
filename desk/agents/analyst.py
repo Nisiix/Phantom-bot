@@ -10,7 +10,7 @@ With GMGN data a ninth component, smart money (.10: smart/renowned wallets holdi
 for fresh-wallet / bot / rat-trader crowds), is added and the others are scaled by 0.9.
 WHALE CHECKER (user 2026-11-12, desk/smartwallets.py): for every token the Whale checker reports how many of its
 smart wallets (wallets that keep buying early the tokens that reach $100k) hold it. With sufficient data and at
-least one smart holder, the smart wallets weigh whale_weight (51%) of the score and every other component 49%
+least one smart holder, the smart wallets weigh whale_weight (30%, user 2026-11-13; was 51%) of the score and every other component 70%
 together: such a token is approved almost always and the Executor buys it near the smart wallets' own price
 (desk/whale_entry.py). No smart holder, or not enough data: the usual score, nothing changes.
 Then hard caps for wash trading, insider clusters and parabolic blow-off tops (they apply after the whales).
@@ -173,13 +173,13 @@ def score_token(m: MarketSnapshot, rug: dict, web: dict, cfg=None,
         weights["website"] *= 0.3
     score = sum(weights[k] * b[k] for k in weights) / sum(weights.values())
 
-    # Whale checker: smart holders weigh 51% of the score, only with sufficient data and at least one of them.
+    # Whale checker: smart holders weigh whale_weight (30%) of the score, only with sufficient data and at least one of them.
     wh = rug.get("whales") or None
     whale_holders, whale_free, ww = None, None, 0.0
     if wh is not None:
         if wh.get("ready"):
             whale_holders = int(wh.get("holders") or 0)
-            ww = min(1.0, max(0.0, float(getattr(cfg, "whale_weight", 0.51))))
+            ww = min(1.0, max(0.0, float(getattr(cfg, "whale_weight", 0.30))))
             if whale_holders > 0 and ww > 0:
                 whale_free = score
                 b["whales"] = 1.0

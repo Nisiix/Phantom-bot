@@ -367,7 +367,7 @@ def analyst_score(f: dict, weights: dict) -> float | None:
     comps = {k[2:]: v for k, v in f.items() if k.startswith("c_") and isinstance(v, (int, float))}
     if "raw_score" not in f or not comps:
         return None
-    whales = comps.pop("whales", None)           # Whale checker: 51% of the score when smart wallets hold it
+    whales = comps.pop("whales", None)           # Whale checker: whale_weight of the score when smart wallets hold it
     w = {k: weights[k] for k in BASE_WEIGHTS if k in comps}
     if "traction" in comps:
         w["traction"] = weights.get("traction", 0.14)

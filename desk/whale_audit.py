@@ -138,7 +138,7 @@ def audit(rows: list[dict], hits: list[dict], tokens: dict[str, dict], min_score
 
 def proposals(a: dict | None, cfg) -> list[dict]:
     """Proposals only (the user decides): switch the smart-wallet weight off when the tokens it carried over the
-    threshold demonstrably lose. Its value (51%) is the user's rule: never proposed higher or lower."""
+    threshold demonstrably lose. Its value (30%, whale_weight) is the user's rule: never proposed higher or lower."""
     if not a:
         return []
     p = a["promoted"]
