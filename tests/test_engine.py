@@ -281,3 +281,17 @@ def test_new_tokens_only_age_and_market_cap(tmp_path):
     big = f.screen(Candidate("Bigpump"), snap(mint="Bigpump"))                         # $500k market cap
     assert big is not None and [c.name for c in big.failed] == ["market_cap"] and "Bigpump" not in desk.blacklist
     assert f.screen(Candidate("Smallpump"), snap(mint="Smallpump", market_cap=90_000, fdv=90_000)) is None
+
+
+def test_min_market_cap_and_low_liquidity_floor(tmp_path):
+    """User 2026-11-13: size judged by market cap above $20k; liquidity only needs $5k."""
+    desk = make_desk(tmp_path)
+    desk.cfg.filter.max_market_cap_usd = 0
+    desk.cfg.filter.min_market_cap_usd = 20_000
+    desk.cfg.filter.min_liquidity_usd = 5_000
+    f = Filter(desk)
+    tiny = f.screen(Candidate("Tinypump"), snap(mint="Tinypump", market_cap=15_000, fdv=15_000))
+    assert tiny is not None and "min_market_cap" in [c.name for c in tiny.failed]
+    assert "Tinypump" not in desk.blacklist                                           # may still grow
+    ok = f.screen(Candidate("Okpump"), snap(mint="Okpump", market_cap=30_000, fdv=30_000, liquidity_usd=11_000))
+    assert ok is None or "liquidity" not in [c.name for c in ok.failed] and "min_market_cap" not in [c.name for c in ok.failed]

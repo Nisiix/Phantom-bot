@@ -404,6 +404,12 @@ class Filter(Agent):
             checks.append(Check("market_cap", ok, round(mcap), f.max_market_cap_usd,
                                 f"market cap ${mcap:,.0f}" + ("" if ok else
                                 f" > ${f.max_market_cap_usd:,.0f}: already ran, the first move is gone")))
+        # Size floor (user 2026-11-13): judge the token by market cap above $20k instead of a $20k liquidity bar.
+        if f.min_market_cap_usd > 0 and mcap > 0:
+            ok = mcap >= f.min_market_cap_usd
+            checks.append(Check("min_market_cap", ok, round(mcap), f.min_market_cap_usd,
+                                f"market cap ${mcap:,.0f}" + ("" if ok else
+                                f" < ${f.min_market_cap_usd:,.0f}: too small yet")))
         return checks
 
     async def deep(self, cand: Candidate, snap: MarketSnapshot) -> FilterReport:

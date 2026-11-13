@@ -64,6 +64,7 @@ class FilterCfg:
     # with a market cap already above max_market_cap_usd, is not considered.
     max_age_hours: float = 0.0
     max_market_cap_usd: float = 0.0
+    min_market_cap_usd: float = 0.0     # market cap must be at least this (unknown: not judged). 0 = off
     reject_rug_linked_dev: bool = True
     require_freeze_revoked: bool = True
     reject_dangerous_token2022: bool = True
