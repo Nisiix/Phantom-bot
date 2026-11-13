@@ -41,7 +41,9 @@ def test_http_guards(tmp_path):
     assert ok.startswith(b"HTTP/1.1 200") and b'"mode"' in ok
     assert _request(dash, b"GET / HTTP/1.1\r\nHost: localhost:PORT\r\n\r\n").startswith(b"HTTP/1.1 200")
     assert _request(dash, b"GET /api/state HTTP/1.1\r\nHost: evil.example\r\n\r\n").startswith(b"HTTP/1.1 403")
-    assert _request(dash, b"POST /api/state HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n").startswith(b"HTTP/1.1 405")
+    # owner actions need the page's token (user 2026-11-13)
+    assert _request(dash, b"POST /api/state HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n").startswith(b"HTTP/1.1 403")
+    assert _request(dash, b"PUT /api/state HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n").startswith(b"HTTP/1.1 405")
 
 
 def test_activity_view(tmp_path):
@@ -72,3 +74,38 @@ def test_funnel_survives_restart_and_paper_reset(tmp_path):
     s = json.loads(dash.state_json())       # agent counters are all zero (fresh start), the log isn't
     assert [f["n"] for f in s["funnel"]] == [3, 1, 1, 2]       # a paper reset never zeroes the pipeline
     assert s["funnel_since"] == 50.0 and s["filter_evals"] == 4
+
+
+
+def _post(dash, path, body, token=None, origin="http://127.0.0.1:PORT"):
+    raw = json.dumps(body).encode()
+    head = (f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nOrigin: {origin}\r\nContent-Type: application/json\r\n"
+            f"X-Desk-Token: {dash.token if token is None else token}\r\nContent-Length: {len(raw)}\r\n\r\n").encode()
+    out = _request(dash, head + raw)
+    try:
+        return out, json.loads(out.split(b"\r\n\r\n", 1)[1] or b"{}")
+    except ValueError:
+        return out, {}
+
+
+def test_sell_and_paper_reset_buttons(tmp_path):
+    from desk.app import reset_pending, restart_flag, sell_flag
+    dash = make_dash(tmp_path)
+    cfg = dash.desk.cfg
+    page = _request(dash, b"GET / HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\n\r\n")
+    assert dash.token.encode() in page                                   # the served page carries the token
+    out, _ = _post(dash, "/api/sell", {"mint": "M"}, token="wrong")
+    assert out.startswith(b"HTTP/1.1 403") and not sell_flag(cfg).exists()
+    out, _ = _post(dash, "/api/sell", {"mint": "M"}, origin="https://evil.example")
+    assert out.startswith(b"HTTP/1.1 403")
+    mint = next(iter(dash.desk.portfolio.positions))
+    out, j = _post(dash, "/api/reset-paper", {"usd": 1000})
+    assert out.startswith(b"HTTP/1.1 409") and "posizioni aperte" in j["msg"]  # sell first
+    out, j = _post(dash, "/api/sell", {"mint": mint})
+    assert j["ok"] and mint in json.loads(sell_flag(cfg).read_text())["mints"]
+    dash.desk.portfolio.positions.clear()
+    out, j = _post(dash, "/api/reset-paper", {"usd": 1000})
+    assert j["ok"] and json.loads(reset_pending(cfg).read_text())["usd"] == 1000 and restart_flag(cfg).exists()
+    cfg.mode = "live"
+    out, j = _post(dash, "/api/reset-paper", {"usd": 1000})
+    assert not j["ok"] and "paper" in j["msg"]

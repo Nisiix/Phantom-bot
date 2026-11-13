@@ -91,6 +91,10 @@ button { font: inherit; }
   background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, var(--accent-2)));
   box-shadow: 0 8px 24px -10px color-mix(in srgb, var(--accent) 80%, transparent); }
 .btn.icon { padding: 7px 10px; }
+.hero-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.btn.sm { font-size: 11.5px; padding: 4px 10px; }
+.btn.danger { color: var(--loss); }
+.btn[disabled] { opacity: .5; cursor: default; transform: none; }
 
 .wrap { max-width: 1480px; margin: 0 auto; padding: 22px 24px 56px; }
 @media (max-width: 640px) { .wrap, .nav-in { padding-left: 16px; padding-right: 16px; } }
@@ -395,7 +399,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
   <section class="sec" id="panoramica">
     <div class="grid g-hero">
       <div class="card hero">
-        <div class="eyebrow">Valore del conto</div>
+        <div class="hero-head"><div class="eyebrow">Valore del conto</div><div id="heroActions"></div></div>
         <div class="big" id="heroEq">—</div>
         <div class="deltas" id="heroDeltas"></div>
         <div class="now" id="heroNow"></div>
@@ -829,14 +833,53 @@ function rail(p, rules) {
   const pt = el("div", "p"); pt.style.left = X(p.pnl_pct) + "%"; pt.style.background = css(p.pnl_pct >= 0 ? "--gain" : "--loss");
   r.append(z, t, pt); r.title = `${p.stop_pct == null ? "nessuno stop in perdita" : "stop " + sgn(p.stop_pct, 1) + "%"} · ora ${sgn(p.pnl_pct, 1)}% · trailing da +${rules.trail}%`; return r;
 }
+// ── owner actions (local dashboard only; the GitHub Pages copy has no token and shows no buttons) ──
+const CAN_ACT = !STATIC && !!window.DESK_TOKEN;
+const selling = new Set();
+async function deskPost(path, body) {
+  try {
+    const r = await fetch(new URL("api/" + path, location.origin), { method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/json", "X-Desk-Token": window.DESK_TOKEN || "" }, body: JSON.stringify(body) });
+    let j = {}; try { j = await r.json(); } catch (e) { j = { msg: await r.text().catch(() => "") }; }
+    return { ok: r.ok && !!j.ok, msg: j.msg || ("errore " + r.status) };
+  } catch (e) { return { ok: false, msg: "bot non raggiungibile" }; }
+}
+function sellButton(p) {
+  const b = el("button", "btn sm danger", selling.has(p.mint) ? "In vendita…" : "Vendi"); b.type = "button";
+  b.disabled = selling.has(p.mint) || !!p.exiting;
+  b.onclick = async () => {
+    if (!confirm("Vendere " + p.symbol + " adesso? Risultato attuale " + sgn(p.pnl_pct) + "%.")) return;
+    selling.add(p.mint); b.disabled = true; b.textContent = "In vendita…";
+    const r = await deskPost("sell", { mint: p.mint });
+    if (!r.ok) { selling.delete(p.mint); b.disabled = false; b.textContent = "Vendi"; }
+    alert(r.msg);
+  };
+  return b;
+}
+function renderActions(s) {
+  const box = $("heroActions"); if (!box) return; box.replaceChildren();
+  if (!CAN_ACT || s.mode !== "paper") return;
+  const b = el("button", "btn sm", "Reset conto paper ($1000)"); b.type = "button";
+  b.title = "Riporta il conto paper a 1000 $ e riavvia il bot. I dati di apprendimento restano.";
+  if (s.positions.length) { b.disabled = true; b.title = "Vendi prima le posizioni aperte"; }
+  b.onclick = async () => {
+    if (!confirm("Riportare il conto paper a 1000 $? Saldo e trade del conto vengono azzerati (archiviati), i dati di apprendimento restano. Il bot si riavvia.")) return;
+    b.disabled = true; const r = await deskPost("reset-paper", { usd: 1000 }); alert(r.msg); if (!r.ok) b.disabled = false;
+  };
+  box.append(b);
+}
 function renderPositions(s) {
+  for (const m of [...selling]) if (!s.positions.some((p) => p.mint === m)) selling.delete(m);
   const box = $("positions"); box.replaceChildren();
   if (!s.positions.length) { box.append(el("div", "empty", "Nessuna posizione aperta: il desk aspetta un segnale che superi tutte le regole.")); return; }
   const rows = s.positions.map((p) => { const r = el("tr"), rc = el("td"); rc.append(rail(p, s.rules));
     const ex = el("td", "n"); ex.append(el("span", "badge" + (p.trailing ? " trail" : ""), p.stop_pct == null ? "nessuno stop" : (p.trailing ? "trailing " : "stop ") + sgn(p.stop_pct, 1) + "%"));
     r.append(tokenCell(p.symbol, p.mint, p.pnl_pct), td(sol(p.cost, 3), "n"), td(sgn(p.pnl_pct) + "%", "n " + cls(p.pnl_pct)), td(PX ? usdP(p.value - p.cost) : sgn(p.value - p.cost, 4), "n " + cls(p.pnl_pct)), rc, ex,
-      td(Math.round(p.age_min) + "m", "n"), td(fx(p.score, 2), "n")); r.title = p.reason; return r; });
-  box.append(table([["Token"], ["Costo", 1], ["P&L %", 1], [PX ? "P&L $" : "P&L SOL", 1], ["Rischio"], ["Uscita", 1], ["Età", 1], ["Score", 1]], rows));
+      td(Math.round(p.age_min) + "m", "n"), td(fx(p.score, 2), "n"));
+    if (CAN_ACT) { const a = el("td", "n"); a.append(sellButton(p)); r.append(a); }
+    r.title = p.reason; return r; });
+  box.append(table([["Token"], ["Costo", 1], ["P&L %", 1], [PX ? "P&L $" : "P&L SOL", 1], ["Rischio"], ["Uscita", 1], ["Età", 1], ["Score", 1]]
+    .concat(CAN_ACT ? [[""]] : []), rows));
 }
 function renderTradeBars(s) {
   const box = $("tradebars"); box.replaceChildren();
@@ -928,7 +971,7 @@ function renderRules(s) {
 function render(s) {
   PX = (s.balance && s.balance.sol_usd) || 0;
   renderHeader(s); renderKpis(s); summary(s); renderEquity(s); renderFunnel(s); renderAgents(s);
-  renderPositions(s); renderTradeBars(s); renderFeed(s); renderRules(s); renderTrades(s);
+  renderPositions(s); renderActions(s); renderTradeBars(s); renderFeed(s); renderRules(s); renderTrades(s);
   if (!ctlOpen || !$("ctl").childElementCount) renderController(s);
   if (s.feed.length) seenTs = s.feed[s.feed.length - 1].ts;
 }

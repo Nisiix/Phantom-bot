@@ -1,14 +1,21 @@
-"""Local web dashboard: http://127.0.0.1:8080 (read-only).
+"""Local web dashboard: http://127.0.0.1:8080.
 
-A tiny asyncio HTTP server, no extra dependencies. It only binds to localhost, rejects
-requests whose Host header isn't localhost (DNS-rebinding guard), and exposes no action
-that could trade or change settings — it's a window onto the desk, not a remote control.
+A tiny asyncio HTTP server, no extra dependencies. It only binds to localhost and rejects
+requests whose Host header isn't localhost (DNS-rebinding guard).
+
+Two owner actions (user 2026-11-13), the same as the terminal commands, nothing else:
+  * POST /api/sell {"mint"}        sell an open position now (= `python run.py sell <mint>`, reason MANUAL)
+  * POST /api/reset-paper {"usd"}  paper only, no open position: reset the paper account to that capital
+                                   (= `python run.py restart --reset-paper-usd 1000`; learning data kept)
+They need the per-start token the page receives from this server (header X-Desk-Token) and a local Origin, so
+another website open in the browser cannot trigger them. The GitHub Pages copy has no token and no buttons.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import math
+import secrets
 import time
 import webbrowser
 from pathlib import Path
@@ -62,6 +69,7 @@ class Dashboard:
         self.port = self.cfg.port
         self._cache: tuple[float, bytes] = (0.0, b"")
         self._funnel: tuple[float, dict, float] = (0.0, {}, 0.0)
+        self.token = secrets.token_urlsafe(24)    # owner actions only from the page this server served
 
     # ── state snapshot ──
     def state(self) -> dict:
@@ -82,6 +90,7 @@ class Dashboard:
             if d.cfg.risk.loss_stop or p.trailing_active or p.lock_armed_on else None,   # None = no stop at a loss
             "profit_lock": position_lock_level(p) if p.lock_armed_on else None,
             "age_min": (t - p.entry_ts) / 60, "score": p.score, "ev_pct": p.ev_pct, "reason": p.entry_reason,
+            "exiting": p.mint in (getattr(r, "exiting", None) or {}) or p.mint in d.in_flight,
         } for p in pf.positions.values()]
         trades = d.store.q("SELECT symbol,mint,entry_ts,exit_ts,cost_sol,pnl_sol,pnl_pct,peak_pnl_pct,score,"
                            "entry_reason,exit_reason FROM trades ORDER BY exit_ts DESC LIMIT 40")
@@ -191,11 +200,14 @@ class Dashboard:
             host = headers.get("host", "").rsplit(":", 1)[0]
             if host not in LOCAL_HOSTS:
                 return await self._send(writer, 403, b"forbidden", "text/plain")
-            if method != "GET":
-                return await self._send(writer, 405, b"read-only dashboard", "text/plain")
             path = path.split("?", 1)[0]
+            if method == "POST":
+                return await self._action(reader, writer, path, headers)
+            if method != "GET":
+                return await self._send(writer, 405, b"method not allowed", "text/plain")
             if path == "/":
-                body = PAGE.read_bytes()
+                body = PAGE.read_text(encoding="utf-8").replace(
+                    "<!--PAGES-->", f'<script>window.DESK_TOKEN = "{self.token}";</script>', 1).encode()
                 return await self._send(writer, 200, body, "text/html; charset=utf-8")
             if path == "/api/activity":
                 body = json.dumps(self.activity(), default=str, allow_nan=False).encode()
@@ -222,8 +234,63 @@ class Dashboard:
             except Exception:  # noqa: BLE001
                 pass
 
+    # ── owner actions (user 2026-11-13) ──
+    async def _action(self, reader, writer, path: str, headers: dict) -> None:
+        origin = headers.get("origin", "")
+        if origin and origin.split("://", 1)[-1].rsplit(":", 1)[0] not in LOCAL_HOSTS:
+            return await self._send(writer, 403, b"forbidden origin", "text/plain")
+        if not secrets.compare_digest(headers.get("x-desk-token", ""), self.token):
+            return await self._send(writer, 403, b"missing or wrong token: reload the page", "text/plain")
+        n = int(headers.get("content-length") or 0)
+        if n > 4096:
+            return await self._send(writer, 400, b"body too large", "text/plain")
+        try:
+            body = json.loads((await asyncio.wait_for(reader.readexactly(n), timeout=5)).decode() or "{}") if n else {}
+        except (ValueError, asyncio.IncompleteReadError):
+            return await self._send(writer, 400, b"bad json", "text/plain")
+        if path == "/api/sell":
+            ok, msg = self.sell(str(body.get("mint") or ""))
+        elif path == "/api/reset-paper":
+            ok, msg = self.reset_paper(float(body.get("usd") or 1000))
+        else:
+            return await self._send(writer, 404, b"not found", "text/plain")
+        return await self._send(writer, 200 if ok else 409, json.dumps({"ok": ok, "msg": msg}).encode(),
+                                "application/json")
+
+    def sell(self, mint: str) -> tuple[bool, str]:
+        from .app import request_sell
+        pos = self.desk.portfolio.positions.get(mint)
+        if pos is None:
+            return False, "nessuna posizione aperta su questo token"
+        if mint in getattr(self.risk, "exiting", {}) or mint in self.desk.in_flight:
+            return False, f"{pos.symbol}: vendita già in corso"
+        request_sell(self.desk.cfg, [mint])
+        from .models import Event
+        self.desk.hub.emit(Event("Desk", "info", f"sell requested from the dashboard: {pos.symbol} "
+                                                 f"({pos.pnl_pct:+.1f}%)", mint, pos.symbol))
+        return True, f"vendita di {pos.symbol} richiesta: il bot la esegue entro pochi secondi"
+
+    def reset_paper(self, usd: float) -> tuple[bool, str]:
+        from .app import request_restart, reset_pending
+        cfg = self.desk.cfg
+        if cfg.mode != "paper":
+            return False, "il reset è possibile solo per il conto paper"
+        if not 10 <= usd <= 1_000_000:
+            return False, "capitale non valido"
+        n = len(self.desk.portfolio.positions) + len(self.desk.in_flight)
+        if n:
+            return False, f"ci sono {n} posizioni aperte: vendile prima, poi ripeti il reset"
+        reset_pending(cfg).write_text(json.dumps({"usd": usd, "ts": time.time()}), encoding="utf-8")
+        request_restart(cfg)
+        from .models import Event
+        self.desk.hub.emit(Event("Desk", "info", f"paper reset to ${usd:,.0f} requested from the dashboard: the desk "
+                                                 "restarts in a few seconds (learning data kept)"))
+        return True, (f"reset del conto paper a {usd:,.0f} $ richiesto: il bot si riavvia tra pochi secondi "
+                      "(i dati di apprendimento restano)")
+
     async def _send(self, writer, status: int, body: bytes, ctype: str) -> None:
-        reason = {200: "OK", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 500: "Error"}[status]
+        reason = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
+                  409: "Conflict", 500: "Error"}[status]
         writer.write(
             f"HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
             "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n"
