@@ -840,7 +840,9 @@ async function deskPost(path, body) {
   try {
     const r = await fetch(new URL("api/" + path, location.origin), { method: "POST", cache: "no-store",
       headers: { "Content-Type": "application/json", "X-Desk-Token": window.DESK_TOKEN || "" }, body: JSON.stringify(body) });
-    let j = {}; try { j = await r.json(); } catch (e) { j = { msg: await r.text().catch(() => "") }; }
+    let j = {}; try { j = await r.clone().json(); } catch (e) { j = { msg: await r.text().catch(() => "") }; }
+    // 403 with the token = the bot restarted since this page was loaded: reload to get the new one (2026-11-14).
+    if (r.status === 403 && /token/.test(j.msg || "")) { location.reload(); return { ok: false, msg: "pagina vecchia: la ricarico" }; }
     return { ok: r.ok && !!j.ok, msg: j.msg || ("errore " + r.status) };
   } catch (e) { return { ok: false, msg: "bot non raggiungibile" }; }
 }
@@ -856,15 +858,33 @@ function sellButton(p) {
   };
   return b;
 }
+// After a reset the bot restarts with a new per-start token: show it, wait for the new start, reload the page.
+let restarting = false;
+async function waitRestart(note) {
+  restarting = true; const old = window.DESK_TOKEN, t0 = Date.now();
+  while (Date.now() - t0 < 180000) {
+    await new Promise((ok) => setTimeout(ok, 1500));
+    note.textContent = "Riavvio in corso… " + Math.round((Date.now() - t0) / 1000) + " s";
+    try {
+      const html = await (await fetch(new URL("/", location.origin), { cache: "no-store" })).text();
+      const m = html.match(/DESK_TOKEN = "([^"]+)"/);
+      if (m && m[1] !== old) { location.reload(); return; }
+    } catch (e) { /* bot still starting */ }
+  }
+  note.textContent = "Il bot non è ancora ripartito: controlla la finestra del bot."; restarting = false;
+}
 function renderActions(s) {
-  const box = $("heroActions"); if (!box) return; box.replaceChildren();
+  const box = $("heroActions"); if (!box || restarting) return; box.replaceChildren();
   if (!CAN_ACT || s.mode !== "paper") return;
   const b = el("button", "btn sm", "Reset conto paper ($1000)"); b.type = "button";
   b.title = "Riporta il conto paper a 1000 $ e riavvia il bot. I dati di apprendimento restano.";
   if (s.positions.length) { b.disabled = true; b.title = "Vendi prima le posizioni aperte"; }
   b.onclick = async () => {
     if (!confirm("Riportare il conto paper a 1000 $? Saldo e trade del conto vengono azzerati (archiviati), i dati di apprendimento restano. Il bot si riavvia.")) return;
-    b.disabled = true; const r = await deskPost("reset-paper", { usd: 1000 }); alert(r.msg); if (!r.ok) b.disabled = false;
+    b.disabled = true; b.textContent = "Reset richiesto…";
+    const r = await deskPost("reset-paper", { usd: 1000 });
+    if (!r.ok) { b.disabled = false; b.textContent = "Reset conto paper ($1000)"; alert(r.msg); return; }
+    const note = el("span", "", "Riavvio in corso…"); note.style.marginLeft = "8px"; note.style.opacity = "0.75"; box.append(note); waitRestart(note);
   };
   box.append(b);
 }

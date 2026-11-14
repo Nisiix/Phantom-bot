@@ -85,9 +85,10 @@ class FilterCfg:
     funder_hops: int = 2
     funder_hub_signatures: int = 1000
     # Quarantine (2026-11-14): a funder link alone no longer kills for good. The token is held back and the
-    # link is set aside only quarantine_minutes after graduation, after quarantine_watch_minutes under watch,
+    # link is set aside only quarantine_minutes after graduation (user 2026-11-14 07:24: 23 min; the 60-min
+    # quarantine is only for names already used by a rugged token, rugged_name_expire_minutes), after quarantine_watch_minutes under watch,
     # with liquidity >= quarantine_liquidity_ratio of the first reading and holders grown. 0 = old permanent kill.
-    quarantine_minutes: float = 60.0
+    quarantine_minutes: float = 23.0
     quarantine_watch_minutes: float = 10.0
     quarantine_liquidity_ratio: float = 0.9
     funder_backfill_seconds: float = 4.0   # one ledger wallet looked up every N s in the background (0 = off)

@@ -90,9 +90,10 @@ rugged_name_expire_minutes = 60    # user 2026-11-14: an unproven-name block end
 old_volume_liquidity_ratio = 0.5
 old_min_volume_usd = 15000.0
 # Quarantine (user 2026-11-14): a funder linked to a rug no longer kills the token for good. It is held back
-# and re-checked: the link is set aside only 60 min after graduation, after 10 min under watch, with liquidity
-# at least 90% of the first reading and more holders. All other checks still apply. 0 = old permanent kill.
-quarantine_minutes = 60
+# and re-checked: the link is set aside 23 min after graduation (user 07:24 UTC: 60 min only for names already
+# used, rugged_name_expire_minutes above), after 10 min under watch, with liquidity at least 90% of the first
+# reading and more holders. All other checks still apply. 0 = old permanent kill.
+quarantine_minutes = 23
 quarantine_watch_minutes = 10
 quarantine_liquidity_ratio = 0.9
 identity_min_score = 3

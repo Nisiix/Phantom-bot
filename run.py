@@ -195,7 +195,16 @@ def main() -> int:
         return 0
 
     if args.command == "reset-paper":
-        print(reset_paper(cfg))
+        from desk.instance import AlreadyRunning, InstanceLock
+        try:
+            lock = InstanceLock(cfg.data_dir, cfg.mode).acquire()     # the desk must be stopped for this
+        except AlreadyRunning as e:
+            print(f"{e}\nPer il reset dal bot avviato: `python run.py restart --reset-paper-usd 1000`.", file=sys.stderr)
+            return 3
+        try:
+            print(reset_paper(cfg))
+        finally:
+            lock.release()
         return 0
 
     if args.command == "pages":
@@ -265,6 +274,12 @@ def main() -> int:
         print(build_recap(store, pf, cfg.mode, t1 - cfg.recap.interval_hours * 3600, t1, quant=quant))
         return 0
 
+    from desk.instance import AlreadyRunning, InstanceLock
+    try:
+        lock = InstanceLock(cfg.data_dir, cfg.mode).acquire()    # one desk per data folder (desk/instance.py)
+    except AlreadyRunning as e:
+        print(f"\n{e}\n", file=sys.stderr)
+        return 3
     pending_reset(cfg)
     try:
         if asyncio.run(run_desk(cfg, use_tui=not args.headless)):

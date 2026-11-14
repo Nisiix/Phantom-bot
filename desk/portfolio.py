@@ -22,10 +22,26 @@ class Portfolio:
         store.kv_set("starting_cash", self.starting_cash)
         self.positions: dict[str, Position] = {}
         names = {f.name for f in fields(Position)}
+        self.ghosts: list[str] = []
         for d in store.load_positions():
+            if self._already_sold(d):
+                # 2026-11-14: two desks ran on the same database; one sold Mustache, the other kept writing it
+                # back, so a sold position came back at the next start. A position whose sale is already in the
+                # trades table is dropped here (cash already holds its proceeds).
+                store.delete_position(d["mint"])
+                self.ghosts.append(d.get("symbol") or d["mint"][:8])
+                continue
             self.positions[d["mint"]] = Position(**{k: v for k, v in d.items() if k in names})
         self.sol_usd: float = store.kv_get("sol_usd", 0.0)
         self.realized_sol: float = store.kv_get("realized_sol", 0.0)
+
+    def _already_sold(self, d: dict) -> bool:
+        try:
+            rows = self.store.q("SELECT 1 FROM trades WHERE mint=? AND ABS(entry_ts - ?) < 1 AND exit_ts >= entry_ts",
+                                (d["mint"], float(d.get("entry_ts") or 0)))
+        except Exception:  # noqa: BLE001 - never block a start on this check
+            return False
+        return bool(rows)
 
     # ── valuation ──
     @property

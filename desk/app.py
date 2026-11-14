@@ -71,6 +71,10 @@ async def build(cfg: Config) -> tuple[Desk, object]:
     portfolio = Portfolio(store, cfg.mode, starting)
     desk = Desk(cfg=cfg, hub=hub, store=store, http=http, dex=DexScreener(http), rug=RugCheck(http), jup=jup,
                 rpc=rpc, portfolio=portfolio, authority=ClearanceAuthority())
+    if portfolio.ghosts:
+        from .models import Event
+        hub.emit(Event("Desk", "warn", "already sold, removed from the open positions: " + ", ".join(portfolio.ghosts)
+                       + " (the sale is in the trades; another desk had written the position back)"))
     from .devwatch import DevWatch
     desk.devwatch = DevWatch(store, rpc, cfg.devwatch)
     # QUANT learns from paper AND live outcomes (paper fills are priced on real quotes).

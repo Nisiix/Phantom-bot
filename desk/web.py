@@ -281,7 +281,7 @@ class Dashboard:
         if n:
             return False, f"ci sono {n} posizioni aperte: vendile prima, poi ripeti il reset"
         reset_pending(cfg).write_text(json.dumps({"usd": usd, "ts": time.time()}), encoding="utf-8")
-        request_restart(cfg)
+        request_restart(cfg, now=True)          # nothing is open: no reason to wait
         from .models import Event
         self.desk.hub.emit(Event("Desk", "info", f"paper reset to ${usd:,.0f} requested from the dashboard: the desk "
                                                  "restarts in a few seconds (learning data kept)"))

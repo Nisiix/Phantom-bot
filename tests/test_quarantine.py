@@ -56,9 +56,11 @@ def test_funder_link_is_quarantine_not_a_kill(tmp_path):
     rep = asyncio.run(f.deep(Candidate("NEWpump"), old))
     c = _funder(rep)
     assert c.passed and "quarantine served" in c.detail and rep.passed
-    # too early again (e.g. another reading says 40 min): the wait still rules
-    assert not _funder(asyncio.run(f.deep(Candidate("NEWpump"), snap(mint="NEWpump",
-                                                                    pair_created_at=t - 40 * 60)))).passed
+    # funder links wait 23 min after graduation (user 2026-11-14 07:24), names 60
+    assert f.f.quarantine_minutes == 23 and f.f.rugged_name_expire_minutes == 60
+    assert _funder(asyncio.run(f.deep(Candidate("NEWpump"), snap(mint="NEWpump", pair_created_at=t - 25 * 60)))).passed
+    c = _funder(asyncio.run(f.deep(Candidate("NEWpump"), snap(mint="NEWpump", pair_created_at=t - 15 * 60))))
+    assert not c.passed and "15 of 23 min" in c.detail
 
 
 def test_quarantine_off_restores_the_permanent_kill(tmp_path):
