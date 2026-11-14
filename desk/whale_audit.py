@@ -350,3 +350,87 @@ def harvest_section(eff: dict | None, hv: dict | None, cfg) -> str:
     lines.append("- proposta: " + ("; ".join(p["changes"][0] for p in props) + " (vedi Proposte)" if props else
                                    "nessuna: la raccolta va bene così per ora"))
     return "\n".join(lines)
+
+
+# ═════════════════════ smart wallets seen during the graduation wait (user 2026-11-14) ═════════════════════
+WAIT_MIN = 30             # tokens with a known wallet needed before the numbers are judged
+WAIT_BREAK_EVEN = 0.78    # measured 2026-11-14: winners +20/+40%, losers about -90% -> break-even near 78% wins
+
+
+def wait_load(db_path) -> tuple[list[dict], set[str]]:
+    """(tokens checked during the wait, mints with at least one known smart wallet) read-only."""
+    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10)
+    db.row_factory = sqlite3.Row
+    try:
+        try:
+            seen = [dict(r) for r in db.execute("SELECT * FROM sw_wait_seen")]
+            hit = {r[0] for r in db.execute("SELECT DISTINCT mint FROM sw_wait_hits")}
+        except sqlite3.OperationalError:
+            return [], set()
+    finally:
+        db.close()
+    return seen, hit
+
+
+def wait_audit(seen: list[dict], hit: set[str], filter_rows: list[dict], long_rows: list[dict], win_mcap: float,
+               min_gain_pct: float = 35.0) -> dict | None:
+    """Tokens checked for smart wallets while in the graduation wait, with a known wallet inside vs without:
+    result of a buy at the Filter's first look during the wait (current exits replayed, 60 minutes) and how many
+    reached the line with a real gain (desk/longwatch.py). filter_rows: parse_rows() of the Filter's shadows."""
+    if not seen:
+        return None
+    first: dict[str, float] = {}
+    for r in filter_rows:                       # sorted by time: the first look inside the watch window wins
+        first.setdefault(r["mint"], r["ret"])
+    lw = {r["mint"]: r for r in long_rows}
+    groups = {"with": {"ret": [], "n": 0, "judged": 0, "reached": 0}, "without": {"ret": [], "n": 0, "judged": 0, "reached": 0}}
+    for s in seen:
+        g = groups["with" if s["mint"] in hit else "without"]
+        g["n"] += 1
+        if s["mint"] in first:
+            g["ret"].append(first[s["mint"]])
+        r = lw.get(s["mint"])
+        if r is not None and r.get("mcap_6h") is not None:
+            g["judged"] += 1
+            g["reached"] += ((r["peak_mcap"] or 0) >= win_mcap and (r["ref_price"] or 0) > 0
+                             and (r["peak_price"] or 0) >= r["ref_price"] * (1 + min_gain_pct / 100))
+    out = {k: {**stats(g["ret"]), "tokens": g["n"], "judged": g["judged"], "reached": g["reached"]}
+           for k, g in groups.items()}
+    out["diff"] = diff(groups["with"]["ret"], groups["without"]["ret"])
+    return out
+
+
+def wait_section(a: dict | None, cfg, smart_n: int | None = None) -> str:
+    sw = cfg.smart_wallets
+    lines = ["", "", "## Whale checker — wallet bravi durante l'attesa dopo la graduazione",
+             f"Solo misura, e solo quando ci sono wallet bravi conosciuti: i token ancora in attesa (i "
+             f"{sw.watch_wait_max_tokens} più recenti, ogni {sw.watch_wait_seconds / 60:g} min) vengono controllati. "
+             f"Nessun acquisto viene anticipato. Comprare durante l'attesa conviene solo sopra circa "
+             f"{WAIT_BREAK_EVEN:.0%} di token in guadagno."]
+    if smart_n is not None and smart_n <= 0:
+        return "\n".join(lines + ["- nessun wallet bravo conosciuto per ora: controllo fermo"])
+    if not a:
+        return "\n".join(lines + ["- nessun token controllato ancora"])
+
+    def grp(name: str, s: dict) -> str:
+        txt = f"- {name}: {s['tokens']} token controllati"
+        if s["n"]:
+            txt += (f"; risultato a 60 minuti su {s['n']}: medio {s['mean']:+.2f}% [{s['lo']:+.2f}, {s['hi']:+.2f}], "
+                    f"in guadagno {100 * s['win']:.0f}%")
+        if s["judged"]:
+            txt += (f"; arrivati a ${sw.win_mcap_usd / 1000:.0f}k {s['reached']} su {s['judged']} "
+                    f"({100 * s['reached'] / s['judged']:.0f}%)")
+        return txt
+
+    w = a["with"]
+    lines += [grp("con un wallet bravo dentro", w), grp("senza", a["without"])]
+    if w["n"] < WAIT_MIN:
+        lines.append(f"- dati insufficienti: servono almeno {WAIT_MIN} token con un wallet bravo e il risultato a 60 "
+                     f"minuti (ora {w['n']}). Nessuna proposta.")
+    elif w["win"] >= WAIT_BREAK_EVEN and w["lo"] > 0:
+        lines.append(f"- i token con un wallet bravo sono in guadagno nel {100 * w['win']:.0f}% dei casi, sopra la "
+                     f"soglia: vale la pena valutare un ingresso anticipato per questi soli token (decide l'utente).")
+    else:
+        lines.append(f"- i token con un wallet bravo sono in guadagno nel {100 * w['win']:.0f}% dei casi, sotto la "
+                     f"soglia di {WAIT_BREAK_EVEN:.0%}: l'attesa resta com'è.")
+    return "\n".join(lines)

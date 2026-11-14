@@ -43,7 +43,7 @@ revisit_max = 5000
 require_mint_revoked = true
 min_lp_locked_pct = 95.0      # LP burned or locked (bonding-curve tokens count as locked)
 max_top10_pct = 20.0          # top-10 holders, excluding pools/bonding curve
-min_volume_h1_usd = 50000.0   # last-hour volume across all pairs
+min_volume_h1_usd = 50000.0   # last-hour volume across all pairs (the ceiling of the floor: see old_volume_* below)
 reject_rug_linked_dev = true  # dev / dev funder connected to previous rugs
 # ── extra capital-preservation kills ──
 require_freeze_revoked = true      # freeze authority = can freeze your tokens (honeypot)
@@ -84,6 +84,17 @@ rugged_name_loss_pct = 60.0        # our trade losing >= this within an hour mar
 # different project. Points: contract address on its own website 2, DexScreener profile 1, own X account 1,
 # website links that X account 1, visible Telegram +1 (optional, never a minus). Same dev wallet as the rugged token, or channels borrowed from it = blocked.
 rugged_name_identity = true        # false = old rule (every name match killed)
+rugged_name_expire_minutes = 60    # user 2026-11-14: an unproven-name block ends 60 min after graduation if liquidity held and holders grew (0 = never)
+# Volume floor for tokens older than [analyst] young_age_hours (user 2026-11-14): half the liquidity, never
+# under $15k/h and never above min_volume_h1_usd, instead of a fixed $50k/h. Ratio 0 = the fixed bar again.
+old_volume_liquidity_ratio = 0.5
+old_min_volume_usd = 15000.0
+# Quarantine (user 2026-11-14): a funder linked to a rug no longer kills the token for good. It is held back
+# and re-checked: the link is set aside only 60 min after graduation, after 10 min under watch, with liquidity
+# at least 90% of the first reading and more holders. All other checks still apply. 0 = old permanent kill.
+quarantine_minutes = 60
+quarantine_watch_minutes = 10
+quarantine_liquidity_ratio = 0.9
 identity_min_score = 3
 identity_tg_min_members = 20       # linked Telegram group/channel that exists with >= N members: +1, optional extra: a hidden Telegram never counts against
 
@@ -278,8 +289,10 @@ shadow_tracking = true          # follow every evaluated token (bought or skippe
 shadow_weight = 0.5             # a skipped-token outcome counts half a real trade
 shadow_min_liquidity_usd = 5000 # don't follow untradeable dust
 default_cost_pct = 2.5          # assumed round-trip cost until real quotes have been measured
-learn_since = "2026-11-10T09:03:00Z"  # QUANT learns only from trades/follow-ups after this (UTC): when the
-                                # instant-rug protections went live. "" = all. Older rows stay in the database.
+learn_since = "2026-11-12T11:02:00Z"  # QUANT learns only from trades/follow-ups after this (UTC): when the exits
+                                # in use today went live (no sale at a loss, profit stop from +30%). 2026-11-14:
+                                # was 2026-11-10 09:03; the trades before were closed by stops that no longer
+                                # exist and made QUANT block every buy. "" = all. Older rows stay in the database.
 market_regime = true            # MEASUREMENT ONLY: store BTC / SOL / memecoin 1h & 24h moves with every
                                 # shadow row and trade; `run.py research` compares outcomes by regime
 

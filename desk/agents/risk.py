@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 
 from ..clients.jupiter import SOL_MINT
 from ..exits import LockRule, keep_share, lock_level, lock_rule, lock_step, position_lock_level, rise_speed
+from ..quant import barriers
 from ..models import ExitOrder, Position
 from .base import Agent
 
@@ -348,9 +349,10 @@ class Risk(Agent):
             if pos.mark_value_sol > pos.peak_value_sol:
                 pos.peak_value_sol = pos.mark_value_sol
             # QUANT labels: remember when each barrier was first touched.
-            if not pos.hit_up_ts and pos.pnl_pct >= self.r.trail_activate_pct:
+            up, down = barriers(self.r)       # the exits really in use (desk/quant.py)
+            if not pos.hit_up_ts and pos.pnl_pct >= up:
                 pos.hit_up_ts = t
-            if not pos.hit_down_ts and pos.pnl_pct <= self.r.hard_stop_pct:
+            if not pos.hit_down_ts and pos.pnl_pct <= down:
                 pos.hit_down_ts = t
             if mint in self.exiting:
                 continue

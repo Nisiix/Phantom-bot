@@ -36,7 +36,7 @@ from ..pools import pin_labels, quote_ok, route_check, route_text
 from ..entry import EntryPlan, plan_from, settings as entry_settings
 from .. import whale_entry
 from ..portfolio import AveragingDownError
-from ..quant import label_outcome, outcome_row
+from ..quant import barriers, label_outcome, outcome_row
 from .analyst import ANALYSIS_MAX_SECONDS
 from .base import Agent
 
@@ -748,7 +748,7 @@ class Executor(Agent):
                             creator=self.desk.creators.get(trade["mint"]))
         # QUANT learning sample: which barrier did this trade touch first within the horizon?
         label = label_outcome(pos.entry_ts, trade["exit_ts"], pos.hit_up_ts, pos.hit_down_ts, trade["pnl_pct"],
-                              self.cfg.quant.horizon_minutes * 60, self.cfg.risk.hard_stop_pct)
+                              self.cfg.quant.horizon_minutes * 60, barriers(self.cfg.risk)[1])
         row = outcome_row(trade, pos, label, self.cfg.mode)
         self.desk.store.add_outcome(row)
         self.desk.quant.add(row)

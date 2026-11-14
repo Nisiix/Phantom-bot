@@ -5,6 +5,9 @@ Every trade is labelled by which barrier its value touched FIRST within the hori
     up      = +trail_activate_pct reached first  (+12%: the trailing stop arms)
     down    = hard_stop_pct reached first         (-6%: stopped out), incl. gap exits below it
     neither = neither within the horizon
+With [risk] loss_stop = false (nothing sells at a loss) those two levels sell nothing, so the barriers follow
+the exits really in use (barriers(), 2026-11-14): up = the profit stop arms, down = the position is wiped out,
+neither = still held at the horizon (valued at the market).
 
 For a new signal, QUANT estimates P(up), P(down), P(neither) for its score bucket and the
 typical gross return of each scenario, then:
@@ -31,6 +34,23 @@ BUCKETS = ((0.0, 0.50), (0.50, 0.60), (0.60, 0.65), (0.65, 0.70), (0.70, 0.80), 
 # Conservative priors for filter survivors (gross returns in %, before costs).
 PRIOR_P = {"up": 0.35, "down": 0.45, "neither": 0.20}
 PRIOR_R = {"up": 12.0, "down": -6.5, "neither": 0.0}
+
+
+# loss_stop = false: a winner is sold by the profit stop (armed at +30%, a share of the peak kept), a rug goes to
+# zero, most tokens are still held after an hour. Same edge before costs as the priors above (+1.3%), so a desk
+# with little data is judged as cautiously as before.
+PRIOR_P_NO_STOP = {"up": 0.30, "down": 0.05, "neither": 0.65}
+PRIOR_R_NO_STOP = {"up": 22.0, "down": -100.0, "neither": -0.5}
+
+
+def barriers(r) -> tuple[float, float]:
+    """(up, down) label barriers in net %, from the exits Risk really uses (a RiskCfg).
+    With a loss stop: trailing arms / hard stop, as always. Without (loss_stop = false): the profit stop arms
+    (profit_lock_activate_pct; the trailing level when the lock is off) / the no-stop level, i.e. a total loss."""
+    if getattr(r, "loss_stop", True):
+        return r.trail_activate_pct, r.hard_stop_pct
+    lock_on = float(getattr(r, "profit_lock_activate_pct", 0.0) or 0.0)
+    return (lock_on if lock_on > 0 else r.trail_activate_pct), (getattr(r, "exit_stop_pct", 0.0) or r.hard_stop_pct)
 
 
 def bucket_of(score: float) -> int:
@@ -93,6 +113,8 @@ class QuantModel:
     # Tokens the Analyst approves are judged only on approved tokens (score >= min_score), rejected ones on
     # rejected ones. 0 = one pool (old behaviour, tests).
     min_score: float = 0.0
+    prior_p: dict = field(default_factory=lambda: dict(PRIOR_P))
+    prior_r: dict = field(default_factory=lambda: dict(PRIOR_R))
     blocked: int = 0
     evaluated: int = 0
     # Estimates are recomputed only when outcomes change (the shadow tracker adds thousands of rows,
@@ -149,7 +171,7 @@ class QuantModel:
         if ck not in self._cache:
             zone = self._zone(score)
             if ("global", hi) not in self._cache:
-                self._cache[("global", hi)] = self._estimate(zone, PRIOR_P, PRIOR_R, self.prior_strength)
+                self._cache[("global", hi)] = self._estimate(zone, self.prior_p, self.prior_r, self.prior_strength)
             gp, gr = self._cache[("global", hi)]
             rows = [o for o in zone if bucket_of(o["score"]) == b]
             # Payoffs per bucket too, shrunk toward the zone average (a score bucket with few rows stays near it).
@@ -241,12 +263,25 @@ def usable_trade(o: dict, cfg) -> bool:
     return not (pump_only and o.get("mint") and not str(o["mint"]).endswith("pump"))
 
 
+def trade_label(o: dict, cfg) -> str:
+    """Label of a closed trade under the barriers in use now. With a loss stop the stored label stands. Without
+    one (loss_stop = false) the stored label may come from stops that no longer exist (a trade that dipped to
+    -4% and was then sold at +23% was stored as "down"): a trade closed in profit was sold by the profit stop
+    (up), a total loss is down, anything else neither. The stored row is not changed."""
+    r = cfg.risk
+    if getattr(r, "loss_stop", True):
+        return o["label"]
+    net = float(o.get("ret_net_pct") or 0.0)
+    return "up" if net > 0 else "down" if net <= barriers(r)[1] else "neither"
+
+
 def learning_rows(stores, cfg) -> list[dict]:
     """Trades + replayed Analyst follow-ups QUANT learns from (rows it can't use are skipped, never deleted)."""
     from .shadow import shadow_to_outcome
     rows = []
     for st in stores:
-        rows += [{**o, "weight": 1.0, "source": "trade"} for o in st.outcomes() if usable_trade(o, cfg)]
+        rows += [{**o, "label": trade_label(o, cfg), "weight": 1.0, "source": "trade"}
+                 for o in st.outcomes() if usable_trade(o, cfg)]
         for r in st.shadow_samples():
             o = shadow_to_outcome(r, cfg.quant.shadow_weight, cfg)
             if o is not None:
@@ -256,8 +291,11 @@ def learning_rows(stores, cfg) -> list[dict]:
 
 def model_from_cfg(cfg) -> QuantModel:
     q = cfg.quant
+    no_stop = not getattr(cfg.risk, "loss_stop", True)
     return QuantModel(min_samples_to_enforce=q.min_samples_to_enforce, min_ev_pct=q.min_ev_pct,
-                      prior_strength=q.prior_strength, min_score=cfg.analyst.min_score)
+                      prior_strength=q.prior_strength, min_score=cfg.analyst.min_score,
+                      prior_p=dict(PRIOR_P_NO_STOP if no_stop else PRIOR_P),
+                      prior_r=dict(PRIOR_R_NO_STOP if no_stop else PRIOR_R))
 
 
 def outcome_row(trade: dict, pos, label: str, mode: str) -> dict:

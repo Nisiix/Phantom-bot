@@ -349,8 +349,8 @@ def shadow_to_outcome(row: dict, weight: float, cfg=None) -> dict | None:
             r = cfg.risk
             net = simulate_exit(path, cost, r.exit_stop_pct or r.hard_stop_pct, r.trail_activate_pct,
                                 r.trail_distance_pct, float(r.max_hold_minutes), lock_rule(r))
-            from .quant import path_label
-            label = path_label(path, cost, r.trail_activate_pct, r.hard_stop_pct, cfg.quant.horizon_minutes * 60)
+            from .quant import barriers, path_label
+            label = path_label(path, cost, *barriers(r), cfg.quant.horizon_minutes * 60)
     if net is None or not label:
         return None
     return {

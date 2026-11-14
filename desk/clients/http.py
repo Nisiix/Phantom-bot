@@ -64,6 +64,7 @@ HOST_LIMITS = {
     "api.dexscreener.com#shadow": 60,    # 60-minute follow-up of evaluated tokens
     "api.dexscreener.com#revisit": 15,   # second look at archived (dropped) tokens
     "api.dexscreener.com#smart": 5,      # Whale checker: market-cap peaks of followed tokens (desk/smartwallets.py)
+    "api.dexscreener.com#longwatch": 10, # rejected tokens followed for 24 h, one batch every 5 min (desk/longwatch.py)
     "api.dexscreener.com#entry": 10,     # approved tokens waiting for their entry moment (one batched call)
     "api.rugcheck.xyz": 12,
     "lite-api.jup.ag": 25,               # entry quotes

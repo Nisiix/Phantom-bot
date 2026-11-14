@@ -16,6 +16,7 @@ from collections import Counter, deque
 
 from .. import controller_memory as mem
 from .. import model as ml
+from .. import longwatch as lw
 from .. import whale_audit as wa
 from ..controller import (build_report, health_checks, parse_rows, profit_lock_section, proposals, reason_category,
                           run_experiments)
@@ -58,6 +59,11 @@ class Controller(Agent):
         self.whale_new: dict | None = None
         self.harvest_new: dict | None = None
         self.harvest_res: dict | None = None
+        # Rejected tokens 6 / 24 h later (desk/longwatch.py) and smart wallets during the wait: report only.
+        self.longwatch_new: dict | None = None
+        self.longwatch_res: dict | None = None
+        self.wait_new: dict | None = None
+        self.wait_res: dict | None = None
         self.whale_res: dict | None = (desk.store.kv_get("controller_last", {}) or {}).get("whale")
         self.model_res: dict | None = (desk.store.kv_get("ml_model", {}) or {}).get("last") or None
         # Survive restarts: last report, last test round and last checks are shown again right away.
@@ -200,6 +206,19 @@ class Controller(Agent):
             self.harvest_new = wa.harvest(self.desk.store.path, float(self.cfg.smart_wallets.min_buy_sol))
         except Exception:  # noqa: BLE001 - report only
             self.harvest_new = None
+        self.longwatch_new = self.wait_new = None
+        try:
+            long_rows = lw.load(self.desk.store.path)
+            self.longwatch_new = lw.summary(long_rows, self.cfg)
+            seen, hit = wa.wait_load(self.desk.store.path)
+            if seen:
+                want = {s["mint"] for s in seen}
+                frows = parse_rows([r for r in fi if r["mint"] in want], self.cfg.analyst.young_age_hours * 60,
+                                   self.cfg)
+                self.wait_new = wa.wait_audit(seen, hit, frows, long_rows, self.cfg.smart_wallets.win_mcap_usd,
+                                              self.cfg.longwatch.min_gain_pct)
+        except Exception:  # noqa: BLE001 - report only
+            pass
         self.model_new = None
         if self.cfg.model.enabled:
             try:
@@ -321,6 +340,7 @@ class Controller(Agent):
             prev_whale = self.whale_res
             self.whale_res = self.whale_new
             self.harvest_res = self.harvest_new
+            self.longwatch_res, self.wait_res = self.longwatch_new, self.wait_new
             self.whale_note(prev_whale)
             self.rounds += 1
             self.trials += exp["tried"]
@@ -378,7 +398,10 @@ class Controller(Agent):
             + "\n\n" + "\n".join(profit_lock_section(self._exit_records(), self.cfg)) \
             + ml.report_section(self.model_res, self.desk.model, self.cfg) \
             + wa.report_section(self._whale(), self.cfg, self._readiness()) \
-            + wa.harvest_section(self._whale_eff(), self.harvest_res, self.cfg)
+            + wa.harvest_section(self._whale_eff(), self.harvest_res, self.cfg) \
+            + lw.report_section(self.longwatch_res, self.cfg) \
+            + wa.wait_section(self.wait_res, self.cfg,
+                              len(self.desk.smart.smart) if self.desk.smart is not None else None)
         self.report_ts = time.time()
         self.desk.store.kv_set("controller_last", {"report": self.report, "report_ts": self.report_ts,
                                                    "exp": self.exp, "health": self.health,

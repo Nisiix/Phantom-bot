@@ -76,6 +76,13 @@ async def is_hub(rpc, wallet: str, hub_signatures: int = 1000, window_s: float =
     return bool(oldest) and time.time() - oldest <= window_s
 
 
+def soft_ledger_reason(reason: str | None) -> bool:
+    """A rug-ledger entry written only because of who funded the wallet (the Filter did that until
+    2026-11-14): kept as data, but it is a suspicion, not a rug that was seen."""
+    r = (reason or "").lower()
+    return r.startswith("funder ") or r.startswith("dev listed for a funder link")
+
+
 class Funding:
     """Funder lookups with a DB cache, plus the rug link check used by the Filter."""
 
@@ -109,23 +116,26 @@ class Funding:
             w = f
         return out
 
-    def rug_link(self, funder: str) -> str | None:
-        """Why this (non-hub) funder is linked to a rug, or None."""
+    def rug_link(self, funder: str, skip_soft: bool = False) -> str | None:
+        """Why this (non-hub) funder is linked to a rug, or None. skip_soft: ledger entries made only because
+        of a funder link (soft_ledger_reason) prove nothing by themselves and are not followed any further."""
         known = self.store.rugger(funder)
-        if known:
+        if known and not (skip_soft and soft_ledger_reason(known["reason"])):
             return f"funder {funder[:6]} in rug ledger ({(known['reason'] or '')[:50]})"
         sib = self.store.rugged_siblings(funder)
+        if skip_soft:
+            sib = [r for r in sib if not soft_ledger_reason(r["reason"])]
         if sib:
             return f"funder {funder[:6]} also funded {sib[0]['wallet'][:6]}, in rug ledger ({(sib[0]['reason'] or '')[:40]})"
         return None
 
-    async def check(self, creator: str) -> tuple[str | None, list[dict]]:
+    async def check(self, creator: str, skip_soft: bool = False) -> tuple[str | None, list[dict]]:
         """(reason to block or None, funder chain)."""
         rows = await self.chain(creator)
         for row in rows:
             f = row.get("funder")
             if f and not row.get("hub"):
-                why = self.rug_link(f)
+                why = self.rug_link(f, skip_soft)
                 if why:
                     return why, rows
         return None, rows

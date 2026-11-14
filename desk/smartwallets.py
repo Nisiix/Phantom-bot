@@ -90,6 +90,10 @@ CREATE TABLE IF NOT EXISTS sw_log (ts REAL, wallet TEXT, mint TEXT, event TEXT, 
 CREATE INDEX IF NOT EXISTS sw_log_ts ON sw_log(ts);
 CREATE TABLE IF NOT EXISTS sw_hits (mint TEXT, wallet TEXT, symbol TEXT, ts REAL, stage TEXT, held_at_start INTEGER,
   tokens REAL, wins INTEGER, n INTEGER, PRIMARY KEY (mint, wallet));
+CREATE TABLE IF NOT EXISTS sw_wait_seen (mint TEXT PRIMARY KEY, symbol TEXT, first_ts REAL, last_ts REAL,
+  checks INTEGER, smart_n INTEGER);
+CREATE TABLE IF NOT EXISTS sw_wait_hits (mint TEXT, wallet TEXT, ts REAL, tokens REAL, wins INTEGER, n INTEGER,
+  PRIMARY KEY (mint, wallet));
 """
 
 # Stablecoins counted in a smart wallet's balance (SPL Token program, 6 decimals).
@@ -152,6 +156,7 @@ class SmartWallets:
         self._last_call = 0.0
         self._programs: dict[str, str] = {}
         self._held: dict[str, set] = {}
+        self._wait_held: dict[str, set] = {}
         for r in store.q("SELECT mint, wallet FROM sw_hits"):
             self._held.setdefault(r["mint"], set()).add(r["wallet"])
         try:
@@ -682,6 +687,36 @@ class SmartWallets:
         held = await self.holders(mint)
         return self.record(mint, symbol, {w: a for w, a in held.items() if self.smart_for(w, mint) is not None}, stage)
 
+    async def watch_wait(self, mint: str, symbol: str = "") -> list[str]:
+        """A token still inside the graduation wait (user 2026-11-14): do known smart wallets hold it already?
+        Measurement only, in its own tables (sw_wait_seen: every token checked; sw_wait_hits: one row per wallet
+        and token), so the Analyst's hits and their audit are untouched. Nothing is bought earlier because of it:
+        the Controller reports whether such tokens do better. Only called while smart wallets are known."""
+        if not self.smart:
+            return []
+        held = await self.holders(mint)
+        good = {w: a for w, a in held.items() if self.smart_for(w, mint) is not None}
+        t = time.time()
+        self.store.db.execute(
+            "INSERT INTO sw_wait_seen VALUES(?,?,?,?,1,?) ON CONFLICT(mint) DO UPDATE SET last_ts=excluded.last_ts, "
+            "checks=checks+1, smart_n=excluded.smart_n", (mint, symbol, t, t, len(self.smart)))
+        seen = self._wait_held.setdefault(mint, set())
+        if len(self._wait_held) > 5000:
+            self._wait_held = {mint: seen}
+        new = [w for w in good if w not in seen]
+        for w in new:
+            s = self.smart.get(w) or {}
+            seen.add(w)
+            self.store.db.execute("INSERT OR IGNORE INTO sw_wait_hits VALUES(?,?,?,?,?,?)",
+                                  (mint, w, t, good[w], s.get("wins") or 0, s.get("tokens") or 0))
+            self.stats["wait_hits"] = self.stats.get("wait_hits", 0) + 1
+            self.emit("info", f"smart wallet {w[:6]} holds {symbol or mint[:6]} during the graduation wait "
+                              f"({s.get('wins', 0)}/{s.get('tokens', 0)} early buys reached "
+                              f"${float(self.c.win_mcap_usd) / 1000:.0f}k): measured, not bought earlier",
+                      mint, symbol, wallet=w)
+        self.stats["wait_checks"] = self.stats.get("wait_checks", 0) + 1
+        return new
+
     # ── 5. report to the Analyst (user 2026-11-12) ──
     def readiness(self, now: float | None = None) -> dict:
         """Is there enough data for the Analyst to use the smart wallets? Cached for 5 minutes.
@@ -903,10 +938,16 @@ class SmartWallets:
                     last_peaks = t
                     await self.track_peaks()
                 for mint, symbol, stage in watched():
-                    every = float(c.watch_seconds if stage == "position" else c.watch_analyst_seconds)
+                    every = float(c.watch_seconds if stage == "position" else
+                                  c.watch_wait_seconds if stage == "wait" else c.watch_analyst_seconds)
                     if self.smart and time.time() - last_watch.get(mint, 0) >= every:
                         last_watch[mint] = time.time()
-                        await self.watch(mint, symbol, stage)
+                        if stage == "wait":     # measurement only, own tables (user 2026-11-14)
+                            await self.watch_wait(mint, symbol)
+                        else:
+                            await self.watch(mint, symbol, stage)
+                if len(last_watch) > 5000:
+                    last_watch = {m: ts for m, ts in last_watch.items() if time.time() - ts < 3600}
                 if self.smart:
                     await self.lookup_funders(1)
                 todo_all = [(m, s) for m, s in followed() if m.endswith("pump") and not self.scanned(m)]

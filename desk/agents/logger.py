@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from ..longwatch import LongWatch
 from ..recap import build_recap, next_recap_time
 from ..shadow import ShadowTracker
 from .base import Agent
@@ -27,6 +28,8 @@ class Logger(Agent):
         self.next_recap: float = 0.0
         self.shadow = ShadowTracker(desk, self.emit)
         desk.shadow = self.shadow
+        self.longwatch = LongWatch(desk)
+        desk.longwatch = self.longwatch
 
     async def run(self) -> None:
         self.status("working")
@@ -38,7 +41,18 @@ class Logger(Agent):
                           f"telegram={'on' if self._tg() else 'off'} discord={'on' if self._dc() else 'off'}")
         await asyncio.gather(self.supervised("persist", self.persist_loop),
                              self.supervised("recap", self.recap_loop),
-                             self.supervised("shadow", self.shadow_loop))
+                             self.supervised("shadow", self.shadow_loop),
+                             self.supervised("longwatch", self.longwatch_loop))
+
+    async def longwatch_loop(self) -> None:
+        """Rejected graduated tokens followed for 24 h (desk/longwatch.py): the Controller reports them per rule."""
+        if not self.cfg.longwatch.enabled:
+            return
+        task = asyncio.create_task(self.longwatch.loop())
+        while not self.desk.stop.is_set() and not task.done():
+            self.state.counters["long_followed"] = len(self.longwatch.rules)
+            await asyncio.sleep(5)
+        await task
 
     async def shadow_loop(self) -> None:
         if not self.cfg.quant.shadow_tracking:

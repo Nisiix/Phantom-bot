@@ -41,11 +41,19 @@ class WhaleChecker(Agent):
             [(s.mint, s.symbol) for s in act if s.stage != "analyst"]
 
     def watched(self) -> list[tuple[str, str, str]]:
-        """Tokens whose smart holders are checked every minute: open positions and the Analyst's tokens."""
+        """Tokens whose smart holders are checked every minute: open positions and the Analyst's tokens. Then
+        (user 2026-11-14) the newest tokens still in the graduation wait, only while smart wallets are known:
+        measured in their own tables, never bought earlier because of it (SmartWallets.watch_wait)."""
         out = {m: (m, getattr(p, "symbol", ""), "position") for m, p in list(self.desk.portfolio.positions.items())}
         for s in self._shadow():
             if s.stage == "analyst" and s.mint not in out:
                 out[s.mint] = (s.mint, s.symbol, "analyst")
+        cap = int(self.cfg.smart_wallets.watch_wait_max_tokens)
+        sh = self.desk.shadow
+        if cap > 0 and sh is not None and self.sw is not None and self.sw.smart:
+            waiting = sorted(list(getattr(sh, "deferred", {}).values()), key=lambda d: -d.get("grad", 0))
+            for d in [d for d in waiting if d["mint"] not in out][:cap]:
+                out[d["mint"]] = (d["mint"], d.get("symbol", ""), "wait")
         return list(out.values())
 
     async def run(self) -> None:
@@ -74,6 +82,7 @@ class WhaleChecker(Agent):
             cnt["scanned"], cnt["backfilled"], cnt["hits"] = s["scanned"], s["backfilled"], s["hits"]
             cnt["too_long"], cnt["rpc_errors"] = s["too_long"], s["errors"]
             cnt["watching"] = len(self.watched())
+            cnt["wait_checks"], cnt["wait_hits"] = s.get("wait_checks", 0), s.get("wait_hits", 0)
             cnt["reports"] = s.get("reports", 0)
             r = self.sw.readiness()
             if r.get("ready") != self._was_ready:

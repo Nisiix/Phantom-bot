@@ -60,6 +60,10 @@ class FilterCfg:
     # first hour (a 15-minute-old token can't have an hour of volume), never under young_min_volume_usd.
     young_volume_liquidity_ratio: float = 0.5
     young_min_volume_usd: float = 5_000.0
+    # Older tokens (2026-11-14): floor = old_volume_liquidity_ratio x liquidity, between old_min_volume_usd and
+    # min_volume_h1_usd. Ratio 0 = the fixed min_volume_h1_usd bar for every older token.
+    old_volume_liquidity_ratio: float = 0.5
+    old_min_volume_usd: float = 15_000.0
     # New tokens only (user 2026-11-11): 0 = off. Token older than max_age_hours (since its oldest DEX pair), or
     # with a market cap already above max_market_cap_usd, is not considered.
     max_age_hours: float = 0.0
@@ -80,6 +84,12 @@ class FilterCfg:
     funder_check: bool = True
     funder_hops: int = 2
     funder_hub_signatures: int = 1000
+    # Quarantine (2026-11-14): a funder link alone no longer kills for good. The token is held back and the
+    # link is set aside only quarantine_minutes after graduation, after quarantine_watch_minutes under watch,
+    # with liquidity >= quarantine_liquidity_ratio of the first reading and holders grown. 0 = old permanent kill.
+    quarantine_minutes: float = 60.0
+    quarantine_watch_minutes: float = 10.0
+    quarantine_liquidity_ratio: float = 0.9
     funder_backfill_seconds: float = 4.0   # one ledger wallet looked up every N s in the background (0 = off)
     deep_workers: int = 3               # parallel deep checks (RugCheck keeps its own rate limit)
     deep_max_wait_seconds: float = 60   # drop queued deep checks whose market data got stale
@@ -97,6 +107,7 @@ class FilterCfg:
                                             # over fake wallets -> permanent kill
     rugged_name_days: float = 7.0           # relaunches of a name/symbol that rugged in the last N days are killed
     rugged_name_loss_pct: float = 60.0      # a trade losing >= this within an hour counts as a rug of its name
+    rugged_name_expire_minutes: float = 60.0  # unproven-name block ends this long after graduation, pool intact (0 = never)
     rugged_name_identity: bool = True       # same name as a rugged token: let a proven different project through
     identity_min_score: float = 3.0         # points needed: CA on own site 2, DexScreener profile 1, own X 1, site links X 1
     identity_tg_min_members: int = 20       # linked Telegram group/channel that exists with >= N members: +1; never a minus (optional extra)
@@ -222,9 +233,9 @@ class QuantCfg:
     shadow_min_liquidity_usd: float = 5000.0
     default_cost_pct: float = 2.5
     # QUANT learns only from trades / follow-ups after this moment (UTC ISO time, "" = all). Default: when the
-    # instant-rug protections went live (graduation wait, holder-spread kill, rugged names); earlier trades
-    # describe tokens the bot no longer buys. The rows stay in the database.
-    learn_since: str = "2026-11-10T09:03:00Z"
+    # exits in use today went live (2026-11-12 11:02 UTC: nothing sells at a loss, profit stop from +30%);
+    # earlier trades were closed by stops that no longer exist. The rows stay in the database.
+    learn_since: str = "2026-11-12T11:02:00Z"
     market_regime: bool = True        # record BTC/SOL/meme regime with every shadow row & trade (no blocking)
 
 
@@ -265,6 +276,10 @@ class SmartWalletsCfg:
     rescore_minutes: float = 30.0
     watch_seconds: float = 60.0         # open positions: smart holders read this often
     watch_analyst_seconds: float = 300.0  # the Analyst's tokens (it also asks at every re-score, cached 60 s)
+    # Tokens still in the graduation wait (user 2026-11-14): checked for known smart wallets, measurement only,
+    # and only while at least one smart wallet is known. 0 tokens = off.
+    watch_wait_seconds: float = 300.0
+    watch_wait_max_tokens: int = 40       # the newest graduates first
     min_buy_sol: float = 0.1            # early buys smaller than this are not scored (user 2026-11-12: 0.1 SOL)
     min_balance_usd: float = 500.0      # a smart wallet must hold at least this in SOL + USDC + USDT (user 2026-11-12)
     # Report to the Analyst (user 2026-11-12): used only with sufficient data, otherwise ignored.
@@ -281,6 +296,19 @@ class SmartWalletsCfg:
     whale_max_m5_pct: float = 10.0        # ...and not on a spike: 5-minute change at most this
     whale_wait_minutes: float = 60.0      # otherwise wait this long for the price to come back
     whale_sold_block_hours: float = 6.0   # a smart wallet sold while we waited: token dropped for this long
+
+
+@dataclass
+class LongWatchCfg:
+    """User 2026-11-14 (desk/longwatch.py): follow the rejected graduated tokens for 24 h, so every rule can be
+    judged on "reached $100k / still alive" and not only on the first 60 minutes. Measurement only."""
+    enabled: bool = True
+    poll_seconds: float = 300.0          # one batched DexScreener reading of all followed tokens
+    max_active: int = 1200               # tokens followed at once (30 per call: 40 calls every poll at most)
+    min_gain_pct: float = 35.0           # "reached" = the line ([smart_wallets] win_mcap_usd) at least this far above the price at rejection
+    min_peak_liquidity_usd: float = 5_000.0   # a peak is counted only with this much liquidity behind it
+    alive_mcap_usd: float = 50_000.0     # "alive" 6 h / 24 h later: market cap and liquidity at least these
+    alive_liquidity_usd: float = 10_000.0
 
 
 @dataclass
@@ -382,6 +410,7 @@ class Config:
     gmgn: GmgnCfg = field(default_factory=GmgnCfg)
     devwatch: DevWatchCfg = field(default_factory=DevWatchCfg)
     smart_wallets: SmartWalletsCfg = field(default_factory=SmartWalletsCfg)
+    longwatch: LongWatchCfg = field(default_factory=LongWatchCfg)
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
     pages: PagesCfg = field(default_factory=PagesCfg)
     controller: ControllerCfg = field(default_factory=ControllerCfg)
@@ -565,7 +594,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "entry", "risk", "recap", "quant", "gmgn", "devwatch", "smart_wallets", "dashboard", "pages", "controller", "model", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "entry", "risk", "recap", "quant", "gmgn", "devwatch", "smart_wallets", "longwatch", "dashboard", "pages", "controller", "model", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()

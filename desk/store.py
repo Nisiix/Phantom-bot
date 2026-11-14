@@ -160,7 +160,7 @@ class Store:
         """Wallets funded by `funder` that are in the rug ledger."""
         return [dict(r) for r in self.q("SELECT l.wallet, l.mint, l.reason FROM wallet_funders f "
                                         "JOIN rug_ledger l ON l.wallet = f.wallet WHERE f.funder=? AND f.hub=0 "
-                                        "LIMIT 3", (funder,))]
+                                        "LIMIT 25", (funder,))]
 
     def ledger_without_funder(self, limit: int = 50) -> list[str]:
         return [r["wallet"] for r in self.q("SELECT l.wallet FROM rug_ledger l LEFT JOIN wallet_funders f "

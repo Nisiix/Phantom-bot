@@ -332,7 +332,13 @@ def test_volume_floor_follows_token_age_and_liquidity(tmp_path):
     f = Filter(make_desk(tmp_path))
     t = time.time()
     h = 3600
-    assert f.volume_floor(snap(pair_created_at=t - 5 * h, liquidity_usd=40_000)) == 50_000   # >= 4h: full bar
+    # >= 4h (2026-11-14): half the liquidity, between $15k and $50k
+    assert f.volume_floor(snap(pair_created_at=t - 5 * h, liquidity_usd=40_000)) == 20_000
+    assert f.volume_floor(snap(pair_created_at=t - 5 * h, liquidity_usd=20_000)) == 15_000
+    assert f.volume_floor(snap(pair_created_at=t - 5 * h, liquidity_usd=400_000)) == 50_000
+    f.f.old_volume_liquidity_ratio = 0                                                       # 0 = fixed bar
+    assert f.volume_floor(snap(pair_created_at=t - 5 * h, liquidity_usd=40_000)) == 50_000
+    f.f.old_volume_liquidity_ratio = 0.5
     assert f.volume_floor(snap(pair_created_at=t - 2 * h, liquidity_usd=40_000)) == 20_000   # young: 0.5 x liq
     assert f.volume_floor(snap(pair_created_at=t - 2 * h, liquidity_usd=400_000)) == 50_000  # never above $50k
     assert f.volume_floor(snap(pair_created_at=t - 30 * 60, liquidity_usd=40_000)) == pytest.approx(10_000, rel=0.01)
@@ -341,8 +347,10 @@ def test_volume_floor_follows_token_age_and_liquidity(tmp_path):
     young = snap(pair_created_at=t - 2 * h, liquidity_usd=40_000, volume_h1=25_000)
     vol = next(c for c in f._market_checks(young) if c.name == "volume_1h")
     assert vol.passed and "young token" in vol.detail
-    assert not next(c for c in f._market_checks(snap(pair_created_at=t - 5 * h, volume_h1=25_000))
-                    if c.name == "volume_1h").passed
+    old = lambda vol: next(c for c in f._market_checks(snap(pair_created_at=t - 5 * h, volume_h1=vol))  # noqa: E731
+                           if c.name == "volume_1h")
+    assert not old(25_000).passed                      # $80k pool: floor $40k
+    assert old(45_000).passed and "older token" in old(45_000).detail
 
 
 def test_age_rules_cannot_be_loosened():

@@ -352,6 +352,11 @@ class Analyst(Agent):
                                    "; ".join(why[:3]), m.price_usd, m.liquidity_usd, score=score,
                                    source=rep.source,
                                    features=features)
+        if not trade and self.desk.longwatch is not None:
+            try:
+                self.desk.longwatch.note(rep.mint, m.symbol, m, ["analyst_score"])
+            except Exception:  # noqa: BLE001 - measurement only
+                pass
         prev = self._last_logged.get(rep.mint)
         quiet = (not trade and prev is not None and abs(prev[0] - score) < 0.03 and issued - prev[1] < 600)
         if quiet:

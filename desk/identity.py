@@ -253,7 +253,7 @@ async def verify(store, probe: SiteProbe, mint: str, creator: str | None, hit: d
                 continue    # the copycat borrowed the real channels: the site shows OUR contract and links that X
             shared.append(k)
     if shared:
-        return {"ok": False, "permanent": False, "score": 0, "channels": ch,
+        return {"ok": False, "permanent": False, "score": 0, "channels": ch, "borrowed": True,
                 "detail": f"{tag}; uses the channels of a rugged token ({', '.join(shared)})"}
     score, why = 0.0, []
     if site.get("ca"):

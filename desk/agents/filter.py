@@ -40,7 +40,7 @@ import time
 from ..clients.feeds import is_pump_copycat, is_pump_token
 from ..clients.gmgn import GmgnError, dev_history, funding_clusters, summarize
 from ..devwatch import linked_wallets
-from ..funding import Funding
+from ..funding import Funding, soft_ledger_reason
 from ..onchain_lp import OnchainLP
 from ..pools import quote_ok
 from ..models import Candidate, Check, FilterPass, FilterReport, MarketSnapshot, now
@@ -190,6 +190,9 @@ class Filter(Agent):
             pass
         # mint -> [ts, top10 %] of the last reading above spread_top10_high_pct (survives restarts)
         self._top10_high: dict[str, list] = desk.store.kv_get("filter_top10_high", {}) or {}
+        # mint -> [ts, liquidity, holders, kind] of the first reading in quarantine (survives restarts)
+        self._quar: dict[str, list] = desk.store.kv_get("filter_quarantine", {}) or {}
+        self._quar_done: set[str] = set()
         self.onchain = OnchainLP(desk.rpc, private_rpc="api.mainnet-beta.solana.com" not in rpc_url)
         self.funding = Funding(desk.store, desk.rpc, int(self.f.funder_hops), int(self.f.funder_hub_signatures))
 
@@ -352,14 +355,21 @@ class Filter(Agent):
         return snap.age_minutes
 
     def volume_floor(self, snap: MarketSnapshot) -> float:
-        """$50k/h for a token older than [analyst] young_age_hours (it may have pumped already: full bar).
-        A younger token is judged against its own pool: young_volume_liquidity_ratio x liquidity (at most $50k),
-        at the same pace in its first hour (it can't have a full hour of volume yet), never under
-        young_min_volume_usd. Waiting for $50k/h on a fresh token means buying after the pump."""
+        """The 1h volume a token needs, judged against its own pool, never above min_volume_h1_usd ($50k/h).
+        Older than [analyst] young_age_hours: old_volume_liquidity_ratio x liquidity, never under
+        old_min_volume_usd (2026-11-14: a fixed $50k/h asked a $30k pool for a turnover only a pump gives, and
+        43 of 103 rejected tokens that reached $100k failed it); ratio 0 = the fixed $50k/h bar.
+        Younger: young_volume_liquidity_ratio x liquidity at the pace of its first hour (it can't have a full
+        hour of volume yet), never under young_min_volume_usd. Unknown age: the full bar."""
         f = self.f
         age = snap.age_minutes if snap.pair_created_at else None
-        if age is None or age >= self.cfg.analyst.young_age_hours * 60:
+        if age is None:
             return f.min_volume_h1_usd
+        if age >= self.cfg.analyst.young_age_hours * 60:
+            if f.old_volume_liquidity_ratio <= 0:
+                return f.min_volume_h1_usd
+            return max(min(f.old_min_volume_usd, f.min_volume_h1_usd),
+                       min(f.min_volume_h1_usd, f.old_volume_liquidity_ratio * snap.liquidity_usd))
         base = min(f.min_volume_h1_usd, f.young_volume_liquidity_ratio * snap.liquidity_usd)
         pace = min(1.0, max(0.25, age / 60))
         return max(f.young_min_volume_usd, base * pace)
@@ -368,7 +378,8 @@ class Filter(Agent):
         f = self.f
         floor = self.volume_floor(snap)
         young = floor < f.min_volume_h1_usd
-        label = f"${floor:,.0f}" + (f" (young token: {snap.age_minutes:.0f} min old, ${snap.liquidity_usd:,.0f} "
+        label = f"${floor:,.0f}" + (f" ({'young' if snap.age_minutes < self.cfg.analyst.young_age_hours * 60 else 'older'}"
+                                    f" token: {snap.age_minutes:.0f} min old, ${snap.liquidity_usd:,.0f} "
                                     f"liquidity)" if young else "")
         checks = [
             Check("volume_1h", snap.volume_h1 >= floor, round(snap.volume_h1), round(floor),
@@ -489,7 +500,9 @@ class Filter(Agent):
             if "rug" in nm:
                 rug_reasons.append(r.get("name"))
         known = self.desk.store.rugger(creator)
-        if known:
+        # A wallet listed only because of who funded it is soft evidence (quarantine below), not a proven rug.
+        soft_known = known if known and f.quarantine_minutes > 0 and soft_ledger_reason(known["reason"]) else None
+        if known and not soft_known:
             rug_reasons.append(f"dev in rug ledger ({known['reason'][:60]})")
         prior = [t for t in (rc.get("creatorTokens") or []) if t.get("mint") != cand.mint]
         dead = [t for t in prior if float(t.get("marketCap") or 0) < 10_000]
@@ -502,24 +515,35 @@ class Filter(Agent):
                             permanent=bool(rug_reasons)))
         # 5b. Who funded the creator (user 2026-11-12): a fresh wallet paid by a rugger, or by a wallet that paid
         # another rugging creator, is the same operator (desk/funding.py).
+        # Since 2026-11-14 a funder link alone is soft evidence: 24 such kills in 24 h, 4 of them tokens that
+        # were still alive above $100k. The token is held in quarantine (Filter._quarantine) instead of killed,
+        # and its creator is no longer added to the rug ledger for this alone (that made the link spread).
+        holders = float(rc.get("totalHolders") or n_holders or 0)
         if creator and f.funder_check and not rug_reasons:
             try:
-                why, chain = await self.funding.check(creator)
+                why, chain = await self.funding.check(creator, skip_soft=f.quarantine_minutes > 0)
             except Exception as e:  # noqa: BLE001 - RPC down: not judged, retried on the next check
                 why, chain = None, []
                 self.state.bump("funder_errors")
-                checks.append(Check("funder_rug_link", True, "n/a", "clean",
-                                    f"funder not read ({e.__class__.__name__}): retried next check"))
+                if not soft_known:
+                    checks.append(Check("funder_rug_link", True, "n/a", "clean",
+                                        f"funder not read ({e.__class__.__name__}): retried next check"))
             else:
                 first = next((r["funder"] for r in chain if r.get("funder") and not r.get("hub")), None)
                 if first:
                     self.desk.funders.setdefault(cand.mint, first)
                 desc = " <- ".join(f"{(r.get('funder') or '?')[:6]}{' (exchange)' if r.get('hub') else ''}"
                                    for r in chain) or "unknown"
-                checks.append(Check("funder_rug_link", why is None, why or "clean", "clean",
-                                    why or f"funded by {desc}", permanent=why is not None))
-                if why:
-                    rug_reasons.append(why)
+                if why is None and not soft_known:
+                    checks.append(Check("funder_rug_link", True, "clean", "clean", f"funded by {desc}"))
+            if why is None and soft_known:
+                why = f"dev listed for a funder link only ({(soft_known['reason'] or '')[:50]})"
+            if why and f.quarantine_minutes <= 0:   # old rule: permanent kill, creator into the ledger
+                checks.append(Check("funder_rug_link", False, why, "clean", why, permanent=True))
+                rug_reasons.append(why)
+            elif why:
+                served, note = self._quarantine(cand.mint, snap, holders, "funder")
+                checks.append(Check("funder_rug_link", served, why, "clean", f"{why} | {note}"))
         if rug_reasons and creator:
             self.desk.store.add_rugger(creator, cand.mint, rug_reasons[0][:120])
 
@@ -528,8 +552,16 @@ class Filter(Agent):
         hit = self.rugged.match(cand.mint, snap.symbol or cand.symbol, snap.name or cand.name)
         if hit:
             ident = await self._identity(cand.mint, creator, hit, snap, (rc.get("tokenMeta") or {}).get("uri"))
-            checks.append(Check("rugged_name", ident["ok"], hit["symbol"] or hit["key"], "different project",
-                                ident["detail"], permanent=ident["permanent"]))
+            name_ok, detail = ident["ok"], ident["detail"]
+            if (not name_ok and not ident["permanent"] and not ident.get("borrowed")
+                    and f.rugged_name_expire_minutes > 0):
+                # Unproven identity is no longer a block for ever (2026-11-14: 37 such blocks in 24 h, 4 tokens
+                # alive above $100k): it expires once the token has outlived the rug window with its pool intact.
+                # Same dev wallet, or channels borrowed from the rugged token, never expire.
+                name_ok, note = self._quarantine(cand.mint, snap, holders, "name", f.rugged_name_expire_minutes)
+                detail = f"{detail} | {note}"
+            checks.append(Check("rugged_name", name_ok, hit["symbol"] or hit["key"], "different project",
+                                detail, permanent=ident["permanent"]))
 
         # Extras
         if f.reject_dangerous_token2022:
@@ -552,7 +584,7 @@ class Filter(Agent):
             checks.append(Check("rugcheck_danger", not danger, ", ".join(danger) or "none", "none",
                                 ", ".join(danger) or "no danger-level risks"))
 
-        self._early_release(cand.mint, snap, checks, t10, float(rc.get("totalHolders") or n_holders or 0),
+        self._early_release(cand.mint, snap, checks, t10, holders,
                             (float(rc.get("creatorBalance") or 0) / float(token.get("supply") or 0) * 100
                              if rc.get("creatorBalance") is not None and float(token.get("supply") or 0) > 0
                              else None))
@@ -705,6 +737,43 @@ class Filter(Agent):
                        f"liquidity ${first[4]:,.0f} -> ${last[4]:,.0f})")
         self.state.bump("early_release")
 
+    def _quarantine(self, mint: str, snap: MarketSnapshot, holders: float, kind: str,
+                    minutes: float | None = None) -> tuple[bool, str]:
+        """Soft evidence (a funder link, an unproven name) holds a token back instead of killing it.
+
+        The first reading (time, liquidity, holders) is remembered, across restarts. The evidence is set aside
+        only when ALL hold: `minutes` since graduation (the instant rugs come 5-26 min after it), watched for
+        at least quarantine_watch_minutes, liquidity still >= quarantine_liquidity_ratio of the first reading,
+        holders grown. Every other check must still pass as usual. Returns (served, note for the check)."""
+        f, t = self.f, time.time()
+        minutes = f.quarantine_minutes if minutes is None else minutes
+        first = self._quar.get(mint)
+        if first is None:
+            first = self._quar[mint] = [t, snap.liquidity_usd, holders, kind]
+            if len(self._quar) > 3000:
+                self._quar = {k: v for k, v in self._quar.items() if t - v[0] < 72 * 3600}
+            self.desk.store.kv_set("filter_quarantine", self._quar)
+            self.state.bump("quarantined")
+        grad = self.graduation_age(snap)
+        why = []
+        if grad is None:
+            why.append("not graduated yet")
+        elif grad < minutes:
+            why.append(f"{grad:.0f} of {minutes:.0f} min since graduation")
+        if (t - first[0]) / 60 < f.quarantine_watch_minutes:
+            why.append(f"watched {(t - first[0]) / 60:.0f} of {f.quarantine_watch_minutes:.0f} min")
+        if snap.liquidity_usd < f.quarantine_liquidity_ratio * first[1]:
+            why.append(f"liquidity dropping (${first[1]:,.0f} -> ${snap.liquidity_usd:,.0f})")
+        if holders <= first[2]:
+            why.append(f"holders not growing ({first[2]:.0f} -> {holders:.0f})")
+        if why:
+            return False, "QUARANTINE: " + ", ".join(why)
+        if mint not in self._quar_done:
+            self._quar_done.add(mint)
+            self.state.bump("quarantine_served")
+        return True, (f"quarantine served: {grad:.0f} min after graduation, liquidity ${first[1]:,.0f} -> "
+                      f"${snap.liquidity_usd:,.0f}, holders {first[2]:.0f} -> {holders:.0f}")
+
     def _holder_spread(self, mint: str, t10: float | None) -> str | None:
         """Remember high top10 readings; flag a token whose top10 went from > spread_top10_high_pct to under
         max_top10_pct within spread_window_minutes (seen on every instant rug: 74-99% -> 0.5-9% in ~10 min)."""
@@ -833,6 +902,13 @@ class Filter(Agent):
             return
 
         self.state.bump("rejected")
+        if self.desk.longwatch is not None and report.market is not None:
+            # What became of it 6 and 24 hours later (desk/longwatch.py): measurement for the Controller's report.
+            try:
+                self.desk.longwatch.note(report.mint, report.symbol, report.market,
+                                         [c.name for c in report.failed], kill=report.permanent_fail)
+            except Exception:  # noqa: BLE001 - measurement only: never in the way of the Filter
+                pass
         reason = report.reason_text()
         key = ",".join(sorted(c.name for c in report.failed))
         if report.permanent_fail:
