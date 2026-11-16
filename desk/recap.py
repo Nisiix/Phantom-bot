@@ -59,8 +59,8 @@ def quant_section(quant) -> list[str]:
         verdict = "beats" if model < naive else "does NOT beat"
         lines.append(f"- Forecast quality (Brier, lower = better): model {model:.3f} vs base-rate {naive:.3f} "
                      f"→ model {verdict} the naive base rate")
-    lines.append("- Score bucket → observed outcome of '+12% first / -6% first / neither in 60m' "
-                 "(trades + skipped tokens) | model now | avg net")
+    lines.append("- Score bucket → observed outcome of 'profit stop armed (+30% net) first / -50% first / neither' "
+                 "on the real horizon (trades + tokens followed 24 h) | model now | avg net")
     for c in quant.calibration():
         if not c["n"]:
             continue
@@ -88,7 +88,8 @@ def shadow_section(store: Store, t0: float, t1: float) -> list[str]:
         dd = sum(r["desk_label"] == "down" for r in rs) / n
         mu = sum(r["model_label"] == "up" for r in rs) / n
         md = sum(r["model_label"] == "down" for r in rs) / n
-        sim = sum(r["sim_net_pct"] or 0 for r in rs) / n
+        # capped like everywhere else (-100..+300%): one glitched bonding-curve price made this +167,347%
+        sim = sum(max(-100.0, min(300.0, r["sim_net_pct"] or 0)) for r in rs) / n
         lines.append(f"  - {g} (n={n}): desk +12 first {du:.0%}, -6 first {dd:.0%} | model +60 first {mu:.0%}, "
                      f"-30 first {md:.0%} | avg simulated desk trade {sim:+.1f}%")
     by_src: dict[str, list[dict]] = {}
@@ -111,7 +112,7 @@ def shadow_section(store: Store, t0: float, t1: float) -> list[str]:
         reasons[(r["reason"] or "").split(":")[0][:40]] += 1
     if reasons:
         lines.append("- Missed winners were rejected for: " + ", ".join(f"{k} ×{v}" for k, v in reasons.most_common(5)))
-    for r in sorted(missed, key=lambda r: -r["max_pct"])[:5]:
+    for r in sorted((r for r in missed if (r["max_pct"] or 0) <= 5000), key=lambda r: -r["max_pct"])[:5]:
         lines.append(f"  - {r['symbol']}: max {r['max_pct']:+.0f}% / min {r['min_pct']:+.0f}% — {r['reason'][:110]}")
     return lines
 

@@ -104,6 +104,16 @@ def exit_slip(data) -> float | None:
     return max(0.0, float(ex["trigger_pnl_pct"]) - float(ex["realized_pnl_pct"]))
 
 
+
+def is_zombie(pos, e, now: float | None = None) -> bool:
+    """User 2026-11-16: a position open longer than [executor] zombie_hours and at or below zombie_loss_pct stops
+    counting toward max_open_positions. It is NOT sold (no sale at a loss): it only stops blocking new buys."""
+    hours, loss = float(getattr(e, "zombie_hours", 0) or 0), float(getattr(e, "zombie_loss_pct", 0) or 0)
+    if hours <= 0 or loss >= 0:
+        return False
+    t = now or time.time()
+    return t - float(pos.entry_ts or t) >= hours * 3600 and pos.pnl_pct <= loss
+
 class Risk(Agent):
     name = "Risk"
 
@@ -121,6 +131,7 @@ class Risk(Agent):
         # Trades archived by a paper reset are still part of the per-token memory (no revenge trades).
         for t in desk.store.archived_trades() if hasattr(desk.store, "archived_trades") else []:
             self.history.setdefault(t["mint"], {"ts": t["exit_ts"] or 0.0, "pnl_sol": t["pnl_sol"] or 0.0})
+        desk.risk_history = self.history      # read by the Analyst: no re-scoring of tokens Risk would refuse anyway
         self.exiting: dict[str, float] = {}
         self.trail_announced: set[str] = set()
         self.lock_announced: set[str] = set()
@@ -168,9 +179,17 @@ class Risk(Agent):
         if t < self.pause_until:
             return False, f"losing-streak pause ({(self.pause_until - t) / 60:.0f} min left)"
         pending = len({m for m in self.desk.in_flight if m not in pf.positions}) - (1 if own_order else 0)
-        if len(pf.positions) + max(0, pending) >= self.cfg.executor.max_open_positions:
-            return False, f"max open positions ({self.cfg.executor.max_open_positions})"
+        counted = [p for p in pf.positions.values() if not is_zombie(p, self.cfg.executor, t)]
+        if len(counted) + max(0, pending) >= self.cfg.executor.max_open_positions:
+            zombies = len(pf.positions) - len(counted)
+            return False, (f"max open positions ({self.cfg.executor.max_open_positions})"
+                           + (f"; {zombies} ferme in perdita da oltre {self.cfg.executor.zombie_hours:g} h non contate"
+                              if zombies else ""))
         return True, "approved"
+
+    def zombies(self) -> list:
+        t = time.time()
+        return [p for p in self.desk.portfolio.positions.values() if is_zombie(p, self.cfg.executor, t)]
 
     def sell_buffer(self) -> float:
         """Sale costs added to every profit-lock level: the configured minimum, or the median slippage of our

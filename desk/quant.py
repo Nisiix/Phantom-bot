@@ -99,7 +99,7 @@ class QuantView:
     def short(self) -> str:
         return (f"EV {self.ev_pct:+.2f}% (P↑{self.p['up']:.0%} P↓{self.p['down']:.0%} "
                 f"P→{self.p['neither']:.0%}, cost {self.cost_pct:.1f}%, n={self.samples}"
-                f"{'' if self.enforcing else ' warm-up'})")
+                f"{'' if self.enforcing else ' solo misura'})")
 
 
 @dataclass
@@ -108,6 +108,8 @@ class QuantModel:
     min_ev_pct: float = 0.0
     prior_strength: float = 10.0
     bucket_strength: float = 8.0
+    # False = measure only (user 2026-11-16): EV computed and logged, nothing blocked, whatever the warm-up says.
+    enforce: bool = True
     outcomes: list[dict] = field(default_factory=list)
     cost_samples: list[float] = field(default_factory=list)   # measured round-trip costs (%)
     # Tokens the Analyst approves are judged only on approved tokens (score >= min_score), rejected ones on
@@ -184,7 +186,7 @@ class QuantModel:
         self.evaluated += 1
         p, r, nb = self.probabilities(score)
         ev = sum(p[lb] * r[lb] for lb in LABELS) - max(0.0, cost_pct)
-        enforcing = self.enforcing
+        enforcing = self.enforcing and self.enforce
         ok = ev > self.min_ev_pct or not enforcing
         v = QuantView(score, bucket_name(bucket_of(score)), p, r, cost_pct, ev, round(self.effective_samples), nb,
                       enforcing, ok)
@@ -221,6 +223,8 @@ class QuantModel:
 
     def status(self) -> str:
         n = self.effective_samples
+        if not self.enforce:
+            return f"QUANT solo misura (n={n:.0f}: calcola l'EV, non blocca)"
         if not self.enforcing:
             return f"QUANT warm-up {n:.0f}/{self.min_samples_to_enforce}"
         return f"QUANT enforcing (n={n:.0f}, blocked {self.blocked})"
@@ -267,21 +271,58 @@ def trade_label(o: dict, cfg) -> str:
     """Label of a closed trade under the barriers in use now. With a loss stop the stored label stands. Without
     one (loss_stop = false) the stored label may come from stops that no longer exist (a trade that dipped to
     -4% and was then sold at +23% was stored as "down"): a trade closed in profit was sold by the profit stop
-    (up), a total loss is down, anything else neither. The stored row is not changed."""
+    (up), a loss at or below the real-horizon line ([realwatch] down_pct, -50%; a total loss without it) is down,
+    anything else neither. The stored row is not changed."""
     r = cfg.risk
     if getattr(r, "loss_stop", True):
         return o["label"]
     net = float(o.get("ret_net_pct") or 0.0)
-    return "up" if net > 0 else "down" if net <= barriers(r)[1] else "neither"
+    rw = getattr(cfg, "realwatch", None)
+    down = rw.down_pct if rw is not None and rw.enabled else barriers(r)[1]
+    return "up" if net > 0 else "down" if net <= down else "neither"
+
+
+def held_rows(store, cfg, now: float | None = None) -> list[dict]:
+    """Open positions held longer than the real horizon ([realwatch] hours): a sample at their current value
+    (user 2026-11-16: Sakura and JENSEN, -80% for two days, were invisible to QUANT because they never closed)."""
+    rw = getattr(cfg, "realwatch", None)
+    if rw is None or not rw.enabled:
+        return []
+    t = now or time.time()
+    out = []
+    try:
+        positions = store.load_positions()
+    except Exception:  # noqa: BLE001
+        return []
+    for p in positions:
+        cost, val, ts = float(p.get("cost_sol") or 0), p.get("mark_value_sol"), float(p.get("entry_ts") or 0)
+        if cost <= 0 or val is None or t - ts < rw.hours * 3600 or ts < parse_since(cfg.quant.learn_since):
+            continue
+        net = (float(val) / cost - 1) * 100
+        o = {"ts": t, "mode": cfg.mode, "mint": p.get("mint"), "symbol": p.get("symbol"), "score": p.get("score") or 0.0,
+             "ret_net_pct": net, "rt_cost_pct": float(p.get("rt_cost_pct") or 0.0),
+             "gross_pct": net + float(p.get("rt_cost_pct") or 0.0), "label": "",
+             "p_up": p.get("p_up"), "p_down": p.get("p_down"), "p_neither": p.get("p_neither"), "ev_pct": None}
+        out.append({**o, "label": trade_label(o, cfg), "weight": 1.0, "source": "held"})
+    return out
 
 
 def learning_rows(stores, cfg) -> list[dict]:
-    """Trades + replayed Analyst follow-ups QUANT learns from (rows it can't use are skipped, never deleted)."""
+    """Trades + followed tokens QUANT learns from (rows it can't use are skipped, never deleted).
+    With [realwatch] on (user 2026-11-16) the followed tokens are judged on the real horizon (desk/realwatch.py):
+    the 60-minute rows are no longer used, because they valued a token still held at its minute-60 price."""
     from .shadow import shadow_to_outcome
+    rw = getattr(cfg, "realwatch", None)
+    real = rw is not None and rw.enabled
     rows = []
     for st in stores:
         rows += [{**o, "label": trade_label(o, cfg), "weight": 1.0, "source": "trade"}
                  for o in st.outcomes() if usable_trade(o, cfg)]
+        if real:
+            from .realwatch import closed_rows, row_outcome
+            rows += [o for o in (row_outcome(r, cfg) for r in closed_rows(st)) if o is not None]
+            rows += held_rows(st, cfg)
+            continue
         for r in st.shadow_samples():
             o = shadow_to_outcome(r, cfg.quant.shadow_weight, cfg)
             if o is not None:
@@ -293,6 +334,7 @@ def model_from_cfg(cfg) -> QuantModel:
     q = cfg.quant
     no_stop = not getattr(cfg.risk, "loss_stop", True)
     return QuantModel(min_samples_to_enforce=q.min_samples_to_enforce, min_ev_pct=q.min_ev_pct,
+                      enforce=bool(getattr(q, "enforce", True)),
                       prior_strength=q.prior_strength, min_score=cfg.analyst.min_score,
                       prior_p=dict(PRIOR_P_NO_STOP if no_stop else PRIOR_P),
                       prior_r=dict(PRIOR_R_NO_STOP if no_stop else PRIOR_R))

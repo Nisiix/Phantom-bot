@@ -57,7 +57,7 @@ def test_funder_link_is_quarantine_not_a_kill(tmp_path):
     c = _funder(rep)
     assert c.passed and "quarantine served" in c.detail and rep.passed
     # funder links wait 23 min after graduation (user 2026-11-14 07:24), names 60
-    assert f.f.quarantine_minutes == 23 and f.f.rugged_name_expire_minutes == 60
+    assert f.f.quarantine_minutes == 23 and f.f.rugged_name_expire_minutes == 0   # names: identity only (2026-11-16)
     assert _funder(asyncio.run(f.deep(Candidate("NEWpump"), snap(mint="NEWpump", pair_created_at=t - 25 * 60)))).passed
     c = _funder(asyncio.run(f.deep(Candidate("NEWpump"), snap(mint="NEWpump", pair_created_at=t - 15 * 60))))
     assert not c.passed and "15 of 23 min" in c.detail
@@ -95,8 +95,27 @@ def test_funder_only_ledger_entries_do_not_spread(tmp_path):
     assert rep.permanent_fail and not next(c for c in rep.checks if c.name == "dev_rug_link").passed
 
 
-def test_unproven_name_block_expires_after_graduation(tmp_path):
+def test_unproven_name_block_never_expires_by_default(tmp_path):
+    """User 2026-11-16: a name block is lifted only by a verified identity (3 points), never by time: the 60-min
+    expiry let JASON, ANT, JENSEN and Angel through (-99.6%, -95.7%, -78%, ~0%)."""
+    from desk.config import Config, enforce_hard_limits
+    cfg = Config()
+    cfg.filter.rugged_name_expire_minutes = 60
+    cfg.filter.identity_min_score = 2
+    enforce_hard_limits(cfg)
+    assert cfg.filter.rugged_name_expire_minutes == 0 and cfg.filter.identity_min_score == 3
     desk, f = _identity_filter(tmp_path, _Probe({}))
+    t = time.time()
+    rep = asyncio.run(f.deep(Candidate("OLDpump"), snap(mint="OLDpump", symbol="DACITY", name="AudaCity",
+                                                     pair_created_at=t - 300 * 60, websites=[], socials={})))
+    c = next(c for c in rep.checks if c.name == "rugged_name")
+    assert not c.passed and "QUARANTINE" not in c.detail
+
+
+def test_unproven_name_block_expires_after_graduation(tmp_path):
+    """The old expiry mechanics (kept in the code, off by the user's rule)."""
+    desk, f = _identity_filter(tmp_path, _Probe({}))
+    f.f.rugged_name_expire_minutes = 60
     base = desk.rug.report
     state = {"holders": 100}
 

@@ -49,6 +49,8 @@ class Desk:
     gmgn: object = None                                           # optional GMGN client (read-only)
     funders: dict[str, str] = field(default_factory=dict)        # Filter: mint -> dev's SOL funder (GMGN)
     devwatch: object = None                                       # Filter/Risk: creator sales (desk/devwatch.py)
+    risk_history: dict = field(default_factory=dict)              # Risk: mint -> last closed trade {ts, pnl_sol}
+    realwatch: object = None                                      # Logger: scored tokens followed 24 h, the real horizon (desk/realwatch.py)
     longwatch: object = None                                      # Logger: rejected tokens followed for 24 h (desk/longwatch.py)
     smart: object = None                                          # Whale checker: smart wallets (desk/smartwallets.py)
     exec_stats: deque = field(default_factory=lambda: deque(maxlen=200))  # Executor: recent fill timings

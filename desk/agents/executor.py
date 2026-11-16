@@ -67,6 +67,7 @@ class Executor(Agent):
         self.e = self.cfg.executor
         self.plans: dict[str, dict] = {}         # mint -> approved token waiting for its entry moment
         self.timing_done: dict[str, float] = {}  # mint -> when its plan ended without a buy (no new plan for 1 h)
+        self._ignored_logged: dict[str, float] = {}   # mint -> ended plan already noted as ignoring signals
         self.timing_notes: dict[str, str] = {}   # mint -> why this moment was chosen (goes in the buy reason)
         self.whale_plans: dict[str, dict] = {}   # mint -> token approved thanks to smart wallets, waiting for a price
         self.whale_blocked: dict[str, dict] = {}   # mint -> {"ts", "sellers"}: a smart wallet sold while we waited
@@ -214,7 +215,8 @@ class Executor(Agent):
             return False
         done = self.timing_done.get(v.mint)
         if done and now() - done < self.cfg.quant.horizon_minutes * 60:
-            return False                          # its price didn't come back: not re-planned for an hour
+            self._note_ignored(v, done)           # its price didn't come back: not re-planned for an hour
+            return False
         sw = self.desk.smart
         rep = (sw.reports.get(v.mint) or {}) if sw is not None else {}
         ref = float((v.features or {}).get("whale_entry_sol") or rep.get("entry_sol") or 0)
@@ -338,7 +340,8 @@ class Executor(Agent):
         t = now()
         done = self.timing_done.get(v.mint)
         if done and t - done < self.cfg.quant.horizon_minutes * 60:
-            return False                          # its moment didn't come: not re-planned for an hour (as measured)
+            self._note_ignored(v, done)           # its moment didn't come: not re-planned for an hour (as measured)
+            return False
         if len(self.plans) >= 40:
             self.reject(v, "too many approved tokens already waiting for their entry moment")
             return False
@@ -348,6 +351,7 @@ class Executor(Agent):
             return False
         plan = plan_from(entry_settings(self.cfg.entry))
         plan.max_liq_drop_pct = self.cfg.entry.max_liq_drop_pct
+        plan.liq_confirm = int(self.cfg.entry.liq_drop_confirm_readings)
         # ref_pair: every later price must come from this same pool. BERNIE (2026-11-11) was bought on a fake
         # "-51.5% dip": the reference came from a dust SOL pool, the next tick from the real SPCX pool.
         self.plans[v.mint] = {"plan": plan, "t0": t, "ref_price": snap.price_usd, "ref_liq": snap.liquidity_usd,
@@ -358,6 +362,20 @@ class Executor(Agent):
                                      "ref_price": snap.price_usd, "rule": entry_settings(self.cfg.entry)})
         self.emit("info", msg, v.mint, v.symbol)
         return False
+
+    def _note_ignored(self, v: Verdict, done: float) -> None:
+        """A buy signal ignored because the token's entry plan ended less than an hour ago: one line in the log per
+        ended plan (user 2026-11-16: "1.0" got 15 more buy signals with no trace of why none was used)."""
+        if self._ignored_logged.get(v.mint) == done:
+            return
+        self._ignored_logged[v.mint] = done
+        if len(self._ignored_logged) > 5000:
+            self._ignored_logged = {k: x for k, x in self._ignored_logged.items() if now() - x < 3600}
+        mins = self.cfg.quant.horizon_minutes - (now() - done) / 60
+        self.desk.store.add_decision(now(), "executor", "reject", v.mint, v.symbol,
+                                     f"entry timing: segnale ignorato, il piano d'acquisto è finito da "
+                                     f"{(now() - done) / 60:.0f} min (nuovo piano tra {max(mins, 0):.0f} min; altri "
+                                     f"segnali fino ad allora non vengono registrati)", {"score": v.score})
 
     def _end_plan(self, mint: str, p: dict, why: str) -> None:
         self.plans.pop(mint, None)
@@ -389,6 +407,11 @@ class Executor(Agent):
                     self._end_plan(mint, p, "nessun prezzo durante l'attesa")
                 continue
             move = (snap.price_usd / p["ref_price"] - 1) * 100
+            if not p.get("liq_feed") and t - p["t0"] <= 30 and snap.liquidity_usd > 0:
+                # The reference liquidity came from the single-token reading; the plan is followed on the batched
+                # feed, which can report the same pool differently ("1.0", 2026-11-16: "-24%" after 1 s while the
+                # pool was growing). The first reading of this feed becomes the reference.
+                p["ref_liq"], p["liq_feed"] = snap.liquidity_usd, True
             liq = snap.liquidity_usd / p["ref_liq"] if p["ref_liq"] > 0 else None
             st = plan.update(t - p["t0"], move, liq)
             if st == "buy":
@@ -751,7 +774,8 @@ class Executor(Agent):
                               self.cfg.quant.horizon_minutes * 60, barriers(self.cfg.risk)[1])
         row = outcome_row(trade, pos, label, self.cfg.mode)
         self.desk.store.add_outcome(row)
-        self.desk.quant.add(row)
+        from ..quant import trade_label
+        self.desk.quant.add({**row, "label": trade_label(row, self.cfg)})   # same label as at load (real result)
         self.state.bump("sells")
         self.state.bump("wins" if trade["pnl_sol"] > 0 else "losses")
         self.desk.store.add_decision(now(), "executor", "sell", trade["mint"], trade["symbol"],

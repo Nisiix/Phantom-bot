@@ -89,8 +89,22 @@ def load(db_path, mints: set[str]) -> tuple[list[dict], dict[str, dict]]:
     return hits, out
 
 
+def gain_stats(real: list[dict], hit_mints: set, up: float, down: float) -> dict:
+    """Share of tokens reaching +up% net before down% from the scoring price, with and without smart wallets."""
+    from .realwatch import outcome
+
+    def share(xs):
+        n = len(xs)
+        ok = sum(outcome(x["path"], x["cost"], up, down) == "up" for x in xs)
+        return {"n": n, "up": ok, "share": ok / n if n else None}
+    w = share([x for x in real if x["mint"] in hit_mints])
+    wo = share([x for x in real if x["mint"] not in hit_mints])
+    return {"with": w, "without": wo,
+            "lift": (w["share"] / wo["share"]) if w["share"] is not None and wo["share"] else None}
+
+
 def audit(rows: list[dict], hits: list[dict], tokens: dict[str, dict], min_score: float, win_mcap: float,
-          decide_hours: float, now: float | None = None) -> dict:
+          decide_hours: float, now: float | None = None, up_line: float = 30.0, down_line: float = -50.0) -> dict:
     """rows: the Controller's parsed Analyst rows (ret = current exit rules; f = features at scoring time)."""
     now = now or time.time()
     ready = [r for r in rows if r["f"].get("whale_ready") is True]
@@ -128,10 +142,16 @@ def audit(rows: list[dict], hits: list[dict], tokens: dict[str, dict], min_score
                      key=lambda x: (-x[1] / x[2], -x[2]))
     prec = sum(hit_out) / len(hit_out) if hit_out else None
     base = sum(base_out) / len(base_out) if base_out else None
+    # User 2026-11-16: the $100k line counts a token as a success if its market cap EVER touched $100k, but the
+    # tokens we buy are already around $140k, so that precision is inflated. The measure that pays: from the price
+    # when the token was scored (the signal), does it reach the profit stop (+30% net) before falling to -50%?
+    # Only on rows followed on the real horizon (desk/realwatch.py), where the whole path is known.
+    real = [r for r in rows if r.get("real") and r.get("path")]
+    gain = gain_stats(real, hit_mints, up_line, down_line) if real else None
     return {"ready_rows": len(ready), "with": stats(with_), "without": stats(without),
             "diff": diff(with_, without), "promoted": stats(promoted),
             "hits": len(hits), "hit_tokens": len(hit_mints), "hit_decided": len(hit_out),
-            "precision": prec, "base_decided": len(base_out), "base_rate": base,
+            "real": bool(real) and all(r.get("real") for r in rows), "precision": prec, "base_decided": len(base_out), "base_rate": base, "gain": gain,
             "lift": (prec / base) if prec is not None and base else None,
             "wallets": wallets, "t": now}
 
@@ -173,7 +193,8 @@ def report_section(a: dict | None, cfg, readiness: dict | None = None) -> str:
         return (f"- {name}: {s['n']} token, risultato medio {s['mean']:+.2f}% [{s['lo']:+.2f}, {s['hi']:+.2f}], "
                 f"in guadagno {pct(s['win'])}{tail}")
 
-    lines += [f"### A. Risultato a 60 minuti (regole di uscita attuali), {a['ready_rows']} token valutati con dati "
+    lines += [f"### A. Risultato con le regole di uscita attuali ({'orizzonte reale' if a.get('real') else '60 minuti'}), "
+              f"{a['ready_rows']} token valutati con dati "
               f"sufficienti",
               grp("con wallet bravi presenti", a["with"]), grp("senza wallet bravi", a["without"])]
     d = a["diff"]
@@ -181,7 +202,21 @@ def report_section(a: dict | None, cfg, readiness: dict | None = None) -> str:
         verdict = "MEGLIO" if d["lo"] > 0 else "PEGGIO" if d["hi"] < 0 else "nessuna differenza certa per ora"
         lines.append(f"- differenza: {d['mean']:+.2f} punti % [{d['lo']:+.2f}, {d['hi']:+.2f}] -> {verdict}")
     lines += ["### B. Token approvati solo grazie ai wallet bravi", grp("approvati grazie ai wallet bravi", a["promoted"])]
-    lines += [f"### C. Precisione sul traguardo ${cfg.smart_wallets.win_mcap_usd / 1000:.0f}k",
+    g = a.get("gain")
+    lines.append(f"### C. Guadagno dal prezzo del segnale (orizzonte reale): arriva a "
+                 f"+{cfg.risk.profit_lock_activate_pct:g}% netto prima di {cfg.realwatch.down_pct:g}%?")
+    if not g or not g["with"]["n"]:
+        lines.append("- nessun token seguito fino in fondo con wallet bravi presenti ancora (servono 24 ore di dati)")
+    else:
+        for name, s in (("con wallet bravi", g["with"]), ("senza wallet bravi", g["without"])):
+            lines.append(f"- {name}: {s['n']} token, arrivati a +{cfg.risk.profit_lock_activate_pct:g}% {s['up']} "
+                         f"({pct(s['share'])})" + ("" if s["n"] >= MIN_GROUP else
+                                                   f" (pochi dati: servono almeno {MIN_GROUP} token)"))
+        if g["lift"] is not None:
+            lines.append(f"- il segnale vale {g['lift']:.1f} volte la base"
+                         + ("" if min(g["with"]["n"], g["without"]["n"]) >= MIN_GROUP else " (ancora incerto)"))
+    lines += [f"### C2. Vecchia misura: traguardo ${cfg.smart_wallets.win_mcap_usd / 1000:.0f}k (gonfiata: conta "
+              f"anche i token già sopra il traguardo quando li compriamo)",
               f"- {a['hits']} segnalazioni su {a['hit_tokens']} token, {a['hit_decided']} già decisi: "
               f"{pct(a['precision'])} hanno raggiunto il traguardo",
               f"- base: {pct(a['base_rate'])} dei {a['base_decided']} token valutati dall'Analyst e già decisi"

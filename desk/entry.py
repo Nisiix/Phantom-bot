@@ -41,6 +41,8 @@ class EntryPlan:
     confirm_pct: float = 0.0
     fallback: str = "skip"
     max_liq_drop_pct: float = 20.0
+    liq_confirm: int = 1          # readings in a row that must show the drop before it cancels (user 2026-11-16: 2)
+    liq_low: int = 0
     low: float = 0.0
     peak: float = 0.0
     dipped: bool = False
@@ -55,7 +57,12 @@ class EntryPlan:
         if self.mode == "now":
             return self._set("buy", "acquisto immediato")
         if liq_ratio is not None and liq_ratio < 1 - self.max_liq_drop_pct / 100:
-            return self._set("cancel", f"liquidità scesa del {(1 - liq_ratio) * 100:.0f}% durante l'attesa")
+            self.liq_low += 1
+            if self.liq_low >= max(1, self.liq_confirm):
+                return self._set("cancel", f"liquidità scesa del {(1 - liq_ratio) * 100:.0f}% durante l'attesa"
+                                           + (f" ({self.liq_low} letture di fila)" if self.liq_low > 1 else ""))
+            return "wait"            # one low reading: no buy on it, and the next reading decides
+        self.liq_low = 0
         if sec > self.window_s:
             if self.fallback == "buy":
                 return self._set("buy", f"finestra di {self.window_s / 60:.0f} min finita: acquisto al prezzo attuale "

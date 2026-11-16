@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import httpx
 
 from ..longwatch import LongWatch
+from ..realwatch import RealWatch
 from ..recap import build_recap, next_recap_time
 from ..shadow import ShadowTracker
 from .base import Agent
@@ -26,6 +27,8 @@ class Logger(Agent):
         self.logfile = (self.dir / "desk.log").open("a", buffering=1, encoding="utf-8")
         self.last_recap_path: str = ""
         self.next_recap: float = 0.0
+        self.realwatch = RealWatch(desk)          # before the shadow tracker: it hands its finished rows over
+        desk.realwatch = self.realwatch
         self.shadow = ShadowTracker(desk, self.emit)
         desk.shadow = self.shadow
         self.longwatch = LongWatch(desk)
@@ -42,7 +45,19 @@ class Logger(Agent):
         await asyncio.gather(self.supervised("persist", self.persist_loop),
                              self.supervised("recap", self.recap_loop),
                              self.supervised("shadow", self.shadow_loop),
-                             self.supervised("longwatch", self.longwatch_loop))
+                             self.supervised("longwatch", self.longwatch_loop),
+                             self.supervised("realwatch", self.realwatch_loop))
+
+    async def realwatch_loop(self) -> None:
+        """Scored tokens followed for 24 h after their first hour (desk/realwatch.py): the real horizon."""
+        if not self.cfg.realwatch.enabled:
+            return
+        task = asyncio.create_task(self.realwatch.loop())
+        while not self.desk.stop.is_set() and not task.done():
+            self.state.counters["real_followed"] = self.realwatch.active_count()
+            self.state.counters["real_closed"] = self.realwatch.closed
+            await asyncio.sleep(30)
+        await task
 
     async def longwatch_loop(self) -> None:
         """Rejected graduated tokens followed for 24 h (desk/longwatch.py): the Controller reports them per rule."""

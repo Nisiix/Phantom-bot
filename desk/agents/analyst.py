@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 
 from ..models import FilterPass, MarketSnapshot, Verdict, now
 from ..research import market_features, rug_features
@@ -308,6 +309,16 @@ class Analyst(Agent):
         return await self.web.inspect(pick_website(m.websites, extra), mint=m.mint, symbol=m.symbol,
                                       name=m.name, socials=socials)
 
+    def held_reason(self, mint: str) -> str:
+        """Why Risk would refuse this token whatever its score ("" = it would not): already held, or traded in the
+        last 6 h, or lost on before (no revenge trades)."""
+        if mint in self.desk.portfolio.positions:
+            return "position already open"
+        h = (getattr(self.desk, "risk_history", None) or {}).get(mint)
+        if h and (h.get("pnl_sol", 0) < 0 or time.time() - h.get("ts", 0) < 6 * 3600):
+            return "traded recently"
+        return ""
+
     async def analyze(self, fp: FilterPass) -> None:
         rep = fp.report
         m = rep.market
@@ -317,6 +328,12 @@ class Analyst(Agent):
             self.emit("error", "REFUSED: candidate without valid Filter clearance", rep.mint, rep.symbol)
             return
         if m is None:
+            return
+        held = self.held_reason(rep.mint)
+        if held:
+            # User 2026-11-16: JENSEN was scored and approved 396 times in 48 h while held, each time refused by Risk.
+            # A token Risk would refuse anyway is not scored again (no DexScreener / website / RPC calls).
+            self.state.bump("skipped_held")
             return
         # The Whale checker reads the smart holders while the website is checked (desk/smartwallets.py).
         whales_task = asyncio.create_task(self._whales(rep.mint, rep.symbol, m.price_native)) \

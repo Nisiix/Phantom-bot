@@ -237,8 +237,15 @@ class ShadowTracker:
             why = f"graduation wait over ({mins:.0f} min after graduation); held back for: {d.get('reason', '')}"
             ok = snap is not None and snap.price_usd > 0 and snap.liquidity_usd >= self.cfg.quant.shadow_min_liquidity_usd
             if ok:
+                # Features at the end of the wait (user 2026-11-16): these rows are ~10x the Analyst's, and the
+                # model / Controller can learn from them once followed on the real horizon (desk/realwatch.py).
+                from .research import market_features
+                feats = market_features(snap, "grad45")
+                if self.desk.market is not None:
+                    feats = {**feats, **self.desk.market.snapshot()}
                 self.active[key] = Shadow(key, mint, d["symbol"], "grad45", "buy_at_wait_end", why[:200], None,
-                                          snap.price_usd, snap.liquidity_usd, self.cost_estimate(), t)
+                                          snap.price_usd, snap.liquidity_usd, self.cost_estimate(), t,
+                                          features=feats)
             else:
                 liq = snap.liquidity_usd if snap else 0.0
                 s = Shadow(key, mint, d["symbol"], "grad45", "gone_at_wait_end",
@@ -255,6 +262,12 @@ class ShadowTracker:
         s = self.active.get(f"{mint}:analyst")
         if s:
             s.traded = True
+        rw = getattr(self.desk, "realwatch", None)
+        if rw is not None:
+            try:
+                rw.mark_traded(mint)
+            except Exception:  # noqa: BLE001 - measurement only
+                pass
 
     async def loop(self) -> None:
         r = self.cfg.risk
@@ -280,7 +293,7 @@ class ShadowTracker:
                         update_shadow(s, snap.price_usd, t, r.hard_stop_pct, r.trail_activate_pct,
                                       r.trail_distance_pct, float(r.max_hold_minutes or 0),
                                       r.exit_stop_pct or r.hard_stop_pct, lock_rule(r))
-                        if s.stage == "analyst":   # the price path lets the Controller replay other exit rules
+                        if s.stage in ("analyst", "grad45"):   # the path lets the Controller replay other exit rules
                             s.path.append((int(t - s.start), round(s.last, 2)))
                     if t - s.start >= self.horizon:
                         finalize_shadow(s)
@@ -309,9 +322,18 @@ class ShadowTracker:
             "path": json.dumps(s.path, separators=(",", ":")) if s.path else None,
         }
         self.desk.store.add_shadow(row)
+        # The real horizon (desk/realwatch.py, user 2026-11-16): the token is followed on for 24 h, and QUANT learns
+        # from it when that ends. Without it, the 60-minute row is the QUANT sample, as before.
+        rw = getattr(self.desk, "realwatch", None)
+        followed = False
+        if rw is not None and self.cfg.realwatch.enabled and s.decision != "gone_at_wait_end":
+            try:
+                followed = rw.start(row, s.path)
+            except Exception:  # noqa: BLE001 - measurement only
+                followed = False
         # Analyst-scored, not actually traded -> a learning sample for QUANT (the real trade
         # outcome is recorded separately when a token is bought).
-        if s.stage == "analyst" and s.score is not None and not s.traded:
+        if s.stage == "analyst" and s.score is not None and not s.traded and not followed:
             o = shadow_to_outcome(row, self.cfg.quant.shadow_weight, self.cfg)
             if o is not None:
                 self.desk.quant.add(o)

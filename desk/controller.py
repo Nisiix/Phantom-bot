@@ -56,6 +56,7 @@ SITUATIONS = {
     "big_pool": "pool grandi (liquidità >= $50k)",
 }
 WIDE_STOPS = "Risk (stop larghi)"     # measure-only experiment: stops wider than the -6% hard limit
+AGE_SIZE = "Filter (età e dimensione)"   # user 2026-11-16: lower market-cap / age ceilings, on approved tokens
 AGENT_NAMES = {"Scout": "Scout", "Filter": "Filter", "Analyst": "Analyst", "Risk": "Risk", "Executor": "Executor",
                "Timing": "Timing (momento d'acquisto)"}
 # One token's result is capped to this range in every test: a single price glitch (or one +50,000% runner)
@@ -156,9 +157,10 @@ def health_checks(s: dict, old: dict | None = None) -> list[dict]:
                       f"{len(pos)} posizioni aperte e nessun controllo da {t - risk['heartbeat']:.0f} s"))
 
     # ── hard rules on positions ──
-    if len(pos) > cfg["max_open"]:
+    counted = [p for p in pos if not p.get("zombie")]     # dead positions (user 2026-11-16) don't count
+    if len(counted) > cfg["max_open"]:
         out.append(_f("critical", "Executor", "troppe posizioni",
-                      f"{len(pos)} aperte, massimo {cfg['max_open']}"))
+                      f"{len(counted)} aperte, massimo {cfg['max_open']}"))
     for p in pos:
         if p.get("size_pct") is not None and p["size_pct"] > cfg["max_pos_pct"] + 0.05:
             out.append(_f("critical", "Executor", "posizione oltre l'8%",
@@ -325,7 +327,7 @@ def parse_rows(raw: list[dict], young_minutes: float, cfg=None, skipped: dict | 
                 float(r_.max_hold_minutes), lock_rule(r_))
         if r.get("score") is not None:
             f.setdefault("score", r["score"])
-        rows.append({"ts": r["start_ts"], "mint": mint, "ret": ret,
+        rows.append({"ts": r["start_ts"], "mint": mint, "ret": ret, "real": bool(r.get("real")),
                      "cost": cost, "decision": r.get("decision", ""), "f": f,
                      "path": path, "epath": epath if (cfg is not None and path) else path,
                      "sit": row_situations(f, young_minutes)})
@@ -335,30 +337,36 @@ def parse_rows(raw: list[dict], young_minutes: float, cfg=None, skipped: dict | 
 
 # ── replays ──
 def simulate_exit(path: list[tuple[float, float]], cost: float, stop: float, trail_on: float, trail_dist: float,
-                  max_hold_min: float = 0, lock: LockRule = OFF) -> float:
+                  max_hold_min: float = 0, lock: LockRule = OFF, info: dict | None = None) -> float:
     """Net % of the desk exit policy on a recorded price path (raw % moves from the decision price).
-    lock: the profit lock (desk/exits.py), same arming/sell levels as Risk."""
+    lock: the profit lock (desk/exits.py), same arming/sell levels as Risk.
+    info: when given, info["sold_s"] = second of the path at which an exit sold (absent = still held at the end)."""
     peak, trail, last = 0.0, False, -cost
     touch, armed, level, hist = None, 0.0, 0.0, []
+
+    def sold(sec, net):
+        if info is not None:
+            info["sold_s"] = sec
+        return clip_ret(net)
     for sec, raw in path:
         net = raw - cost
         last = net
         if max_hold_min and sec >= max_hold_min * 60:
-            return clip_ret(net)
+            return sold(sec, net)
         if net <= stop:
-            return clip_ret(net)
+            return sold(sec, net)
         peak = max(peak, net)
         if peak >= trail_on:
             trail = True
         if trail and trail_dist > 0 and 1 + net / 100 <= (1 + peak / 100) * (1 - trail_dist / 100):
-            return clip_ret(net)
+            return sold(sec, net)
         if lock.enabled:
             speed = rise_speed(hist, sec, peak, lock.speed_s) if lock.speed_full > 0 else 0.0
             touch, armed = lock_step(lock, peak, sec, touch, armed, cost)
             if armed:
                 level = max(level, lock_level(lock, peak, speed))     # the stop only goes up
                 if net <= level + lock.buffer:
-                    return clip_ret(net)
+                    return sold(sec, net)
     return clip_ret(last)
 
 
@@ -399,10 +407,13 @@ class Space:
     the current variant, and how to generate others."""
 
     def __init__(self, agent: str, rows: list[dict], current: dict, returns, grid: list[dict],
-                 sampler, describe, universe_note: str, safe=None) -> None:
+                 sampler, describe, universe_note: str, safe=None, valid=None) -> None:
         self.agent, self.rows, self.current, self.returns = agent, rows, current, returns
         self.grid, self.sampler, self.describe, self.note = grid, sampler, describe, universe_note
         self.safe = safe      # optional safe(vec, base, idx) -> bool: a variant must also pass it to win
+        # optional valid(variant) -> bool: variants outside the user's rules are never tried, including the
+        # winners of earlier rounds and of applied decisions (2026-11-16: old Risk values came back that way)
+        self.valid = valid
 
 
 def no_less_safe(vec: list[float], base: list[float], idx: list[int]) -> bool:
@@ -481,6 +492,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
     dists = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
     if r.trail_distance_pct <= 0:
         dists = [0.0]     # trailing off (user 2026-11-12): the Controller does not propose turning it back on
+        trail_on = [r.trail_activate_pct]     # ...so its arming level means nothing: not tested either
     holds = [0.0, 15.0, 30.0, 45.0] if r.loss_stop else [0.0]    # no time exit while there is no loss stop
     cur_r = {"hard_stop_pct": exit_stop, "trail_activate_pct": r.trail_activate_pct,
              "trail_distance_pct": r.trail_distance_pct, "max_hold_minutes": float(r.max_hold_minutes),
@@ -515,6 +527,23 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         else [float(r.profit_lock_speed_full)]
     buffer = float(r.profit_lock_sell_buffer_pct)
 
+    # User 2026-11-12, no stop at a loss: the first sale only after +30% net, then 60% of the peak below +50% and 70%
+    # from +50%. The Controller tunes around those figures and never proposes arming lower (2026-11-16: it was
+    # proposing +12% again, from an old decision).
+    user_on = float(r.profit_lock_activate_pct) if not r.loss_stop else 0.0
+    if user_on > 0:
+        lock_on = sorted({user_on, user_on + 5, user_on + 10, user_on + 20})
+        lock_fast = sorted({float(r.profit_lock_fast_activate_pct), user_on, user_on + 5, user_on + 10})
+        lock_at = [float(r.profit_lock_pct)]
+        lock_fee = [float(r.profit_lock_fee_multiple)]
+        if r.profit_lock_keep_low_pct > 0:
+            lock_keep = sorted({float(r.profit_lock_keep_pct), 65.0, 70.0, 75.0, 80.0})
+        lock_from = [float(r.profit_lock_keep_from_pct)]
+    keep_low = sorted({float(r.profit_lock_keep_low_pct), 50.0, 55.0, 60.0, 65.0}) \
+        if user_on > 0 and r.profit_lock_keep_low_pct > 0 else [float(r.profit_lock_keep_low_pct)]
+    keep_high = sorted({float(r.profit_lock_keep_high_from_pct), 40.0, 50.0, 60.0}) \
+        if user_on > 0 and r.profit_lock_keep_low_pct > 0 else [float(r.profit_lock_keep_high_from_pct)]
+
     def lock_ok(v):
         # User 2026-11-11: never arm early (the first hours swing a lot), so the Controller keeps arming at
         # LOCK_MIN_ON or more; and never turn the lock off (base rule of the engine, user 2026-11-11).
@@ -522,6 +551,13 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         kf = v["profit_lock_keep_fast_pct"]
         if on <= 0:
             return False
+        if user_on > 0:
+            if on < user_on or v["profit_lock_fast_activate_pct"] < user_on:
+                return False                  # user's rule: nothing is sold below +30% net
+            if v.get("trail_distance_pct", 0) > 0 and r.trail_distance_pct <= 0:
+                return False                  # trailing removed by the user (2026-11-12)
+            if v.get("profit_lock_keep_low_pct", 0) > v["profit_lock_keep_pct"]:
+                return False
         return (on >= LOCK_MIN_ON and v["profit_lock_pct"] <= on - 1.0
                            and v["profit_lock_fast_activate_pct"] >= on
                            and (kf == 0 or kf >= v["profit_lock_keep_pct"]))
@@ -546,6 +582,8 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         + [{**cur_r, "profit_lock_keep_from_pct": x} for x in lock_from] \
         + [{**cur_r, "profit_lock_keep_fast_pct": x} for x in lock_kfast] \
         + [{**cur_r, "profit_lock_speed_full": x} for x in lock_speed] \
+        + [{**cur_r, "profit_lock_keep_low_pct": x} for x in keep_low] \
+        + [{**cur_r, "profit_lock_keep_high_from_pct": x} for x in keep_high] \
         + [{**cur_r, "profit_lock_activate_pct": on, "profit_lock_fast_activate_pct": fast, "profit_lock_pct": at}
            for on, fast, at in ((4.0, 5.0, 2.0), (6.0, 8.0, 3.0), (8.0, 10.0, 4.0), (10.0, 12.0, 5.0))]
     grid += [v for v in lock_grid if lock_ok(v)]
@@ -559,7 +597,9 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
                  "profit_lock_keep_pct": rng.choice(lock_keep), "profit_lock_fee_multiple": rng.choice(lock_fee),
                  "profit_lock_keep_from_pct": rng.choice(lock_from),
                  "profit_lock_keep_fast_pct": rng.choice(lock_kfast),
-                 "profit_lock_speed_full": rng.choice(lock_speed)}
+                 "profit_lock_speed_full": rng.choice(lock_speed),
+                 "profit_lock_keep_low_pct": rng.choice(keep_low),
+                 "profit_lock_keep_high_from_pct": rng.choice(keep_high)}
             if lock_ok(v):
                 return v
 
@@ -567,7 +607,12 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         return [f"[risk] {k} = {v[k]:g}" for k in cur_r if abs(v[k] - cur_r[k]) > 1e-9]
     spaces.append(Space("Risk", rows, cur_r, r_ret, grid, r_sample, r_desc,
                         note + ", con percorso di prezzo; una variante vince solo se non aumenta i trade in perdita "
-                               "né peggiora il 10% peggiore", safe=no_less_safe))
+                               "né peggiora il 10% peggiore", safe=no_less_safe, valid=lock_ok))
+    if not r.loss_stop:
+        # No stop at a loss (user's rule): there is no stop to widen, so the wide-stop measure is meaningless.
+        wide_rows = []
+    else:
+        wide_rows = rows
 
     # ── Risk, wider stops: MEASURE ONLY. The -6% stop is a hard limit, so these never become proposals
     # (within_hard_limits drops them); the report shows them apart, to see whether young volatile tokens would
@@ -586,7 +631,7 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
     def w_sample(rng):
         return {**cur_r, "hard_stop_pct": rng.choice(wide), "trail_activate_pct": rng.choice(w_trail),
                 "trail_distance_pct": rng.choice(w_dists), "max_hold_minutes": rng.choice(w_holds)}
-    spaces.append(Space(WIDE_STOPS, rows, cur_r, r_ret, w_grid, w_sample, r_desc,
+    spaces.append(Space(WIDE_STOPS, wide_rows, cur_r, r_ret, w_grid, w_sample, r_desc,
                         note + ", con percorso di prezzo; stop più larghi del limite rigido: solo misura"))
 
     # ── Timing (when to buy an approved token: desk/entry.py), replayed on the same price paths ──
@@ -706,6 +751,8 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         if x is None:
             continue
         for rc in set(reasons):
+            if rc == "EV negativo" and not getattr(cfg.quant, "enforce", True):
+                continue                        # QUANT only measures (user 2026-11-16): its gate blocks nothing now
             if rc != "entry timing":            # measured by the Timing space, on the price path
                 cats.setdefault(rc, []).append(x)
     rows = [x for xs in cats.values() for x in xs]
@@ -727,7 +774,33 @@ def build_spaces(cfg, analyst_rows: list[dict], filter_rows: list[dict], exec_re
         return [f"accettare i token rifiutati per '{c}'" + (f" ({hint[c]})" if c in hint else "")
                 for c in cat_names if v.get(c)]
     spaces.append(Space("Executor", rows, cur_e, e_ret, grid, lambda rng: cur_e, e_desc,
-                        "segnali di acquisto rifiutati dall'Executor, seguiti per 60 minuti"))
+                        "segnali di acquisto rifiutati dall'Executor, seguiti dopo il rifiuto"))
+
+    # ── Filter, age and size (user 2026-11-16): old (> 12 h) and big (> $250k) tokens rarely reach +30% net.
+    # Tested on the tokens the Analyst approves (real horizon when available): only stricter than now.
+    rows, note = bought(analyst_rows)
+    cur_g = {"max_market_cap_usd": float(f.max_market_cap_usd), "max_age_hours": float(f.max_age_hours)}
+    caps = sorted({x for x in (cur_g["max_market_cap_usd"], 150_000.0, 200_000.0, 250_000.0, 350_000.0)
+                   if cur_g["max_market_cap_usd"] <= 0 or x <= cur_g["max_market_cap_usd"]})
+    ages = sorted({x for x in (cur_g["max_age_hours"], 6.0, 12.0, 24.0, 48.0)
+                   if cur_g["max_age_hours"] <= 0 or x <= cur_g["max_age_hours"]})
+
+    def g_keep(x, v):
+        g = x["f"]
+        mc, age = g.get("mcap"), g.get("age_min")
+        if v["max_market_cap_usd"] > 0 and isinstance(mc, (int, float)) and mc > v["max_market_cap_usd"]:
+            return False
+        return not (v["max_age_hours"] > 0 and isinstance(age, (int, float)) and age > v["max_age_hours"] * 60)
+
+    def g_ret(v, rows=rows):
+        return [x["ret"] if g_keep(x, v) else 0.0 for x in rows]
+    grid = [{**cur_g, "max_market_cap_usd": x} for x in caps] + [{**cur_g, "max_age_hours": x} for x in ages]
+
+    def g_desc(v):
+        return [f"[filter] {k} = {v[k]:g}" for k in cur_g if abs(v[k] - cur_g[k]) > 1e-9]
+    spaces.append(Space(AGE_SIZE, rows, cur_g, g_ret, grid,
+                        lambda rng: {"max_market_cap_usd": rng.choice(caps), "max_age_hours": rng.choice(ages)},
+                        g_desc, note + ": tetto di market cap e di età più bassi (solo più severi)"))
     return spaces
 
 
@@ -755,6 +828,8 @@ def evaluate_space(sp: Space, rng: random.Random, n_random: int, previous: list[
         return {**sp.current, **v} if isinstance(v, dict) and isinstance(sp.current, dict) else v
     for v in sp.grid + [sp.sampler(rng) for _ in range(n_random)] + previous:
         v = full(v)
+        if sp.valid is not None and not sp.valid(v):
+            continue
         variants.setdefault(_key(v), v)
     base = sp.returns(sp.current)
     vecs = {k: sp.returns(v) for k, v in variants.items()}
@@ -814,6 +889,18 @@ def top_variants(results: list[dict], limit: int = 5) -> list[dict]:
     return out
 
 
+def real_rows_only(raw: list[dict], cfg) -> tuple[list[dict], dict]:
+    """The real horizon (desk/realwatch.py, user 2026-11-16). Rows whose path was followed for 24 h carry
+    "real": 1. Once there are [realwatch] min_rows of them, ONLY those are used: mixing them with 60-minute rows
+    would keep the bias (a token still held valued at its minute-60 price). Returns (rows, info for the report)."""
+    rw = getattr(cfg, "realwatch", None)
+    n_real = sum(1 for r in raw if r.get("real"))
+    use = bool(rw is not None and rw.enabled and n_real >= rw.min_rows)
+    info = {"real_rows": n_real, "use_real": use, "need": rw.min_rows if rw is not None else 0,
+            "hours": rw.hours if rw is not None else 0, "enabled": bool(rw is not None and rw.enabled)}
+    return ([r for r in raw if r.get("real")] if use else raw), info
+
+
 def run_experiments(cfg, analyst_raw: list[dict], filter_raw: list[dict], exec_rejects: dict[str, list[str]],
                     previous: dict[str, list[dict]], seed: int | None = None,
                     reviews: list[dict] | None = None) -> dict:
@@ -824,12 +911,13 @@ def run_experiments(cfg, analyst_raw: list[dict], filter_raw: list[dict], exec_r
     c = cfg.controller
     young = cfg.analyst.young_age_hours * 60
     skipped: dict = {}
+    analyst_raw, horizon = real_rows_only(analyst_raw, cfg)
     ar = parse_rows(analyst_raw, young, cfg, skipped)
     fr = parse_rows(filter_raw, young, cfg, skipped)
     rng = random.Random(seed if seed is not None else time.time_ns())
     out = {"t": time.time(), "analyst_rows": len(ar), "with_path": sum(1 for x in ar if x["path"]),
            "filter_rows": len(fr), "since": min([x["ts"] for x in ar + fr], default=None),
-           "results": [], "tried": 0, "best": {}, "reviews": [], "skipped": skipped}
+           "results": [], "tried": 0, "best": {}, "reviews": [], "skipped": skipped, "horizon": horizon}
     spaces = build_spaces(cfg, ar, fr, exec_rejects, c.min_rows)
     by_agent = {sp.agent: sp for sp in spaces}
     for rv in reviews or []:
@@ -1020,14 +1108,30 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
         lines.append("Primo ciclo di test non ancora eseguito.")
         return "\n".join(lines)
     since = exp.get("since")
+    hz = exp.get("horizon") or {}
+    if hz.get("use_real"):
+        horizon = (f"seguiti per {hz['hours']:g} ore (orizzonte reale: {hz['real_rows']} token, la misura a 60 minuti "
+                   f"non è più usata)")
+        hz_line = (f"- ogni token è giudicato su {hz['hours']:g} ore: le regole di uscita attuali di Risk sono "
+                   f"rigiocate sul suo percorso di prezzo; un token mai arrivato allo stop a profitto vale quanto vale "
+                   f"a fine finestra (una pool svuotata vale -100%)")
+    else:
+        horizon = "ciascuno seguito per 60 minuti"
+        hz_line = ("- ogni token è misurato con le regole di uscita attuali di Risk rigiocate sul suo percorso di "
+                   "prezzo di 60 minuti")
+        if hz.get("enabled"):
+            hz_line += (f". ATTENZIONE: senza stop in perdita un token non ancora arrivato allo stop a profitto è "
+                        f"contato al prezzo del minuto 60, mentre nella realtà resta in portafoglio e quasi sempre "
+                        f"scende molto di più: le stime qui sono ottimiste. L'orizzonte reale ({hz['hours']:g} ore) "
+                        f"sostituisce questa misura quando ci sono {hz['need']} token seguiti fino in fondo "
+                        f"(ora {hz['real_rows']})")
     lines += ["## Dati usati",
               f"- {exp['analyst_rows']} token valutati dall'Analyst ({exp['with_path']} con percorso di prezzo), "
-              f"{exp['filter_rows']} token valutati dal Filter, ciascuno seguito per 60 minuti"
+              f"{horizon}; {exp['filter_rows']} token valutati dal Filter, seguiti per 60 minuti"
               + (f", dal {datetime.fromtimestamp(since, timezone.utc):%Y-%m-%d %H:%M} UTC" if since else ""),
               *([f"- esclusi dai test: " + ", ".join(f"{n} {SKIP_TEXT.get(k, k)}" for k, n in sorted(
                   exp["skipped"].items()))] if exp.get("skipped") else []),
-              f"- ogni token è misurato con le regole di uscita attuali di Risk (stop, trailing, uscita a tempo e stop a profitto) "
-              f"rigiocate sul suo percorso di prezzo",
+              hz_line,
               f"- {exp['tried']} configurazioni provate in questo ciclo, {trials_total} in totale in {rounds} cicli",
               f"- scelta sul {100 - cfg.controller.holdout_pct:.0f}% più vecchio dei dati, verifica sul "
               f"{cfg.controller.holdout_pct:.0f}% più recente", ""]
@@ -1050,9 +1154,10 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
         lines.append("Per applicarne una: chiedilo a Claude o scrivi la riga in config.toml (attenzione: una chiave "
                      f"presente in data/controller_overrides_{cfg.mode}.json vince su config.toml).")
     lines.append("")
-    lines += wide_stop_section(exp)
+    if cfg.risk.loss_stop:
+        lines += wide_stop_section(exp)
     lines.append("## Dettaglio per agente e situazione")
-    for agent in ("Scout", "Filter", "Analyst", "Timing", "Executor", "Risk", WIDE_STOPS):
+    for agent in ("Scout", "Filter", AGE_SIZE, "Analyst", "Timing", "Executor", "Risk", WIDE_STOPS):
         rs = [r for r in exp["results"] if r["agent"] == agent]
         if not rs:
             continue
@@ -1071,8 +1176,12 @@ def build_report(health: list[dict], exp: dict | None, cfg, trials_total: int, r
     lines += ["## Come leggere", "- 'per token valutato': differenza media di risultato netto (dopo i costi) "
               "rispetto alla configurazione attuale, contando 0 per i token non comprati.",
               "- SOLIDA: migliore anche sui dati di verifica, con intervallo al 95% tutto sopra zero. PROMETTENTE: "
-              "migliore in media ma ancora incerta. Le proposte rispettano sempre i limiti rigidi (8%, -6%, "
-              "+12%, soglia 0.6, top-10 20%, volume $50k).",
+              "migliore in media ma ancora incerta. "
+              + ("Le proposte rispettano sempre i limiti rigidi (8%, -6%, +12%, soglia 0.6, top-10 20%, volume $50k)."
+                 if cfg.risk.loss_stop else
+                 f"Le proposte rispettano sempre i limiti rigidi (8% per trade, soglia 0.6, top-10 20%, volume $50k) "
+                 f"e le regole dell'utente: nessuno stop in perdita, nessuna vendita sotto "
+                 f"+{cfg.risk.profit_lock_activate_pct:g}% netto, nessun trailing, solo pool in SOL."),
               "- Una proposta per una sola situazione (es. mercato in crollo) oggi si applica cambiando il valore "
               "generale: valuta se la situazione è frequente. Prova ogni modifica prima in paper.",
               "- Il percorso di prezzo è campionato ogni ~20 s: gli stop reali (ogni 2 s) possono uscire a prezzi "
@@ -1088,7 +1197,11 @@ def profit_lock_section(trades: list[dict], cfg) -> list[str]:
            f"Regola attuale: dopo +{r.profit_lock_activate_pct:g}% netto (+{r.profit_lock_fast_activate_pct:g}% se "
            f"raggiunto entro {r.profit_lock_fast_minutes:g} min dall'acquisto) lo stop sale a "
            f"+{r.profit_lock_pct:g}% netto"
-           + (f"; da un picco di +{r.profit_lock_keep_from_pct:g}% lo stop sale col prezzo e tiene il "
+           + (f"; poi sale col prezzo e tiene il {r.profit_lock_keep_low_pct:g}% del picco netto finché il picco è "
+              f"sotto +{r.profit_lock_keep_high_from_pct:g}%, il {r.profit_lock_keep_pct:g}% da "
+              f"+{r.profit_lock_keep_high_from_pct:g}% in su (non scende mai)"
+              if r.profit_lock_keep_low_pct > 0 and r.profit_lock_keep_high_from_pct > 0 and r.profit_lock_keep_pct > 0
+              else f"; da un picco di +{r.profit_lock_keep_from_pct:g}% lo stop sale col prezzo e tiene il "
               f"{r.profit_lock_keep_pct:g}% del picco netto"
               + (f", fino al {r.profit_lock_keep_fast_pct:g}% quando il picco sale di {r.profit_lock_speed_full:g} "
                  f"punti al minuto o più" if r.profit_lock_keep_fast_pct > r.profit_lock_keep_pct

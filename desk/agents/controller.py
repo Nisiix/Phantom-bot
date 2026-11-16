@@ -17,10 +17,13 @@ from collections import Counter, deque
 from .. import controller_memory as mem
 from .. import model as ml
 from .. import longwatch as lw
+from .. import realreport as rr
 from .. import whale_audit as wa
-from ..controller import (build_report, health_checks, parse_rows, profit_lock_section, proposals, reason_category,
+from ..controller import (build_report, health_checks, parse_rows, profit_lock_section, proposals, real_rows_only,
+                          reason_category,
                           run_experiments)
 from .base import Agent
+from .risk import is_zombie
 
 
 SIZE_RE = re.compile(r"size ([\d.]+) SOL = [\d.]+% of ([\d.]+)")
@@ -108,7 +111,7 @@ class Controller(Agent):
                            "counters": dict(s.counters)} for n, s in d.hub.agents.items()},
             "queues": {"candidates": d.candidates.qsize(), "passes": d.passes.qsize(),
                        "verdicts": d.verdicts.qsize(), "exits": d.exits.qsize(), "log": d.hub.log_queue.qsize()},
-            "positions": [{"symbol": p.symbol, "cost": p.cost_sol, "size_pct": entry_size_pct(p.entry_reason), "pnl_pct": p.pnl_pct, "peak_pct": p.peak_pnl_pct,
+            "positions": [{"symbol": p.symbol, "cost": p.cost_sol, "zombie": is_zombie(p, cfg.executor, t), "size_pct": entry_size_pct(p.entry_reason), "pnl_pct": p.pnl_pct, "peak_pct": p.peak_pnl_pct,
                            "trailing": p.trailing_active, "exiting": p.mint in exiting or p.mint in d.in_flight,
                            "price_age": t - p.last_price_ts if p.last_price_ts else 0.0}
                           for p in pf.positions.values()],
@@ -184,6 +187,19 @@ class Controller(Agent):
             fi = [dict(r) for r in db.execute(
                 f"SELECT {cols} FROM shadow WHERE stage='filter' AND features IS NOT NULL AND start_ts>=? "
                 "ORDER BY start_ts DESC LIMIT 20000", (since,))]
+            # The real horizon (desk/realwatch.py): a row followed for 24 h gets its whole path and "real": 1.
+            from ..realwatch import load_paths
+            real = load_paths(db, "analyst")
+            for r in an:
+                rr = real.get((r["mint"], int(r["start_ts"] or 0)))
+                if rr and rr.get("path"):
+                    r["path"], r["real"] = rr["path"], 1
+            try:
+                self.real_raw = [dict(r) for r in db.execute(
+                    "SELECT mint,stage,score,start_ts,cost_pct,features,path FROM realwatch WHERE done=1 AND "
+                    "start_ts>=?", (since,))]
+            except sqlite3.Error:
+                self.real_raw = []
             rej: dict[str, list[str]] = {}
             for r in db.execute("SELECT mint,reason FROM decisions WHERE stage='executor' AND outcome IN "
                                 "('reject','refuse') AND ts>=?", (since,)):
@@ -197,6 +213,14 @@ class Controller(Agent):
         (its result is left in self.model_new for the event loop)."""
         an, fi, rej = self._load()
         exp = run_experiments(self.cfg, an, fi, rej, self.best, reviews=reviews)
+        an, _ = real_rows_only(an, self.cfg)          # model and Whale audit on the same horizon as the tests
+        self.real_new = None
+        try:
+            raw = getattr(self, "real_raw", []) or []
+            self.real_new = rr.section(rr.judged([r for r in raw if r["stage"] == "analyst"], self.cfg),
+                                       rr.judged([r for r in raw if r["stage"] == "grad45"], self.cfg), self.cfg)
+        except Exception:  # noqa: BLE001 - report only
+            self.real_new = None
         self.whale_new = None
         try:
             self.whale_new = self.whale_audit(an)
@@ -235,7 +259,8 @@ class Controller(Agent):
             return None
         rows = parse_rows(analyst_raw, self.cfg.analyst.young_age_hours * 60, self.cfg)
         hits, tokens = wa.load(self.desk.store.path, {r["mint"] for r in rows})
-        return wa.audit(rows, hits, tokens, self.cfg.analyst.min_score, sw.win_mcap_usd, sw.decide_hours)
+        return wa.audit(rows, hits, tokens, self.cfg.analyst.min_score, sw.win_mcap_usd, sw.decide_hours,
+                        up_line=self.cfg.risk.profit_lock_activate_pct or 30.0, down_line=self.cfg.realwatch.down_pct)
 
     def _whale(self) -> dict | None:
         return self.whale_res if self.whale_res and "error" not in self.whale_res else None
@@ -325,7 +350,7 @@ class Controller(Agent):
                 continue
             self.status("working")
             t0 = time.time()
-            reviews = mem.pending_reviews(self.desk.store)
+            reviews = mem.pending_reviews(self.desk.store, self.cfg)
             exp = await asyncio.to_thread(self._round, reviews)
             res = self.model_new
             if res is not None:
@@ -341,6 +366,7 @@ class Controller(Agent):
             self.whale_res = self.whale_new
             self.harvest_res = self.harvest_new
             self.longwatch_res, self.wait_res = self.longwatch_new, self.wait_new
+            self.real_res = self.real_new
             self.whale_note(prev_whale)
             self.rounds += 1
             self.trials += exp["tried"]
@@ -399,6 +425,7 @@ class Controller(Agent):
             + ml.report_section(self.model_res, self.desk.model, self.cfg) \
             + wa.report_section(self._whale(), self.cfg, self._readiness()) \
             + wa.harvest_section(self._whale_eff(), self.harvest_res, self.cfg) \
+            + (getattr(self, "real_res", None) or "") \
             + lw.report_section(self.longwatch_res, self.cfg) \
             + wa.wait_section(self.wait_res, self.cfg,
                               len(self.desk.smart.smart) if self.desk.smart is not None else None)

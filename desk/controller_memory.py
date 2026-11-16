@@ -230,10 +230,25 @@ def decisions(store, limit: int = 0) -> list[dict]:
     return rows
 
 
-def pending_reviews(store) -> list[dict]:
-    """Applied decisions still being verified on new data (input for run_experiments)."""
+def in_use(d: dict, cfg) -> bool | None:
+    """True = the values a decision set are still the ones in use; False = changed since (by the user); None = unknown."""
+    if cfg is None or not d.get("after"):
+        return None
+    try:
+        cur = {k: getattr(getattr(cfg, k.split(".")[0]), k.split(".")[1]) for k in d["after"]}
+    except (AttributeError, IndexError):
+        return None
+    return cur == d["after"]
+
+
+def pending_reviews(store, cfg=None) -> list[dict]:
+    """Applied decisions still being verified on new data (input for run_experiments). With cfg, only those whose
+    values are still in use (2026-11-16: decisions the user replaced kept their old values competing in the Risk
+    tests, and the Controller proposed them again against the user's +30% rule)."""
     out = []
     for d in decisions(store):
+        if cfg is not None and in_use(d, cfg) is False:
+            continue
         if d["kind"] == "apply" and d["status"] == "attiva" and d["variant_before"] and d["variant_after"]:
             out.append({"id": d["id"], "agent": d["agent"], "since": d["ts"], "before": d["variant_before"],
                         "after": d["variant_after"]})
@@ -271,6 +286,8 @@ def report_section(store, cfg, limit: int = 12) -> list[str]:
     for d in ds:
         when = time.strftime("%Y-%m-%d %H:%M", time.gmtime(d["ts"]))
         st = d["status"]
+        if d["kind"] == "apply" and in_use(d, cfg) is False:
+            st = f"{st}, NON PIÙ IN VIGORE: valori cambiati dopo"
         rv = d.get("review") or {}
         check = (f" | verifica su {rv.get('n', 0)} token nuovi: {rv.get('mean', 0):+.2f} "
                  f"[{rv.get('lo', 0):+.2f}, {rv.get('hi', 0):+.2f}]") if rv else ""

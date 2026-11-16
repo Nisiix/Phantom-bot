@@ -108,7 +108,9 @@ class FilterCfg:
                                             # over fake wallets -> permanent kill
     rugged_name_days: float = 7.0           # relaunches of a name/symbol that rugged in the last N days are killed
     rugged_name_loss_pct: float = 60.0      # a trade losing >= this within an hour counts as a rug of its name
-    rugged_name_expire_minutes: float = 60.0  # unproven-name block ends this long after graduation, pool intact (0 = never)
+    # User 2026-11-16: a name block is lifted ONLY by a verified identity (identity_min_score, 3 points). The 60-min
+    # expiry of 2026-11-14 let JASON, ANT, JENSEN and Angel through (-99.6%, -95.7%, -78% held, ~0% held). 0 = never.
+    rugged_name_expire_minutes: float = 0.0   # unproven-name block ends this long after graduation, pool intact (0 = never)
     rugged_name_identity: bool = True       # same name as a rugged token: let a proven different project through
     identity_min_score: float = 3.0         # points needed: CA on own site 2, DexScreener profile 1, own X 1, site links X 1
     identity_tg_min_members: int = 20       # linked Telegram group/channel that exists with >= N members: +1; never a minus (optional extra)
@@ -149,6 +151,11 @@ class ExecutorCfg:
     priority_fee_max_lamports: int = 200_000
     execution: str = "jupiter_v2"        # live: "jupiter_v2" (order/execute) or "rpc" (own RPC landing)
     exit_slippage_ladder_bps: list = field(default_factory=lambda: [800, 1500, 3000])
+    # User 2026-11-16: with no stop at a loss, a dead position kept 3 of 4 slots for days (74 buy signals refused
+    # in 48 h). A position open longer than zombie_hours AND at or below zombie_loss_pct no longer counts toward
+    # max_open_positions. It is NOT sold (no sale at a loss): it only stops blocking new buys. 0 = off.
+    zombie_hours: float = 12.0
+    zombie_loss_pct: float = -50.0
 
 
 @dataclass
@@ -163,6 +170,10 @@ class EntryCfg:
     confirm_pct: float = 0.0
     fallback: str = "skip"
     max_liq_drop_pct: float = 20.0
+    # User 2026-11-16: 11 of 15 liquidity cancels came within 20 s of the start, on readings of another pool view
+    # (e.g. "1.0": -24% after 1 s while liquidity was rising). A drop cancels only when this many readings in a row
+    # of the SAME pool show it.
+    liq_drop_confirm_readings: int = 2
     poll_seconds: float = 6.0
     # User's trial (UTC ISO time, "" = none): the rule above was chosen by the user. While set, the Controller
     # does not change [entry] (its own overrides for it are ignored) and measures the rule against "buy at once"
@@ -238,6 +249,27 @@ class QuantCfg:
     # earlier trades were closed by stops that no longer exist. The rows stay in the database.
     learn_since: str = "2026-11-12T11:02:00Z"
     market_regime: bool = True        # record BTC/SOL/meme regime with every shadow row & trade (no blocking)
+    # User 2026-11-16: QUANT measures only (computes and logs EV, never blocks) until it learns from real results
+    # ([realwatch]). true = it may block once warm-up is over (min_samples_to_enforce).
+    enforce: bool = False
+
+
+@dataclass
+class RealWatchCfg:
+    """User 2026-11-16 (desk/realwatch.py): the real horizon. With no stop at a loss a position is held for hours or
+    days, so a 60-minute look hides how most tokens end. Every token the Analyst scores, and every token at the end
+    of the graduation wait, is followed for `hours`; its outcome is one question: does it reach the profit stop's
+    arming level (+30% net) before falling to down_pct? Controller, QUANT and the model learn from that.
+    Learning data: never deleted."""
+    enabled: bool = True
+    hours: float = 24.0                 # how long a token is followed
+    down_pct: float = -50.0             # net % that counts as "lost" (no sale happens: it is a measure)
+    poll_seconds: float = 300.0         # one batched DexScreener reading of the followed tokens (lane "longwatch")
+    fast_minutes: float = 120.0         # the first two hours are read every fast_poll_seconds (moves are quick)
+    fast_poll_seconds: float = 120.0
+    max_active: int = 2000
+    dead_liquidity_ratio: float = 0.10  # liquidity under this share of the first reading = pool pulled: value -100%
+    min_rows: int = 30                  # Controller: real-horizon rows needed before it tests ONLY on them
 
 
 @dataclass
@@ -412,6 +444,7 @@ class Config:
     devwatch: DevWatchCfg = field(default_factory=DevWatchCfg)
     smart_wallets: SmartWalletsCfg = field(default_factory=SmartWalletsCfg)
     longwatch: LongWatchCfg = field(default_factory=LongWatchCfg)
+    realwatch: RealWatchCfg = field(default_factory=RealWatchCfg)
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
     pages: PagesCfg = field(default_factory=PagesCfg)
     controller: ControllerCfg = field(default_factory=ControllerCfg)
@@ -523,6 +556,10 @@ def enforce_hard_limits(cfg: Config) -> None:
     for flag in ("require_mint_revoked", "reject_rug_linked_dev"):
         clamp(f, flag, lambda v: v is True, True, f"{flag} is mandatory")
     clamp(f, "min_lp_locked_pct", lambda v: 50.0 <= v <= 100.0, 95.0, "LP lock threshold must be 50-100%")
+    clamp(f, "rugged_name_expire_minutes", lambda v: v == 0, 0.0,
+          "a rugged-name block never expires by time: only a verified identity lifts it (user 2026-11-16)")
+    clamp(f, "identity_min_score", lambda v: v >= 3.0, 3.0,
+          "a rugged-name block is lifted only by a verified identity of at least 3 points (user 2026-11-16)")
     clamp(f, "max_unlockable_liquidity_pct", lambda v: 0.0 <= v <= 50.0, 50.0,
           "liquidity in unlockable (DLMM/CLMM) pools can be at most 50% of the total")
     q = cfg.quant
@@ -532,6 +569,8 @@ def enforce_hard_limits(cfg: Config) -> None:
     clamp(q, "shadow_weight", lambda v: 0 <= v <= 1, 0.5, "shadow sample weight must be 0-1")
     clamp(q, "default_cost_pct", lambda v: v >= 0.5, 2.5, "assumed round-trip cost must be >= 0.5%")
     clamp(q, "prior_strength", lambda v: 1 <= v <= 200, 10.0, "QUANT prior strength must be 1-200")
+    clamp(e, "zombie_hours", lambda v: v == 0 or v >= 6, 12.0, "a position stops counting toward the limit after 6 h at least")
+    clamp(e, "zombie_loss_pct", lambda v: v <= -30, -50.0, "a position stops counting toward the limit only at -30% or worse")
     clamp(e, "execution", lambda v: v in ("jupiter_v2", "rpc"), "jupiter_v2",
           'executor.execution must be "jupiter_v2" or "rpc"')
     clamp(e, "exit_slippage_ladder_bps",
@@ -555,6 +594,12 @@ def enforce_hard_limits(cfg: Config) -> None:
     clamp(en, "confirm_pct", lambda v: -10 <= v <= 20, 0.0, "entry confirm level must be -10..+20%")
     clamp(en, "max_liq_drop_pct", lambda v: 5 <= v <= 50, 20.0, "entry liquidity cancel must be 5-50%")
     clamp(en, "poll_seconds", lambda v: 3 <= v <= 30, 6.0, "entry price poll must be 3-30 s")
+    clamp(en, "liq_drop_confirm_readings", lambda v: 1 <= v <= 5, 2, "entry liquidity cancel needs 1-5 readings")
+    rw = cfg.realwatch
+    clamp(rw, "hours", lambda v: 1 <= v <= 72, 24.0, "real-horizon follow-up must be 1-72 h")
+    clamp(rw, "down_pct", lambda v: -95 <= v <= -10, -50.0, "real-horizon loss line must be -95..-10%")
+    clamp(rw, "poll_seconds", lambda v: 60 <= v <= 3600, 300.0, "real-horizon poll must be 60-3600 s")
+    clamp(rw, "fast_poll_seconds", lambda v: 60 <= v <= 3600, 120.0, "real-horizon fast poll must be 60-3600 s")
     c = cfg.controller
     clamp(c, "interval_minutes", lambda v: 1 <= v <= 24 * 60, 10.0, "controller interval must be 1-1440 min")
     clamp(c, "health_seconds", lambda v: 10 <= v <= 3600, 60.0, "controller health checks every 10-3600 s")
@@ -595,7 +640,7 @@ def load_config(path: str | Path | None = None, mode_override: str | None = None
     cfg.paper_starting_balance_sol = float(raw.get("paper_starting_balance_sol", cfg.paper_starting_balance_sol))
     dd = Path(raw.get("data_dir", "data"))
     cfg.data_dir = dd if dd.is_absolute() else ROOT / dd
-    for section in ("scout", "filter", "analyst", "executor", "entry", "risk", "recap", "quant", "gmgn", "devwatch", "smart_wallets", "longwatch", "dashboard", "pages", "controller", "model", "live_gate"):
+    for section in ("scout", "filter", "analyst", "executor", "entry", "risk", "recap", "quant", "gmgn", "devwatch", "smart_wallets", "longwatch", "realwatch", "dashboard", "pages", "controller", "model", "live_gate"):
         _fill(getattr(cfg, section), raw.get(section, {}), section, w)
     if mode_override:
         cfg.mode = mode_override.lower()

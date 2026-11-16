@@ -84,7 +84,7 @@ rugged_name_loss_pct = 60.0        # our trade losing >= this within an hour mar
 # different project. Points: contract address on its own website 2, DexScreener profile 1, own X account 1,
 # website links that X account 1, visible Telegram +1 (optional, never a minus). Same dev wallet as the rugged token, or channels borrowed from it = blocked.
 rugged_name_identity = true        # false = old rule (every name match killed)
-rugged_name_expire_minutes = 60    # user 2026-11-14: an unproven-name block ends 60 min after graduation if liquidity held and holders grew (0 = never)
+rugged_name_expire_minutes = 0     # user 2026-11-16: never by time, only a verified identity (3 points) lifts a name block (was 60 since 2026-11-14)
 # Volume floor for tokens older than [analyst] young_age_hours (user 2026-11-14): half the liquidity, never
 # under $15k/h and never above min_volume_h1_usd, instead of a fixed $50k/h. Ratio 0 = the fixed bar again.
 old_volume_liquidity_ratio = 0.5
@@ -115,6 +115,8 @@ workers = 3                  # tokens scored in parallel (one slow website no lo
 max_position_pct = 8.0       # user rule: max 8% of current balance per trade (hard ceiling)
 min_trade_sol = 0.05
 max_open_positions = 4
+zombie_hours = 12            # user 2026-11-16: a position open > 12 h and at or below zombie_loss_pct stops counting
+zombie_loss_pct = -50        # toward max_open_positions (it is NOT sold: no sale at a loss). 0 = off
 slippage_bps = 300           # 3% max slippage on the swap
 max_entry_price_impact_pct = 2.5
 max_round_trip_loss_pct = 6.0   # buy+sell quote test: reject honeypots / heavy taxes
@@ -160,6 +162,7 @@ confirm_pct = 0.0
 fallback = "skip"
 trial_since = "2026-11-11T02:15:00Z"
 max_liq_drop_pct = 20.0
+liq_drop_confirm_readings = 2  # user 2026-11-16: the drop must show in 2 readings in a row of the same pool
 poll_seconds = 6.0        # price check of waiting tokens (one batched DexScreener call)
 
 [risk]
@@ -296,6 +299,22 @@ learn_since = "2026-11-12T11:02:00Z"  # QUANT learns only from trades/follow-ups
                                 # exist and made QUANT block every buy. "" = all. Older rows stay in the database.
 market_regime = true            # MEASUREMENT ONLY: store BTC / SOL / memecoin 1h & 24h moves with every
                                 # shadow row and trade; `run.py research` compares outcomes by regime
+enforce = false                 # user 2026-11-16: QUANT only measures (logs EV, never blocks) until it learns
+                                # from real results ([realwatch]); true = may block after the warm-up
+
+[realwatch]
+# User 2026-11-16: the real horizon. With no stop at a loss a position is held for hours or days, so the 60-minute
+# follow-up hid how tokens end (all 5 buys that never reached +30% ended -78..-100%, hours later). Every token the
+# Analyst scores and every token at the end of the graduation wait is followed for 24 h and judged on one question:
+# does it reach +30% net (the profit stop arms) before falling to -50%? Controller, QUANT and the model learn from
+# it. Measurement only: nothing is traded. The rows are learning data and are never deleted.
+enabled = true
+hours = 24
+down_pct = -50.0
+poll_seconds = 300              # one batched DexScreener reading every 5 min (shares the longwatch lane)...
+fast_minutes = 120              # ...every 2 min during the first 2 hours
+fast_poll_seconds = 120
+min_rows = 30                   # Controller: tests ONLY on real-horizon rows once it has this many
 
 [gmgn]
 # Optional wallet intelligence from GMGN (paid OpenAPI, Plus plan or better).
